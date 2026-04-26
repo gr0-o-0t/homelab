@@ -1,0 +1,41 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Service: Mealie (self-hosted recipe manager and meal planner)
+# https://docs.mealie.io
+# ─────────────────────────────────────────────────────────────────────────────
+
+networks:
+  home-services:
+    name: home-services
+    external: true
+
+services:
+  mealie:
+    image: ghcr.io/mealie-recipes/mealie:latest
+    container_name: mealie
+    user: "${PUID:-1000}:${PGID:-1000}"
+    restart: unless-stopped
+    environment:
+      BASE_URL: https://mealie.${HOME_SUBDOMAIN}.${DOMAIN}
+      TZ: ${TZ:-UTC}
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      MAX_WORKERS: 1
+      WEB_CONCURRENCY: 1
+    volumes:
+      - mealie-data:/app/data
+    networks:
+      - home-services
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q --spider http://localhost:9000/api/app/about 2>/dev/null || exit 1",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  mealie-data:
+    name: mealie_data

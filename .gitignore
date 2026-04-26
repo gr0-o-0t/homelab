@@ -1,0 +1,29 @@
+# Environment files — never commit secrets
+.env
+**/.env
+
+# Root config file — lives in ~/.config/homelab/config.yaml, not the repo
+homelab.yml
+
+# Caddy runtime data (certs, OCSP, etc.)
+caddy/data/
+
+# Tailscale state
+**/tailscale-state/
+
+# Docker named volume bind mounts (if any)
+**/volumes/
+
+# Go binary
+/homelab
+
+# Root services/ is a generated export of assets/services/ (not the canonical source).
+# Use `make catalog` to regenerate it for local browsing.
+/services/
+
+# scaletail services to be added to our catalog
+/ScaleTail/
+
+# OS noise
+.DS_Store
+Thumbs.db

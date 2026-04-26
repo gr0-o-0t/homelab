@@ -1,0 +1,37 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Service: Pocket ID (OIDC identity provider)
+# https://github.com/pocket-id/pocket-id
+# ─────────────────────────────────────────────────────────────────────────────
+
+networks:
+  home-services:
+    name: home-services
+    external: true
+
+services:
+  pocket-id:
+    image: ghcr.io/pocket-id/pocket-id:latest
+    container_name: pocket-id
+    user: "${PUID:-1000}:${PGID:-1000}"
+    restart: unless-stopped
+    environment:
+      PUBLIC_APP_URL: "https://pocket-id.${HOME_SUBDOMAIN}.${DOMAIN}"
+      TRUST_PROXY: "true"
+    volumes:
+      - pocket-id-data:/app/data
+    networks:
+      - home-services
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q --spider http://localhost:1411/healthz 2>/dev/null || exit 1",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  pocket-id-data:
+    name: pocket-id_data

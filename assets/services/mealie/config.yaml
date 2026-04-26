@@ -1,0 +1,12 @@
+vars:
+  TZ:
+    value: "UTC"
+    required: false
+  PUID:
+    value: "1000"
+    required: false
+  PGID:
+    value: "1000"
+    required: false
+
+secrets: {}

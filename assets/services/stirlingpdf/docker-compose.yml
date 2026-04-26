@@ -1,0 +1,44 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Service: Stirling PDF (self-hosted PDF manipulation tool)
+# https://github.com/Stirling-Tools/Stirling-PDF
+# ─────────────────────────────────────────────────────────────────────────────
+
+networks:
+  home-services:
+    name: home-services
+    external: true
+
+services:
+  stirlingpdf:
+    image: stirlingtools/stirling-pdf:latest
+    container_name: stirlingpdf
+    user: "${PUID:-1000}:${PGID:-1000}"
+    restart: unless-stopped
+    environment:
+      DOCKER_ENABLE_SECURITY: "false"
+      SECURITY_ENABLE_LOGIN: "false"
+      LANGS: en_US
+    volumes:
+      - stirlingpdf-data:/usr/share/tessdata
+      - stirlingpdf-configs:/configs
+      - stirlingpdf-logs:/logs
+    networks:
+      - home-services
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q --spider http://localhost:8080/api/v1/info 2>/dev/null || exit 1",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  stirlingpdf-data:
+    name: stirlingpdf_data
+  stirlingpdf-configs:
+    name: stirlingpdf_configs
+  stirlingpdf-logs:
+    name: stirlingpdf_logs

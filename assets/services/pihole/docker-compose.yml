@@ -1,0 +1,47 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Service: Pi-hole (network-wide ad blocking DNS server)
+# https://github.com/pi-hole/docker-pi-hole
+# ─────────────────────────────────────────────────────────────────────────────
+# NOTE: DNS port 53 (TCP+UDP) should be exposed at host level if using as DNS.
+# Uncomment the ports section below to enable DNS functionality.
+
+networks:
+  home-services:
+    name: home-services
+    external: true
+
+services:
+  pihole:
+    image: pihole/pihole:latest
+    container_name: pihole
+    user: "${PUID:-1000}:${PGID:-1000}"
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-UTC}
+      WEBPASSWORD: ${WEB_PASSWORD}
+      VIRTUAL_HOST: pihole.${HOME_SUBDOMAIN}.${DOMAIN}
+    volumes:
+      - pihole-data:/etc/pihole
+      - pihole-dnsmasq:/etc/dnsmasq.d
+    networks:
+      - home-services
+    ports:
+      - "53:53/tcp"
+      - "53:53/udp"
+      - "67:67/udp"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q --spider http://localhost/admin 2>/dev/null || exit 1",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  pihole-data:
+    name: pihole_data
+  pihole-dnsmasq:
+    name: pihole_dnsmasq

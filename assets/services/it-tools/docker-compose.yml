@@ -1,0 +1,25 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Service: IT Tools (collection of handy online tools for developers)
+# https://github.com/CorentinTh/it-tools
+# ─────────────────────────────────────────────────────────────────────────────
+
+networks:
+  home-services:
+    name: home-services
+    external: true
+
+services:
+  it-tools:
+    image: corentinth/it-tools:latest
+    container_name: it-tools
+    user: "${PUID:-1000}:${PGID:-1000}"
+    restart: unless-stopped
+    networks:
+      - home-services
+    healthcheck:
+      test:
+        ["CMD-SHELL", "wget -q --spider http://localhost 2>/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s

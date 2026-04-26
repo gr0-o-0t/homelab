@@ -1,0 +1,8 @@
+vars:
+  TZ:
+    value: "UTC"
+    required: false
+
+secrets:
+  WEB_PASSWORD:
+    required: true

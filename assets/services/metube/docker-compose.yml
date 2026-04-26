@@ -1,0 +1,37 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Service: MeTube (web GUI for yt-dlp — download videos from 1000+ sites)
+# https://github.com/alexta69/metube
+# ─────────────────────────────────────────────────────────────────────────────
+
+networks:
+  home-services:
+    name: home-services
+    external: true
+
+services:
+  metube:
+    image: ghcr.io/alexta69/metube:latest
+    container_name: metube
+    user: "${PUID:-1000}:${PGID:-1000}"
+    restart: unless-stopped
+    environment:
+      DOWNLOAD_DIR: /downloads
+      TZ: ${TZ:-UTC}
+    volumes:
+      - metube-downloads:/downloads
+    networks:
+      - home-services
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q --spider http://localhost:8081 2>/dev/null || exit 1",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  metube-downloads:
+    name: metube_downloads

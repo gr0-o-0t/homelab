@@ -1,0 +1,53 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Service: Jellyfin (open-source media server)
+# https://jellyfin.org/docs/general/installation/container/
+# ─────────────────────────────────────────────────────────────────────────────
+
+networks:
+  home-services:
+    name: home-services
+    external: true
+
+services:
+  jellyfin:
+    image: jellyfin/jellyfin:latest
+    container_name: jellyfin
+    user: "${PUID:-1000}:${PGID:-1000}"
+    restart: unless-stopped
+    # Optional: expose GPU for hardware transcoding.
+    # Uncomment the lines below for NVIDIA (requires nvidia-container-toolkit).
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      TZ: ${TZ:-UTC}
+      JELLYFIN_PublishedServerUrl: https://jellyfin.${HOME_SUBDOMAIN}.${DOMAIN}
+    volumes:
+      - jellyfin-config:/config
+      - jellyfin-cache:/cache
+      # Mount your media libraries (edit paths to match your host)
+      - ${MEDIA_PATH:-/mnt/media}:/media:ro
+    networks:
+      - home-services
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -fsSL http://localhost:8096/health 2>/dev/null || exit 1",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  jellyfin-config:
+    name: jellyfin_config
+  jellyfin-cache:
+    name: jellyfin_cache

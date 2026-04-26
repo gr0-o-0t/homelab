@@ -1,0 +1,35 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Service: Prowlarr (indexer manager for the *arr suite)
+# https://wiki.servarr.com/prowlarr
+# ─────────────────────────────────────────────────────────────────────────────
+
+networks:
+  home-services:
+    name: home-services
+    external: true
+
+services:
+  prowlarr:
+    image: lscr.io/linuxserver/prowlarr:latest
+    container_name: prowlarr
+    user: "${PUID:-1000}:${PGID:-1000}"
+    restart: unless-stopped
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      TZ: ${TZ:-UTC}
+    volumes:
+      - prowlarr-config:/config
+    networks:
+      - home-services
+    healthcheck:
+      test:
+        ["CMD-SHELL", "wget -qO- http://localhost:9696 2>/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  prowlarr-config:
+    name: prowlarr_data

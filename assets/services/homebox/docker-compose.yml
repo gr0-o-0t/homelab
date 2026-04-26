@@ -1,0 +1,37 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Service: Homebox (self-hosted home inventory and organization)
+# https://github.com/sysadminsmedia/homebox
+# ─────────────────────────────────────────────────────────────────────────────
+
+networks:
+  home-services:
+    name: home-services
+    external: true
+
+services:
+  homebox:
+    image: ghcr.io/sysadminsmedia/homebox:latest
+    container_name: homebox
+    user: "${PUID:-1000}:${PGID:-1000}"
+    restart: unless-stopped
+    environment:
+      HBOX_OPTIONS_ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-false}
+      TZ: ${TZ:-UTC}
+    volumes:
+      - homebox-data:/data
+    networks:
+      - home-services
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q --spider http://localhost:7745 2>/dev/null || exit 1",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  homebox-data:
+    name: homebox_data

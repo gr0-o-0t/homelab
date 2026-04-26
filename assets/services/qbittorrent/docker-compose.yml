@@ -1,0 +1,45 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Service: qBittorrent (BitTorrent client with web UI)
+# https://github.com/linuxserver/docker-qbittorrent
+# ─────────────────────────────────────────────────────────────────────────────
+# NOTE: BitTorrent port 6881 should be exposed at host level for proper
+# peer connectivity. Uncomment the ports section below to enable it.
+
+networks:
+  home-services:
+    name: home-services
+    external: true
+
+services:
+  qbittorrent:
+    image: lscr.io/linuxserver/qbittorrent:latest
+    container_name: qbittorrent
+    user: "${PUID:-1000}:${PGID:-1000}"
+    restart: unless-stopped
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      TZ: ${TZ:-UTC}
+      WEBUI_PORT: 8080
+    volumes:
+      - qbittorrent-config:/config
+      - ${DOWNLOADS_PATH:-/mnt/downloads}:/downloads
+    networks:
+      - home-services
+    ports:
+      - "6881:6881"
+      - "6881:6881/udp"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q --spider http://localhost:8080 2>/dev/null || exit 1",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  qbittorrent-config:
+    name: qbittorrent_config

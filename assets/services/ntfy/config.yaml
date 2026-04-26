@@ -1,0 +1,5 @@
+vars:
+  TZ:
+    value: "UTC"
+    required: false
+secrets: {}

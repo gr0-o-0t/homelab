@@ -1,0 +1,28 @@
+vars:
+  SIGNUPS_ALLOWED:
+    value: "false"
+    required: false
+  SIGNUPS_VERIFY:
+    value: "true"
+    required: false
+  SMTP_HOST:
+    value: ""
+    required: false
+  SMTP_FROM:
+    value: ""
+    required: false
+  SMTP_PORT:
+    value: "587"
+    required: false
+  SMTP_SECURITY:
+    value: "starttls"
+    required: false
+  SMTP_USERNAME:
+    value: ""
+    required: false
+
+secrets:
+  ADMIN_TOKEN:
+    required: true
+  SMTP_PASSWORD:
+    required: false

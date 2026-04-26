@@ -1,0 +1,75 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Service: Gitea (self-hosted Git service)
+# https://docs.gitea.com
+# ─────────────────────────────────────────────────────────────────────────────
+
+networks:
+  home-services:
+    name: home-services
+    external: true
+  gitea-internal:
+    internal: true
+
+services:
+  gitea:
+    image: gitea/gitea:latest
+    container_name: gitea
+    user: "${PUID:-1000}:${PGID:-1000}"
+    restart: unless-stopped
+    environment:
+      USER_UID: ${PUID:-1000}
+      USER_GID: ${PGID:-1000}
+      GITEA__database__DB_TYPE: postgres
+      GITEA__database__HOST: gitea-postgres:5432
+      GITEA__database__NAME: gitea
+      GITEA__database__USER: gitea
+      GITEA__database__PASSWD: ${DB_PASSWORD}
+      GITEA__server__DOMAIN: gitea.${HOME_SUBDOMAIN}.${DOMAIN}
+      GITEA__server__ROOT_URL: https://gitea.${HOME_SUBDOMAIN}.${DOMAIN}
+      GITEA__server__SSH_DOMAIN: gitea.${HOME_SUBDOMAIN}.${DOMAIN}
+    volumes:
+      - gitea-data:/data
+      - gitea-config:/etc/gitea
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+    networks:
+      - home-services
+      - gitea-internal
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q --spider http://localhost:3000 2>/dev/null || exit 1",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  gitea-postgres:
+    image: postgres:18-alpine
+    container_name: gitea-postgres
+    user: "${PUID:-1000}:${PGID:-1000}"
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: gitea
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: gitea
+    volumes:
+      - gitea-pgdata:/var/lib/postgresql/data
+    networks:
+      - gitea-internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gitea"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+volumes:
+  gitea-data:
+    name: gitea_data
+  gitea-pgdata:
+    name: gitea_pgdata
+  gitea-config:
+    name: gitea_config

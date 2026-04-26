@@ -1,0 +1,40 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Service: Speedtest Tracker (automated internet speed monitoring)
+# https://docs.speedtest-tracker.dev
+# ─────────────────────────────────────────────────────────────────────────────
+
+networks:
+  home-services:
+    name: home-services
+    external: true
+
+services:
+  speedtest-tracker:
+    image: lscr.io/linuxserver/speedtest-tracker:latest
+    container_name: speedtest-tracker
+    user: "${PUID:-1000}:${PGID:-1000}"
+    restart: unless-stopped
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      TZ: ${TZ:-UTC}
+      DB_CONNECTION: sqlite
+      APP_KEY: ${APP_KEY}
+    volumes:
+      - speedtest-tracker-data:/config
+    networks:
+      - home-services
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q --spider http://localhost:8888 2>/dev/null || exit 1",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  speedtest-tracker-data:
+    name: speedtest-tracker_data

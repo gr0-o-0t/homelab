@@ -1,0 +1,133 @@
+# Architecture
+
+## Overview
+
+```
+                ┌─────────────────────────────────────────────┐
+                │                 Internet                     │
+                └────────────────────┬────────────────────────┘
+                                      │ DNS lookup
+                           immich.home.example.com
+                                      │
+                 ┌────────────────────▼────────────────────────┐
+                 │              Cloudflare DNS                  │
+                 │                                              │
+                 │  *.home.example.com  A  100.x.x.x           │
+                 │                       (Caddy Tailscale IP)  │
+                 └────────────────────┬────────────────────────┘
+                                      │ resolves to Tailscale IP
+                                      │ (100.x.x.x) — only reachable
+                                      │ from inside the tailnet
+                 ┌────────────────────▼────────────────────────┐
+                 │              Your Tailnet                    │
+                 │                                              │
+                 │   ┌──────────────────────────────────────┐  │
+                 │   │         Docker Host (home server)     │  │
+                 │   │                                       │  │
+                 │   │  ┌─────────────┐  network_mode:      │  │
+                 │   │  │  Tailscale  │◄─service:tailscale──┤  │
+                 │   │  │  container  │        │             │  │
+                 │   │  └──────┬──────┘        │             │  │
+                 │   │         │ home-services  │             │  │
+                 │   │         │ Docker network │             │  │
+                 │   │  ┌──────▼──────┐  ┌─────▼──────┐     │  │
+                 │   │  │    Caddy    │  │  Cloudflare │     │  │
+                 │   │  │  (network   │  │   Tunnel   │     │  │
+                 │   │  │  namespace) │  │ (cloudflared)│    │  │
+                 │   │  └─────────────┘  └─────┬──────┘     │  │
+                 │   │                         │             │  │
+                 │   │         home-services network         │  │
+                 │   │  ┌──────────┐  ┌────────┴──┐         │  │
+                 │   │  │  immich  │  │ jellyfin  │  ...    │  │
+                 │   │  └──────────┘  └───────────┘         │  │
+                 │   └──────────────────────────────────────┘  │
+                 └──────────────────────────────────────────────┘
+```
+
+## Key design decisions
+
+### 1. `network_mode: service:tailscale` on Caddy
+
+When a container uses `network_mode: service:<other>`, it shares the **entire network namespace** of the target container — not just a network attachment, but the same network interfaces, IP addresses, and routing table.
+
+This means:
+- Caddy inherits Tailscale's `tailscale0` TUN interface → it has the node's Tailscale IP
+- Caddy inherits the `home-services` Docker bridge that Tailscale is attached to → it can resolve service containers by name
+
+Caddy does **not** get its own `networks:` block in `docker-compose.yml`; that would conflict with `network_mode`.
+
+### 2. `home-services` as an external Docker network
+
+All service `docker-compose.yml` files attach their primary container to the `home-services` external network. Caddy (via Tailscale's namespace) sees every container on this network and can proxy to them by container name.
+
+Internal service-to-service traffic (e.g., Immich ↔ Postgres) uses a separate, stack-local network marked `internal: true` so it is never reachable from Caddy or any other service.
+
+### 3. Wildcard TLS via Cloudflare DNS-01
+
+The wildcard cert `*.home.example.com` cannot be obtained via HTTP-01 (no public port needed). Caddy uses the `caddy-dns/cloudflare` plugin to answer the DNS-01 ACME challenge by temporarily creating TXT records in your Cloudflare zone. This requires a **scoped API token** (not the global API key):
+
+- Permissions required: `Zone → Zone → Read`, `Zone → DNS → Edit`
+- Zone scope: your domain only
+
+### 4. Cloudflare A record (private access)
+
+```
+Type:    A
+Name:    *.home        (i.e. *.home.example.com)
+Value:   <Caddy node's Tailscale IP>   (100.x.x.x — get it from `homelab ts status`)
+Proxy:   DNS only (grey cloud) — NOT proxied
+TTL:     Auto
+```
+
+Set proxy status to **DNS only**. If you proxy through Cloudflare the traffic would leave Tailscale and become publicly routed — defeating the entire point.
+
+**Why A record, not CNAME?** The natural approach is a CNAME pointing to `<ts-hostname>.<tailnet>.ts.net`. This only works if that ts.net hostname is publicly resolvable via the internet. In practice, public resolvers (including DNS-over-HTTPS providers used by browsers) query Tailscale's authoritative DNS (dnsimple) for the CNAME target and receive NXDOMAIN, breaking resolution for all clients. A direct A record to the Tailscale IP is simpler and works everywhere. Tailscale IPs are stable — they only change if the node is removed and re-added to the tailnet.
+
+### 5. Cloudflare Tunnel (optional public access)
+
+For services that need to be publicly accessible on the internet, Cloudflare Tunnel (`cloudflared`) provides an encrypted tunnel from your home server to Cloudflare's edge network. This works alongside private Tailscale access:
+
+- Configure `CF_TUNNEL_TOKEN` and `CF_TUNNEL_NAME` via `homelab setup`
+- Cloudflare Tunnel starts with the core stack: `homelab core start`
+- Add DNS routes: `homelab tunnel route add <service>`
+- Enable public Caddy config: `homelab service enable <service> --public`
+
+Public services use a separate subdomain (default: `pub.example.com`) and are served through Cloudflare's global network.
+
+### 6. Modular service exposure
+
+Each service directory ships with two Caddyfile snippets:
+- `caddy.conf` — Private reverse proxy (tailnet-only)
+- `caddy-pub.conf` — Public reverse proxy (Cloudflare Tunnel)
+
+Running `homelab service enable <name> --private` symlinks `caddy.conf` into `caddy/conf.d/` and reloads Caddy gracefully (no downtime, no cert re-issuance). Running `homelab service enable <name> --public` symlinks `caddy-pub.conf` instead. `homelab service disable` removes the symlink.
+
+## Network traffic flow (per request)
+
+### Private access (tailnet only)
+
+```
+Client (on tailnet)
+  └─► DNS: immich.home.example.com
+        └─► Cloudflare: A → 100.x.x.x (Caddy's Tailscale IP)
+              └─► Tailscale DERP/direct: 100.x.x.x:443
+                    └─► Caddy (in Tailscale network namespace)
+                          └─► TLS termination (wildcard cert)
+                                └─► reverse_proxy immich:2283
+                                      └─► Docker DNS → immich container
+                                            └─► Immich app
+```
+
+### Public access (via Cloudflare Tunnel)
+
+```
+Client (anywhere on internet)
+  └─► DNS: immich.pub.example.com
+        └─► Cloudflare: CNAME → Cloudflare Tunnel
+              └─► Cloudflare Edge → encrypted tunnel
+                    └─► cloudflared (on your home server)
+                          └─► Docker home-services network
+                                └─► Caddy (TLS termination)
+                                      └─► reverse_proxy immich:2283
+                                            └─► Immich app
+```

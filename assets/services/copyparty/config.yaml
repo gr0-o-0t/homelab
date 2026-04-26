@@ -1,0 +1,9 @@
+vars:
+  TZ:
+    value: "UTC"
+    required: false
+  FILES_PATH:
+    value: "/mnt/files"
+    required: false
+
+secrets: {}

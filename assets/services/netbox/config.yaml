@@ -1,0 +1,21 @@
+vars:
+  PUID:
+    value: "1000"
+    required: false
+  PGID:
+    value: "1000"
+    required: false
+  TZ:
+    value: "UTC"
+    required: false
+  SUPERUSER_EMAIL:
+    value: ""
+    required: false
+
+secrets:
+  DB_PASSWORD:
+    required: true
+  SECRET_KEY:
+    required: true
+  SUPERUSER_PASSWORD:
+    required: true

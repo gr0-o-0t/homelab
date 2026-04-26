@@ -1,0 +1,19 @@
+vars:
+  PUID:
+    value: "1000"
+    required: false
+  PGID:
+    value: "1000"
+    required: false
+  TZ:
+    value: "UTC"
+    required: false
+  MEDIA_PATH:
+    value: "/mnt/media"
+    required: false
+
+secrets:
+  PLEX_CLAIM:
+    required: false
+    # Get your claim token from https://plex.tv/claim (valid for 4 minutes).
+    # Only needed on first run to link the server to your Plex account.

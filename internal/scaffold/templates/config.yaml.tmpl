@@ -1,0 +1,17 @@
+vars:
+  # Add non-secret variables below. Root config vars (DOMAIN, HOME_SUBDOMAIN,
+  # etc.) are inherited automatically and do not need to be declared here
+  # unless you want to override them for this service.
+  #
+  # Example:
+  # APP_PORT:
+  #   value: "{{.Port}}"
+  #   required: false
+
+secrets:
+  # Declare secrets below. Values are stored in the system keyring via
+  # `homelab service setup {{.Name}}` — never written to disk.
+  #
+  # Example:
+  # APP_SECRET_KEY:
+  #   required: true

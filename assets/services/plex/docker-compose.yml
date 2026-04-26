@@ -1,0 +1,44 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Service: Plex Media Server
+# https://hub.docker.com/r/linuxserver/plex
+#
+# PLEX_CLAIM: one-time token from https://plex.tv/claim — only needed on first
+# run to link the server to your Plex account. Leave blank after initial setup.
+# ─────────────────────────────────────────────────────────────────────────────
+
+networks:
+  home-services:
+    name: home-services
+    external: true
+
+services:
+  plex:
+    image: lscr.io/linuxserver/plex:latest
+    container_name: plex
+    user: "${PUID:-1000}:${PGID:-1000}"
+    restart: unless-stopped
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      TZ: ${TZ:-UTC}
+      VERSION: docker
+      PLEX_CLAIM: ${PLEX_CLAIM:-}
+    volumes:
+      - plex-config:/config
+      - ${MEDIA_PATH:-/mnt/media}:/media:ro
+    networks:
+      - home-services
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q --spider http://localhost:32400/web 2>/dev/null || exit 1",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  plex-config:
+    name: plex_config

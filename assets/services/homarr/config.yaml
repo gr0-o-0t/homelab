@@ -1,0 +1,4 @@
+vars: {}
+secrets:
+  ENCRYPTION_KEY:
+    required: true

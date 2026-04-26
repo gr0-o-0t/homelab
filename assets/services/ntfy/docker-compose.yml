@@ -1,0 +1,40 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Service: ntfy (self-hosted push notification service)
+# https://github.com/binwiederhier/ntfy
+# ─────────────────────────────────────────────────────────────────────────────
+
+networks:
+  home-services:
+    name: home-services
+    external: true
+
+services:
+  ntfy:
+    image: binwiederhier/ntfy:latest
+    container_name: ntfy
+    user: "${PUID:-1000}:${PGID:-1000}"
+    restart: unless-stopped
+    command: ["serve"]
+    environment:
+      TZ: ${TZ:-UTC}
+    volumes:
+      - ntfy-cache:/var/cache/ntfy
+      - ntfy-config:/etc/ntfy
+    networks:
+      - home-services
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q --spider http://localhost/v1/health 2>/dev/null || exit 1",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  ntfy-cache:
+    name: ntfy_cache
+  ntfy-config:
+    name: ntfy_config

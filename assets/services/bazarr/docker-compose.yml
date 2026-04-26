@@ -1,0 +1,34 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Service: Bazarr (subtitle management companion for Sonarr and Radarr)
+# https://wiki.bazarr.media/
+# ─────────────────────────────────────────────────────────────────────────────
+
+networks:
+  home-services:
+    name: home-services
+    external: true
+
+services:
+  bazarr:
+    image: lscr.io/linuxserver/bazarr:latest
+    container_name: bazarr
+    user: "${PUID:-1000}:${PGID:-1000}"
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-UTC}
+    volumes:
+      - bazarr-config:/config
+      - ${MEDIA_PATH:-/mnt/media}/movies:/movies
+      - ${MEDIA_PATH:-/mnt/media}/tv:/tv
+    networks:
+      - home-services
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "bazarr"]
+      interval: 1m
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  bazarr-config:
+    name: bazarr_data

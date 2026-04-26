@@ -1,0 +1,115 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Service: NetBox (network source of truth & IPAM/DCIM)
+# https://docs.linuxserver.io/images/docker-netbox/
+# ─────────────────────────────────────────────────────────────────────────────
+
+networks:
+  # Shared network — Caddy (via Tailscale namespace) reaches every service here
+  home-services:
+    name: home-services
+    external: true
+  # Internal-only network for NetBox ↔ database/cache traffic.
+  # Never expose this outside the stack.
+  netbox-internal:
+    internal: true
+
+services:
+  netbox:
+    image: lscr.io/linuxserver/netbox:latest
+    container_name: netbox
+    user: "${PUID:-1000}:${PGID:-1000}"
+    restart: unless-stopped
+    depends_on:
+      netbox-postgres:
+        condition: service_healthy
+      netbox-redis:
+        condition: service_healthy
+      netbox-redis-cache:
+        condition: service_healthy
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      TZ: ${TZ:-UTC}
+      SUPERUSER_EMAIL: ${SUPERUSER_EMAIL}
+      SUPERUSER_PASSWORD: ${SUPERUSER_PASSWORD}
+      ALLOWED_HOST: "netbox.${HOME_SUBDOMAIN}.${DOMAIN}"
+      DB_HOST: netbox-postgres
+      DB_NAME: netbox
+      DB_USER: netbox
+      DB_PASSWORD: ${DB_PASSWORD}
+      REDIS_HOST: netbox-redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ""
+      REDIS_CACHE_HOST: netbox-redis-cache
+      REDIS_CACHE_PORT: 6380
+      REDIS_CACHE_PASSWORD: ""
+      SECRET_KEY: ${SECRET_KEY}
+    volumes:
+      - netbox-data:/config
+    networks:
+      - home-services # reachable by Caddy
+      - netbox-internal # internal comms
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q --spider http://localhost:8080 2>/dev/null || exit 1",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s # allows time for DB migrations on first boot
+
+  netbox-postgres:
+    image: postgres:16-alpine
+    container_name: netbox-postgres
+    user: "${PUID:-1000}:${PGID:-1000}"
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: netbox
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: netbox
+    volumes:
+      - netbox-pgdata:/var/lib/postgresql/data
+    networks:
+      - netbox-internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U netbox"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  netbox-redis:
+    image: docker.io/valkey/valkey:9-alpine
+    container_name: netbox-redis
+    user: "${PUID:-1000}:${PGID:-1000}"
+    restart: unless-stopped
+    command: valkey-server --port 6379
+    networks:
+      - netbox-internal
+    healthcheck:
+      test: ["CMD-SHELL", "valkey-cli -p 6379 ping || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  netbox-redis-cache:
+    image: docker.io/valkey/valkey:9-alpine
+    container_name: netbox-redis-cache
+    user: "${PUID:-1000}:${PGID:-1000}"
+    restart: unless-stopped
+    command: valkey-server --port 6380
+    networks:
+      - netbox-internal
+    healthcheck:
+      test: ["CMD-SHELL", "valkey-cli -p 6380 ping || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  netbox-data:
+    name: netbox_data
+  netbox-pgdata:
+    name: netbox_pgdata

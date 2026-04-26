@@ -1,0 +1,15 @@
+vars:
+  PUID:
+    value: "1000"
+    required: false
+  PGID:
+    value: "1000"
+    required: false
+  TZ:
+    value: "UTC"
+    required: false
+
+secrets:
+  APP_KEY:
+    required: true
+    description: "Laravel app key — run: echo base64:$(openssl rand -base64 32)"

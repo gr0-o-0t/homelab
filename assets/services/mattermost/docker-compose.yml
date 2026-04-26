@@ -1,0 +1,81 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Service: Mattermost (self-hosted team messaging platform)
+# https://docs.mattermost.com/install/install-docker.html
+# ─────────────────────────────────────────────────────────────────────────────
+
+networks:
+  # Shared network — Caddy (via Tailscale namespace) reaches every service here
+  home-services:
+    name: home-services
+    external: true
+  # Internal-only network for Mattermost ↔ database traffic.
+  # Never expose this outside the stack.
+  mattermost-internal:
+    internal: true
+
+services:
+  mattermost:
+    image: mattermost/mattermost-team-edition:latest
+    container_name: mattermost
+    user: "${PUID:-1000}:${PGID:-1000}"
+    restart: unless-stopped
+    depends_on:
+      mattermost-postgres:
+        condition: service_healthy
+    security_opt:
+      - "no-new-privileges:true"
+    environment:
+      MM_SQLSETTINGS_DRIVERNAME: postgres
+      MM_SQLSETTINGS_DATASOURCE: postgres://mattermost:${DB_PASSWORD}@mattermost-postgres:5432/mattermost?sslmode=disable&connect_timeout=10
+      MM_SERVICESETTINGS_SITEURL: https://mattermost.${HOME_SUBDOMAIN}.${DOMAIN}
+      TZ: ${TZ:-UTC}
+    volumes:
+      - mattermost-config:/mattermost/config
+      - mattermost-data:/mattermost/data
+      - mattermost-logs:/mattermost/logs
+      - mattermost-plugins:/mattermost/plugins
+    networks:
+      - home-services
+      - mattermost-internal
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q --spider http://localhost:8065 2>/dev/null || exit 1",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  mattermost-postgres:
+    image: postgres:16-alpine
+    container_name: mattermost-postgres
+    user: "${PUID:-1000}:${PGID:-1000}"
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: mattermost
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: mattermost
+    volumes:
+      - mattermost-pgdata:/var/lib/postgresql/data
+    networks:
+      - mattermost-internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mattermost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+volumes:
+  mattermost-config:
+    name: mattermost_config
+  mattermost-data:
+    name: mattermost_data
+  mattermost-logs:
+    name: mattermost_logs
+  mattermost-plugins:
+    name: mattermost_plugins
+  mattermost-pgdata:
+    name: mattermost_pgdata

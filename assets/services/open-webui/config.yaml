@@ -1,0 +1,8 @@
+vars:
+  OLLAMA_BASE_URL:
+    value: "http://ollama:11434"
+    required: false
+
+secrets:
+  WEBUI_SECRET_KEY:
+    required: true

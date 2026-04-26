@@ -1,0 +1,46 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Service: Ollama (local large language model runner)
+# https://ollama.com
+# ─────────────────────────────────────────────────────────────────────────────
+
+networks:
+  # Shared network — Caddy (via Tailscale namespace) reaches every service here
+  home-services:
+    name: home-services
+    external: true
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    user: "${PUID:-1000}:${PGID:-1000}"
+    restart: unless-stopped
+    environment:
+      OLLAMA_KEEP_ALIVE: ${KEEP_ALIVE:-5m}
+    volumes:
+      - ollama-data:/root/.ollama
+    networks:
+      - home-services
+    # Uncomment the block below to enable NVIDIA GPU support.
+    # Requires nvidia-container-toolkit installed on the host.
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q --spider http://localhost:11434/api/tags 2>/dev/null || exit 1",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  ollama-data:
+    name: ollama_data

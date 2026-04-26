@@ -1,0 +1,117 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Service: Immich (self-hosted photo & video backup)
+# https://immich.app/docs/install/docker-compose
+# ─────────────────────────────────────────────────────────────────────────────
+
+networks:
+  # Shared network — Caddy (via Tailscale namespace) reaches every service here
+  home-services:
+    name: home-services
+    external: true
+  # Internal-only network for Immich's own microservices ↔ database traffic.
+  # Never expose this outside the stack.
+  immich-internal:
+    internal: true
+
+services:
+  immich-server:
+    image: ghcr.io/immich-app/immich-server:${IMMICH_VERSION:-release}
+    # "immich" is the name Caddy uses: `reverse_proxy immich:2283`
+    container_name: immich
+    user: "${PUID:-1000}:${PGID:-1000}"
+    restart: unless-stopped
+    depends_on:
+      immich-redis:
+        condition: service_healthy
+      immich-postgres:
+        condition: service_healthy
+    environment:
+      DB_HOSTNAME: immich-postgres
+      DB_USERNAME: ${DB_USERNAME:-immich}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_DATABASE_NAME: ${DB_DATABASE_NAME:-immich}
+      REDIS_HOSTNAME: immich-redis
+      UPLOAD_LOCATION: /usr/src/app/upload
+      IMMICH_VERSION: ${IMMICH_VERSION:-release}
+    volumes:
+      - immich-uploads:/usr/src/app/upload
+      - /etc/localtime:/etc/localtime:ro
+    networks:
+      - home-services # reachable by Caddy
+      - immich-internal # internal comms
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q --spider http://localhost:2283/api/server-info/ping 2>/dev/null || exit 1",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s # allows time for DB migrations on first boot
+
+  immich-machine-learning:
+    image: ghcr.io/immich-app/immich-machine-learning:${IMMICH_VERSION:-release}
+    container_name: immich-machine-learning
+    user: "${PUID:-1000}:${PGID:-1000}"
+    restart: unless-stopped
+    volumes:
+      - immich-model-cache:/cache
+    networks:
+      - immich-internal
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q --spider http://localhost:3003/ping 2>/dev/null || exit 1",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s # model loading takes time
+
+  immich-redis:
+    image: docker.io/valkey/valkey:9-alpine
+    container_name: immich-redis
+    user: "${PUID:-1000}:${PGID:-1000}"
+    restart: unless-stopped
+    networks:
+      - immich-internal
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  immich-postgres:
+    image: ghcr.io/immich-app/postgres:14-vectorchord0.4.3-pgvectors0.2.0
+    container_name: immich-postgres
+    user: "${PUID:-1000}:${PGID:-1000}"
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USERNAME:-immich}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_DATABASE_NAME:-immich}
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    volumes:
+      - immich-pgdata:/var/lib/postgresql/data
+    networks:
+      - immich-internal
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${DB_USERNAME:-immich} -d ${DB_DATABASE_NAME:-immich}",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+volumes:
+  immich-uploads:
+    name: immich_uploads
+  immich-pgdata:
+    name: immich_pgdata
+  immich-model-cache:
+    name: immich_model-cache

@@ -1,0 +1,37 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Service: Homarr (intuitive homelab dashboard)
+# https://github.com/homarr-labs/homarr
+# ─────────────────────────────────────────────────────────────────────────────
+
+networks:
+  home-services:
+    name: home-services
+    external: true
+
+services:
+  homarr:
+    image: ghcr.io/homarr-labs/homarr:latest
+    container_name: homarr
+    user: "${PUID:-1000}:${PGID:-1000}"
+    restart: unless-stopped
+    environment:
+      SECRET_ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+    volumes:
+      - homarr-data:/appdata
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - home-services
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q --spider http://localhost:7575 2>/dev/null || exit 1",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  homarr-data:
+    name: homarr_data

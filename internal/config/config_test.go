@@ -1,0 +1,239 @@
+package config_test
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/groot/homelab/internal/config"
+)
+
+// ── helpers ───────────────────────────────────────────────────────────────────
+
+func writeFile(t *testing.T, dir, rel, content string) {
+	t.Helper()
+	path := filepath.Join(dir, rel)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+}
+
+// ── Load ──────────────────────────────────────────────────────────────────────
+
+func TestLoad_ValidYAML(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	writeFile(t, dir, "config.yaml", `
+vars:
+  DOMAIN:
+    value: example.com
+    required: true
+  HOME_SUBDOMAIN:
+    value: home
+    required: true
+secrets:
+  TS_AUTHKEY:
+    required: true
+`)
+	cfg, err := config.Load(path)
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+	assert.Equal(t, "example.com", cfg.Vars["DOMAIN"].Value)
+	assert.True(t, cfg.Vars["DOMAIN"].Required)
+	assert.Equal(t, "home", cfg.Vars["HOME_SUBDOMAIN"].Value)
+	assert.True(t, cfg.Secrets["TS_AUTHKEY"].Required)
+}
+
+func TestLoad_Missing(t *testing.T) {
+	dir := t.TempDir()
+	cfg, err := config.Load(filepath.Join(dir, "config.yaml"))
+	assert.NoError(t, err)
+	assert.Nil(t, cfg, "missing file should return nil, not error")
+}
+
+func TestLoad_InvalidYAML(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	writeFile(t, dir, "config.yaml", ":\t:bad yaml{{")
+	_, err := config.Load(path)
+	assert.Error(t, err)
+}
+
+// ── Save ──────────────────────────────────────────────────────────────────────
+
+func TestSave_Roundtrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	original := &config.Config{
+		Vars: map[string]config.VarEntry{
+			"DOMAIN":         {Value: "roundtrip.io", Required: true},
+			"HOME_SUBDOMAIN": {Value: "lab", Required: true},
+		},
+		Secrets: map[string]config.SecretEntry{
+			"TS_AUTHKEY": {Required: true},
+		},
+	}
+
+	require.NoError(t, config.Save(path, original))
+
+	loaded, err := config.Load(path)
+	require.NoError(t, err)
+	require.NotNil(t, loaded)
+	assert.Equal(t, original.Vars["DOMAIN"].Value, loaded.Vars["DOMAIN"].Value)
+	assert.Equal(t, original.Vars["DOMAIN"].Required, loaded.Vars["DOMAIN"].Required)
+	assert.True(t, loaded.Secrets["TS_AUTHKEY"].Required)
+}
+
+func TestSave_Roundtrip_WithGroups(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	original := &config.Config{
+		Vars: map[string]config.VarEntry{
+			"DOMAIN": {Value: "example.io", Required: true},
+		},
+		Groups: map[string][]string{
+			"media": {"jellyfin", "immich"},
+			"utils": {"vaultwarden"},
+		},
+	}
+
+	require.NoError(t, config.Save(path, original))
+
+	loaded, err := config.Load(path)
+	require.NoError(t, err)
+	require.NotNil(t, loaded)
+	assert.Equal(t, original.Groups, loaded.Groups)
+	assert.Equal(t, []string{"jellyfin", "immich"}, loaded.Groups["media"])
+	assert.Equal(t, []string{"vaultwarden"}, loaded.Groups["utils"])
+}
+
+func TestSave_CreatesParentDirs(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "deep", "nested", "config.yaml")
+	cfg := &config.Config{Vars: map[string]config.VarEntry{"X": {Value: "1"}}}
+	require.NoError(t, config.Save(path, cfg))
+	_, err := os.Stat(path)
+	assert.NoError(t, err)
+}
+
+// ── RootConfigFile / ServiceConfigFile ────────────────────────────────────────
+
+func TestRootConfigFile_DefaultsToConfigDir(t *testing.T) {
+	result := config.RootConfigFile("/home/user/.config/homelab", "")
+	assert.Equal(t, "/home/user/.config/homelab/config.yaml", result)
+}
+
+func TestRootConfigFile_FlagOverrides(t *testing.T) {
+	result := config.RootConfigFile("/home/user/.config/homelab", "/custom/path/config.yaml")
+	assert.Equal(t, "/custom/path/config.yaml", result)
+}
+
+func TestServiceConfigFile(t *testing.T) {
+	result := config.ServiceConfigFile("/home/user/.config/homelab", "uptime-kuma")
+	assert.Equal(t, "/home/user/.config/homelab/services/uptime-kuma/config.yaml", result)
+}
+
+// ── BuildEnv ──────────────────────────────────────────────────────────────────
+
+func TestBuildEnv_RootVars(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	writeFile(t, dir, "config.yaml", `
+vars:
+  DOMAIN:
+    value: example.com
+    required: true
+  ACME_EMAIL:
+    value: admin@example.com
+    required: true
+`)
+	env, err := config.BuildEnv(cfgPath, dir, "", nil)
+	require.NoError(t, err)
+	assert.Equal(t, "example.com", env["DOMAIN"])
+	assert.Equal(t, "admin@example.com", env["ACME_EMAIL"])
+}
+
+func TestBuildEnv_MissingRootConfig(t *testing.T) {
+	dir := t.TempDir()
+	env, err := config.BuildEnv(filepath.Join(dir, "config.yaml"), dir, "", nil)
+	require.NoError(t, err)
+	assert.NotNil(t, env)
+}
+
+func TestBuildEnv_ServiceVarsOverrideRoot(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	writeFile(t, dir, "config.yaml", `
+vars:
+  DOMAIN:
+    value: root.com
+    required: true
+  HOME_SUBDOMAIN:
+    value: home
+    required: true
+`)
+	writeFile(t, dir, "services/myapp/config.yaml", `
+vars:
+  DOMAIN:
+    value: service-override.com
+    required: false
+  APP_PORT:
+    value: "8080"
+    required: false
+`)
+	env, err := config.BuildEnv(cfgPath, dir, "myapp", nil)
+	require.NoError(t, err)
+	assert.Equal(t, "service-override.com", env["DOMAIN"], "service var should override root")
+	assert.Equal(t, "home", env["HOME_SUBDOMAIN"], "root var not overridden by service should remain")
+	assert.Equal(t, "8080", env["APP_PORT"], "service-only var should be present")
+}
+
+func TestBuildEnv_EmptyVarValueSkipped(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	writeFile(t, dir, "config.yaml", `
+vars:
+  DOMAIN:
+    value: ""
+    required: true
+  ACME_EMAIL:
+    value: set@example.com
+    required: true
+`)
+	env, err := config.BuildEnv(cfgPath, dir, "", nil)
+	require.NoError(t, err)
+	_, hasDomain := env["DOMAIN"]
+	assert.False(t, hasDomain, "empty value should not be injected into env")
+	assert.Equal(t, "set@example.com", env["ACME_EMAIL"])
+}
+
+func TestBuildEnv_NoServiceConfig(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	writeFile(t, dir, "config.yaml", `
+vars:
+  DOMAIN:
+    value: base.com
+    required: true
+`)
+	env, err := config.BuildEnv(cfgPath, dir, "nonexistent-service", nil)
+	require.NoError(t, err)
+	assert.Equal(t, "base.com", env["DOMAIN"], "root vars still present when service config is missing")
+}
+
+// ── DefaultConfigDir ──────────────────────────────────────────────────────────
+
+func TestDefaultConfigDir_XDG(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", "/custom/xdg")
+	result := config.DefaultConfigDir()
+	assert.Equal(t, "/custom/xdg/homelab", result)
+}
+
+func TestDefaultConfigDir_HomeDir(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", "")
+	result := config.DefaultConfigDir()
+	home, _ := os.UserHomeDir()
+	assert.Equal(t, filepath.Join(home, ".config", "homelab"), result)
+}

@@ -1,0 +1,8 @@
+vars:
+  TZ:
+    value: "UTC"
+    required: false
+
+secrets:
+  DB_PASSWORD:
+    required: true

@@ -1,0 +1,46 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Service: Vaultwarden (unofficial Bitwarden-compatible server)
+# https://github.com/dani-garcia/vaultwarden/wiki
+# ─────────────────────────────────────────────────────────────────────────────
+
+networks:
+  home-services:
+    name: home-services
+    external: true
+
+services:
+  vaultwarden:
+    image: vaultwarden/server:latest
+    container_name: vaultwarden
+    user: "${PUID:-1000}:${PGID:-1000}"
+    restart: unless-stopped
+    environment:
+      DOMAIN: https://vault.${HOME_SUBDOMAIN}.${DOMAIN}
+      # Disable public sign-ups — only invited users can register.
+      SIGNUPS_ALLOWED: "false"
+      # Enable admin panel (protect with a strong token)
+      ADMIN_TOKEN: ${ADMIN_TOKEN}
+      # Require email verification
+      SIGNUPS_VERIFY: "true"
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_SECURITY: ${SMTP_SECURITY:-starttls}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+    volumes:
+      - vaultwarden-data:/data
+    networks:
+      - home-services
+    healthcheck:
+      # /alive is vaultwarden's liveness endpoint (HTTP 200 "alive")
+      test:
+        ["CMD-SHELL", "curl -fsSL http://localhost/alive 2>/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  vaultwarden-data:
+    name: vaultwarden_data

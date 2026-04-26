@@ -1,0 +1,41 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Service: Technitium DNS Server (authoritative and recursive DNS server)
+# https://technitium.com/dns/
+# ─────────────────────────────────────────────────────────────────────────────
+# NOTE: DNS port 53 (TCP+UDP) needs host-level exposure to function as a DNS
+# server. Uncomment the ports section below to enable DNS functionality.
+
+networks:
+  home-services:
+    name: home-services
+    external: true
+
+services:
+  technitium:
+    image: technitium/dns-server:latest
+    container_name: technitium
+    user: "${PUID:-1000}:${PGID:-1000}"
+    restart: unless-stopped
+    environment:
+      DNS_SERVER_DOMAIN: technitium.${HOME_SUBDOMAIN}.${DOMAIN}
+    volumes:
+      - technitium-config:/etc/dns
+    networks:
+      - home-services
+    #ports:
+    #  - "53:53/tcp"
+    #  - "53:53/udp"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q --spider http://localhost:5380 2>/dev/null || exit 1",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  technitium-config:
+    name: technitium_config

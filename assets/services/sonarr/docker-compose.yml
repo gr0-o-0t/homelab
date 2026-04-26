@@ -1,0 +1,37 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Service: Sonarr (TV series management and automation)
+# https://wiki.servarr.com/sonarr
+# ─────────────────────────────────────────────────────────────────────────────
+
+networks:
+  home-services:
+    name: home-services
+    external: true
+
+services:
+  sonarr:
+    image: lscr.io/linuxserver/sonarr:latest
+    container_name: sonarr
+    user: "${PUID:-1000}:${PGID:-1000}"
+    restart: unless-stopped
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      TZ: ${TZ:-UTC}
+    volumes:
+      - sonarr-config:/config
+      - ${MEDIA_PATH:-/mnt/media}:/media
+      - ${DOWNLOADS_PATH:-/mnt/downloads}:/downloads
+    networks:
+      - home-services
+    healthcheck:
+      test:
+        ["CMD-SHELL", "wget -qO- http://localhost:8989 2>/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  sonarr-config:
+    name: sonarr_data

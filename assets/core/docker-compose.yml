@@ -1,0 +1,138 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Core stack: Tailscale + Caddy [+ cloudflared]
+#
+# Architecture
+# ────────────
+#   tailscale    → joins your tailnet; also attached to the shared
+#                  `home-services` Docker network so its network namespace
+#                  can reach every service container by name.
+#
+#   caddy        → uses `network_mode: service:tailscale` which shares
+#                  Tailscale's full network namespace (tunnel + Docker networks).
+#                  From Caddy's perspective it IS the Tailscale node, so:
+#                    • It listens on the Tailscale IP (100.x.x.x)
+#                    • It can resolve service container names on home-services
+#
+#   cloudflared  → optional; profile "tunnel". Connects outbound-only to
+#                  Cloudflare's edge and forwards public traffic to Caddy
+#                  via http://tailscale:80 (shared netns trick — Caddy is
+#                  reachable on the tailscale container's Docker IP).
+#                  Start with: homelab core start  (auto-activated when
+#                  CF_TUNNEL_TOKEN secret is configured with setup).
+#
+# External network `home-services` must be created before starting this stack:
+#   docker network create home-services
+# (or run `homelab setup` which does this automatically)
+# ─────────────────────────────────────────────────────────────────────────────
+
+networks:
+  home-services:
+    name: home-services
+    external: true # shared with all service stacks
+
+services:
+  # ── Tailscale ──────────────────────────────────────────────────────────────
+  tailscale:
+    image: tailscale/tailscale:latest
+    container_name: tailscale
+    hostname: ${TS_HOSTNAME:-caddy-home}
+    restart: unless-stopped
+    environment:
+      TS_AUTHKEY: ${TS_AUTHKEY}
+      TS_STATE_DIR: /var/lib/tailscale
+      # Userspace networking OFF → Tailscale uses a real kernel TUN device,
+      # which is required for the shared network_mode trick to work correctly.
+      TS_USERSPACE: false
+      TS_ACCEPT_DNS: true
+      # Enable healthcheck endpoint: "/healthz"
+      TS_ENABLE_HEALTH_CHECK: true
+      TS_LOCAL_ADDR_PORT: 127.0.0.1:41234
+      # Serve only; do not act as exit node or subnet router by default.
+      # Add --advertise-tags=tag:homelab if you use ACL tags in your tailnet.
+      TS_EXTRA_ARGS: ""
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+      # TUN device — must exist on the host (standard on Linux; see README
+      # for macOS / WSL2 notes)
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    networks:
+      - home-services # gives Caddy reachability to service containers
+    healthcheck:
+      # Passes once Tailscale has received its 100.x.x.x address, meaning it
+      # is authenticated and connected to the tailnet.
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:41234/healthz"] # Check Tailscale has a Tailnet IP and is operational
+      interval: 1m # How often to perform the check
+      timeout: 10s # Time to wait for the check to succeed
+      retries: 3 # Number of retries before marking as unhealthy
+      start_period: 10s # Time to wait before starting health checks
+
+  # ── Caddy ──────────────────────────────────────────────────────────────────
+  caddy:
+    build:
+      context: .
+      dockerfile: Dockerfile.caddy
+    container_name: caddy
+    # KEY DESIGN: share Tailscale's network namespace.
+    # Caddy inherits every network interface Tailscale has, including:
+    #   • The tailscale0 TUN (100.x.x.x)
+    #   • The home-services Docker bridge
+    # This means we do NOT add caddy to any explicit `networks:` block here.
+    network_mode: "service:tailscale"
+    restart: unless-stopped
+    depends_on:
+      tailscale:
+        condition: service_healthy # wait for Tailscale IP before binding
+    environment:
+      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN}
+      DOMAIN: ${DOMAIN}
+      HOME_SUBDOMAIN: ${HOME_SUBDOMAIN:-home}
+      ACME_EMAIL: ${ACME_EMAIL}
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "caddy"] # Check if ${SERVICE} process is running
+      interval: 1m # How often to perform the check
+      timeout: 10s # Time to wait for the check to succeed
+      retries: 3 # Number of retries before marking as unhealthy
+      start_period: 30s # Time to wait before starting health checks
+
+    volumes:
+      # Main Caddyfile
+      - ../caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # conf.d, conf.d-pub, and services are mounted under a shared /homelab/
+      # prefix so that relative symlinks (../../services/…) from conf.d/ resolve
+      # to /homelab/services/… in the container — matching the host repo layout.
+      - ../caddy/conf.d:/homelab/caddy/conf.d:ro
+      - ../caddy/conf.d-pub:/homelab/caddy/conf.d-pub:ro
+      - ../services:/homelab/services:ro
+      # Persistent ACME certs and Caddy state — never delete this volume!
+      - caddy-data:/data
+      - caddy-config:/config
+
+  # ── Cloudflare Tunnel (optional) ───────────────────────────────────────────
+  # Activated automatically by `homelab core start` when CF_TUNNEL_TOKEN is
+  # set. Forwards *.{PUB_SUBDOMAIN}.{DOMAIN} public traffic to Caddy.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflared
+    profiles: ["tunnel"]
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CF_TUNNEL_TOKEN}
+    networks:
+      - home-services
+    depends_on:
+      tailscale:
+        condition: service_healthy # don't route public traffic until tailnet is up
+    # Note: no healthcheck — cloudflared's image has no curl/wget, and no other
+    # service depends on cloudflared being healthy.
+
+volumes:
+  tailscale-state:
+    name: core_tailscale-state
+  caddy-data:
+    name: core_caddy-data
+  caddy-config:
+    name: core_caddy-config

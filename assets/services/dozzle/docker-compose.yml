@@ -1,0 +1,31 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Service: Dozzle (real-time Docker log viewer)
+# https://github.com/amir20/dozzle
+# ─────────────────────────────────────────────────────────────────────────────
+
+networks:
+  home-services:
+    name: home-services
+    external: true
+
+services:
+  dozzle:
+    image: amir20/dozzle:latest
+    container_name: dozzle
+    user: "${PUID:-1000}:${PGID:-1000}"
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - doozzle-data:/data
+    networks:
+      - home-services
+    healthcheck:
+      test: ["CMD", "/dozzle", "healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  dozzle-data:
+    name: dozzle_data

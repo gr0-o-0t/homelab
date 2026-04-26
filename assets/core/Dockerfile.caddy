@@ -1,0 +1,17 @@
+# Build a custom Caddy image that includes the Cloudflare DNS provider module.
+# The official Caddy image does not ship third-party DNS plugins; we use
+# xcaddy (the official build tool) to compile one in.
+#
+# References:
+#   https://caddyserver.com/docs/build#xcaddy
+#   https://github.com/caddy-dns/cloudflare
+
+FROM caddy:2-builder AS builder
+
+RUN xcaddy build \
+  --with github.com/caddy-dns/cloudflare
+
+# ── Final image ──────────────────────────────────────────────────────────────
+FROM caddy:2
+
+COPY --from=builder /usr/bin/caddy /usr/bin/caddy

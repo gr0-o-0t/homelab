@@ -1,0 +1,36 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Service: Gotify (self-hosted push notification server)
+# https://gotify.net/docs/
+# ─────────────────────────────────────────────────────────────────────────────
+
+networks:
+  home-services:
+    name: home-services
+    external: true
+
+services:
+  gotify:
+    image: gotify/server:latest
+    container_name: gotify
+    user: "${PUID:-1000}:${PGID:-1000}"
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-UTC}
+    volumes:
+      - gotify-data:/app/data
+    networks:
+      - home-services
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q --spider http://localhost/health 2>/dev/null || exit 1",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  gotify-data:
+    name: gotify_data

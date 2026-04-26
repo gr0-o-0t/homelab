@@ -1,0 +1,37 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Service: Audiobookshelf (self-hosted audiobook and podcast server)
+# https://www.audiobookshelf.org/docs#docker-install
+# ─────────────────────────────────────────────────────────────────────────────
+
+networks:
+  home-services:
+    name: home-services
+    external: true
+
+services:
+  audiobookshelf:
+    image: ghcr.io/advplyr/audiobookshelf:latest
+    container_name: audiobookshelf
+    user: "${PUID:-1000}:${PGID:-1000}"
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-UTC}
+    volumes:
+      - ${AUDIOBOOKS_PATH:-/mnt/audiobooks}:/audiobooks:ro
+      - ${PODCASTS_PATH:-/mnt/podcasts}:/podcasts:ro
+      - audiobookshelf-config:/config
+      - audiobookshelf-metadata:/metadata
+    networks:
+      - home-services
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "audiobookshelf"]
+      interval: 1m
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  audiobookshelf-config:
+    name: audiobookshelf_config
+  audiobookshelf-metadata:
+    name: audiobookshelf_metadata

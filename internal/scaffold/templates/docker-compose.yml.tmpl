@@ -1,0 +1,32 @@
+# ─────────────────────────────────────────────────────────────────
+# Service: {{.Name}}
+# ─────────────────────────────────────────────────────────────────
+
+networks:
+  home-services:
+    name: home-services
+    external: true
+
+services:
+  {{.Container}}:
+    image: # TODO: set image
+    container_name: {{.Container}}
+    restart: unless-stopped
+    environment:
+      {}  # TODO: add environment variables
+    volumes:
+      - {{.Name}}-data:/data
+    networks:
+      - home-services
+    healthcheck:
+      # TODO: replace with an appropriate check for this image.
+      # wget is available on Alpine-based images; use curl on Debian-based ones.
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:{{.Port}}/ 2>/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  {{.Name}}-data:
+    name: {{.Name}}_data

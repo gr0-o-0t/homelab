@@ -1,0 +1,18 @@
+vars:
+  PUID:
+    value: "1000"
+    required: false
+  PGID:
+    value: "1000"
+    required: false
+  AUDIOBOOKS_PATH:
+    value: "/mnt/audiobooks"
+    required: false
+  PODCASTS_PATH:
+    value: "/mnt/podcasts"
+    required: false
+  TZ:
+    value: "UTC"
+    required: false
+
+secrets: {}

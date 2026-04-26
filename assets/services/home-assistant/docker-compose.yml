@@ -1,0 +1,42 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Service: Home Assistant (home automation platform)
+# https://www.home-assistant.io/installation/linux#docker-compose
+#
+# NOTE: Uses the standard home-services network for Caddy reachability.
+# If you need full device/mDNS discovery, switch to `network_mode: host`
+# and update caddy.conf to reverse_proxy to the host IP instead.
+# ─────────────────────────────────────────────────────────────────────────────
+
+networks:
+  home-services:
+    name: home-services
+    external: true
+
+services:
+  home-assistant:
+    image: ghcr.io/home-assistant/home-assistant:stable
+    container_name: home-assistant
+    user: "${PUID:-1000}:${PGID:-1000}"
+    restart: unless-stopped
+    privileged: true
+    environment:
+      TZ: ${TZ:-UTC}
+    volumes:
+      - home-assistant-config:/config
+      - /etc/localtime:/etc/localtime:ro
+    networks:
+      - home-services
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q --spider http://localhost:8123 2>/dev/null || exit 1",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  home-assistant-config:
+    name: home-assistant_config

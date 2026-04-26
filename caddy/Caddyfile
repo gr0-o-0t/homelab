@@ -1,0 +1,52 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Main Caddyfile
+#
+# TLS strategy: wildcard certificate via Cloudflare DNS-01 challenge.
+# This lets us get a single cert for *.home.<domain> without exposing
+# port 80/443 to the public internet — the DNS challenge is entirely
+# out-of-band.
+#
+# Docs:
+#   https://caddyserver.com/docs/caddyfile/options
+#   https://github.com/caddy-dns/cloudflare
+# ─────────────────────────────────────────────────────────────────────────────
+
+{
+    # Global ACME settings
+    email {$ACME_EMAIL}
+
+    # Obtain & renew ALL certificates via Cloudflare DNS-01.
+    # The `cloudflare` directive comes from the caddy-dns/cloudflare plugin
+    # compiled into our custom image (see core/Dockerfile.caddy).
+    acme_dns cloudflare {$CLOUDFLARE_API_TOKEN}
+
+    # Optional: use Let's Encrypt staging while testing to avoid rate limits.
+    # Comment out for production.
+    # acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
+
+    # Disable the Caddy admin API on the public interface; bind only to
+    # localhost inside the container's network namespace (= Tailscale namespace)
+    admin localhost:2019
+}
+
+# ── Wildcard TLS snippet ──────────────────────────────────────────────────────
+# Declare the wildcard cert once as a named snippet.  Every site block in
+# conf.d/ that matches *.{$HOME_SUBDOMAIN}.{$DOMAIN} will reuse this cert.
+# Public site blocks in conf.d-pub/ use the same DNS-01 mechanism for
+# *.{$PUB_SUBDOMAIN}.{$DOMAIN}.
+(wildcard_tls) {
+    tls {
+        dns cloudflare {$CLOUDFLARE_API_TOKEN}
+    }
+}
+
+# ── Private site blocks (tailnet only) ───────────────────────────────────────
+# Symlinked by `homelab service enable <name> --private`.
+# Each file handles <service>.{$HOME_SUBDOMAIN}.{$DOMAIN}.
+import /homelab/caddy/conf.d/*.conf
+
+# ── Public site blocks (Cloudflare Tunnel) ───────────────────────────────────
+# Symlinked by `homelab service enable <name> --public`.
+# Each file handles <service>.{$PUB_SUBDOMAIN}.{$DOMAIN}.
+# Traffic arrives via cloudflared → http://tailscale:80, TLS is terminated here.
+import /homelab/caddy/conf.d-pub/*.conf

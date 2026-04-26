@@ -1,0 +1,108 @@
+package cmd
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+
+	"github.com/groot/homelab/internal/config"
+	"github.com/groot/homelab/internal/secrets"
+	"github.com/spf13/cobra"
+)
+
+var rootFlags struct {
+	configDir  string
+	configFile string
+	noColor    bool
+	json       bool
+}
+
+var rootCmd = &cobra.Command{
+	Use:   "homelab",
+	Short: "Self-hosted services manager",
+	Long: `homelab manages your self-hosted service stack backed by Tailscale and Caddy.
+
+Run without arguments to open the interactive service browser.`,
+	SilenceUsage:  true,
+	SilenceErrors: true,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		dir := configDir()
+		if isTTY() && !rootFlags.json {
+			return runListTUI(dir)
+		}
+		svcs, err := discoverServices(dir)
+		if err != nil {
+			return err
+		}
+		if rootFlags.json {
+			return printServiceJSON(svcs)
+		}
+		printServiceTable(svcs)
+		return nil
+	},
+}
+
+// Execute is the entry point called from main.
+func Execute() {
+	if err := rootCmd.Execute(); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %s\n", err.Error())
+		os.Exit(1)
+	}
+}
+
+// RootCmd returns the root cobra command for testing.
+func RootCmd() *cobra.Command {
+	return rootCmd
+}
+
+func init() {
+	rootCmd.PersistentFlags().StringVar(&rootFlags.configDir, "config-dir", "",
+		"homelab config directory (default: ${XDG_CONFIG_HOME:-$HOME/.config}/homelab)")
+	rootCmd.PersistentFlags().StringVar(&rootFlags.configFile, "config", "",
+		"root config file; overrides config-dir/config.yaml")
+	rootCmd.PersistentFlags().BoolVar(&rootFlags.noColor, "no-color", false,
+		"disable coloured output")
+	rootCmd.PersistentFlags().BoolVar(&rootFlags.json, "json", false,
+		"output as JSON (on commands that support it)")
+
+	rootCmd.AddCommand(serviceCmd)
+	rootCmd.AddCommand(coreCmd)
+	rootCmd.AddCommand(caddyCmd)
+	rootCmd.AddCommand(tsCmd)
+	rootCmd.AddCommand(setupCmd)
+	rootCmd.AddCommand(doctorCmd)
+}
+
+// configDir returns the effective homelab config directory.
+// Priority: --config-dir > dir of --config > XDG default.
+func configDir() string {
+	if rootFlags.configDir != "" {
+		return rootFlags.configDir
+	}
+	if rootFlags.configFile != "" {
+		return filepath.Dir(rootFlags.configFile)
+	}
+	return config.DefaultConfigDir()
+}
+
+// rootConfigFile returns the effective root config.yaml path.
+// --config takes priority over configDir/config.yaml.
+func rootConfigFile() string {
+	return config.RootConfigFile(configDir(), rootFlags.configFile)
+}
+
+// noColor reports whether coloured output should be suppressed.
+func noColor() bool {
+	return rootFlags.noColor || os.Getenv("NO_COLOR") != ""
+}
+
+// buildEnv assembles the full docker compose environment map. Errors are
+// silently swallowed so a partially-configured setup still starts containers.
+func buildEnv(cfgDir, svcName string) map[string]string {
+	sm, _ := secrets.Open()
+	env, _ := config.BuildEnv(rootConfigFile(), cfgDir, svcName, sm)
+	if env == nil {
+		env = make(map[string]string)
+	}
+	return env
+}

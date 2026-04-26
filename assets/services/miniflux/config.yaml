@@ -1,0 +1,10 @@
+vars:
+  ADMIN_USERNAME:
+    value: "admin"
+    required: false
+
+secrets:
+  DB_PASSWORD:
+    required: true
+  ADMIN_PASSWORD:
+    required: true

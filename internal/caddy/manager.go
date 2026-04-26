@@ -1,0 +1,199 @@
+// Package caddy manages Caddy routing: enabling/disabling services via
+// symlinks into caddy/conf.d/ (private) and caddy/conf.d-pub/ (public),
+// and reloading the running Caddy container.
+package caddy
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+
+	"github.com/groot/homelab/internal/run"
+)
+
+const (
+	caddyContainer = "caddy"
+	caddyFile      = "/etc/caddy/Caddyfile"
+	caddyAdapter   = "caddyfile"
+)
+
+// Manager performs caddy routing operations for a given repo root.
+type Manager struct {
+	RepoRoot string
+	runner   *run.Commander
+	// reloadFn, if non-nil, replaces the default Reload() implementation.
+	// Inject a no-op in tests to avoid requiring a live Docker/Caddy instance.
+	reloadFn func() error
+}
+
+// New returns a Manager that streams docker output to the terminal.
+func New(repoRoot string) *Manager {
+	return &Manager{RepoRoot: repoRoot, runner: run.Default()}
+}
+
+// NewWithRunner returns a Manager using a custom Commander.
+// Pass a Commander backed by a bytes.Buffer when output must be captured
+// (e.g. while an animated spinner is active).
+func NewWithRunner(repoRoot string, r *run.Commander) *Manager {
+	return &Manager{RepoRoot: repoRoot, runner: r}
+}
+
+// newForTest returns a Manager whose Reload() is replaced by fn.
+// Only used in tests within this package.
+func newForTest(repoRoot string, reloadFn func() error) *Manager {
+	return &Manager{RepoRoot: repoRoot, runner: run.Default(), reloadFn: reloadFn}
+}
+
+// ── Private routing (tailnet) ─────────────────────────────────────────────────
+
+// Enable symlinks services/<name>/caddy.conf into caddy/conf.d/<name>.conf
+// and triggers a graceful Caddy reload.
+func (m *Manager) Enable(name string) error {
+	src := filepath.Join(m.RepoRoot, "services", name, "caddy.conf")
+	dest := filepath.Join(m.RepoRoot, "caddy", "conf.d", name+".conf")
+	relTarget := filepath.Join("..", "..", "services", name, "caddy.conf")
+	return m.link(src, dest, relTarget, name, "caddy.conf")
+}
+
+// Disable removes the caddy/conf.d/<name>.conf symlink and reloads Caddy.
+func (m *Manager) Disable(name string) error {
+	dest := filepath.Join(m.RepoRoot, "caddy", "conf.d", name+".conf")
+	return m.unlink(dest, name, "private")
+}
+
+// IsEnabled reports whether the private route symlink is active.
+func (m *Manager) IsEnabled(name string) (bool, error) {
+	dest := filepath.Join(m.RepoRoot, "caddy", "conf.d", name+".conf")
+	return isSymlink(dest)
+}
+
+// ── Public routing (Cloudflare Tunnel) ───────────────────────────────────────
+
+// EnablePublic symlinks services/<name>/caddy-pub.conf into
+// caddy/conf.d-pub/<name>.conf and triggers a graceful Caddy reload.
+func (m *Manager) EnablePublic(name string) error {
+	src := filepath.Join(m.RepoRoot, "services", name, "caddy-pub.conf")
+	dest := filepath.Join(m.RepoRoot, "caddy", "conf.d-pub", name+".conf")
+	relTarget := filepath.Join("..", "..", "services", name, "caddy-pub.conf")
+	return m.link(src, dest, relTarget, name, "caddy-pub.conf")
+}
+
+// DisablePublic removes the caddy/conf.d-pub/<name>.conf symlink and reloads Caddy.
+func (m *Manager) DisablePublic(name string) error {
+	dest := filepath.Join(m.RepoRoot, "caddy", "conf.d-pub", name+".conf")
+	return m.unlink(dest, name, "public")
+}
+
+// IsPublicEnabled reports whether the public route symlink is active.
+func (m *Manager) IsPublicEnabled(name string) (bool, error) {
+	dest := filepath.Join(m.RepoRoot, "caddy", "conf.d-pub", name+".conf")
+	return isSymlink(dest)
+}
+
+// ── Combined ──────────────────────────────────────────────────────────────────
+
+// DisableBoth removes both the private and public symlinks for name and
+// performs a single Caddy reload. Errors from removing a non-existent symlink
+// are silently ignored — the operation is idempotent.
+func (m *Manager) DisableBoth(name string) error {
+	privateLink := filepath.Join(m.RepoRoot, "caddy", "conf.d", name+".conf")
+	publicLink := filepath.Join(m.RepoRoot, "caddy", "conf.d-pub", name+".conf")
+
+	for _, link := range []string{privateLink, publicLink} {
+		fi, err := os.Lstat(link)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if fi.Mode()&os.ModeSymlink == 0 {
+			return fmt.Errorf("%s exists but is not a symlink — refusing to remove", link)
+		}
+		if err := os.Remove(link); err != nil {
+			return fmt.Errorf("removing symlink: %w", err)
+		}
+	}
+
+	return m.Reload()
+}
+
+// ── Caddy lifecycle ───────────────────────────────────────────────────────────
+
+// Validate runs `caddy validate` inside the caddy container.
+func (m *Manager) Validate() error {
+	return m.runner.DockerExec(caddyContainer,
+		"caddy", "validate",
+		"--config", caddyFile,
+		"--adapter", caddyAdapter,
+	)
+}
+
+// Reload validates then gracefully reloads Caddy (zero downtime, no cert re-issuance).
+// If reloadFn is set (e.g. in tests), it is called instead.
+func (m *Manager) Reload() error {
+	if m.reloadFn != nil {
+		return m.reloadFn()
+	}
+	if err := m.Validate(); err != nil {
+		return fmt.Errorf("caddy validate failed: %w", err)
+	}
+	return m.runner.DockerExec(caddyContainer,
+		"caddy", "reload",
+		"--config", caddyFile,
+		"--adapter", caddyAdapter,
+	)
+}
+
+// ── internal helpers ──────────────────────────────────────────────────────────
+
+// link creates a relative symlink at dest pointing to relTarget, first
+// verifying that src exists. Any stale symlink at dest is replaced.
+func (m *Manager) link(src, dest, relTarget, name, confFile string) error {
+	if _, err := os.Stat(src); os.IsNotExist(err) {
+		return fmt.Errorf("no %s found for service %q (expected %s)", confFile, name, src)
+	}
+
+	// Remove stale symlink if present (re-link to pick up any path changes).
+	if _, err := os.Lstat(dest); err == nil {
+		if err := os.Remove(dest); err != nil {
+			return fmt.Errorf("removing existing link: %w", err)
+		}
+	}
+
+	if err := os.Symlink(relTarget, dest); err != nil {
+		return fmt.Errorf("creating symlink: %w", err)
+	}
+
+	return m.Reload()
+}
+
+// unlink removes a symlink at dest, erroring if it does not exist or is not a symlink.
+func (m *Manager) unlink(dest, name, routeType string) error {
+	fi, err := os.Lstat(dest)
+	if os.IsNotExist(err) {
+		return fmt.Errorf("service %q has no active %s route", name, routeType)
+	}
+	if err != nil {
+		return err
+	}
+	if fi.Mode()&os.ModeSymlink == 0 {
+		return fmt.Errorf("%s exists but is not a symlink — refusing to remove", dest)
+	}
+	if err := os.Remove(dest); err != nil {
+		return fmt.Errorf("removing symlink: %w", err)
+	}
+	return m.Reload()
+}
+
+// isSymlink reports whether path is an existing symlink.
+func isSymlink(path string) (bool, error) {
+	fi, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return fi.Mode()&os.ModeSymlink != 0, nil
+}

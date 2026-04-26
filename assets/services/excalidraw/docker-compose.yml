@@ -1,0 +1,31 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Service: Excalidraw (virtual whiteboard for sketching diagrams)
+# https://github.com/excalidraw/excalidraw
+# ─────────────────────────────────────────────────────────────────────────────
+
+networks:
+  home-services:
+    name: home-services
+    external: true
+
+services:
+  excalidraw:
+    image: excalidraw/excalidraw:latest
+    container_name: excalidraw
+    user: "${PUID:-1000}:${PGID:-1000}"
+    restart: unless-stopped
+    networks:
+      - home-services
+    volumes:
+      - excalidraw-config:/config
+    healthcheck:
+      test:
+        ["CMD-SHELL", "wget -q --spider http://localhost 2>/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  excalidraw-config:
+    name: excalidraw_config

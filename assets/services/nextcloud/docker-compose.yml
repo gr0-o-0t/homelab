@@ -1,0 +1,91 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Service: Nextcloud (self-hosted cloud storage and collaboration)
+# https://hub.docker.com/_/nextcloud
+# ─────────────────────────────────────────────────────────────────────────────
+
+networks:
+  # Shared network — Caddy (via Tailscale namespace) reaches every service here
+  home-services:
+    name: home-services
+    external: true
+  # Internal-only network for Nextcloud ↔ MariaDB/Redis traffic.
+  # Never expose this outside the stack.
+  nextcloud-internal:
+    internal: true
+
+services:
+  nextcloud:
+    image: nextcloud:latest
+    container_name: nextcloud
+    user: "${PUID:-1000}:${PGID:-1000}"
+    restart: unless-stopped
+    depends_on:
+      nextcloud-db:
+        condition: service_healthy
+      nextcloud-redis:
+        condition: service_healthy
+    environment:
+      MYSQL_HOST: nextcloud-db
+      MYSQL_DATABASE: nextcloud
+      MYSQL_USER: nextcloud
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+      NEXTCLOUD_ADMIN_USER: ${ADMIN_USER:-admin}
+      NEXTCLOUD_ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      NEXTCLOUD_TRUSTED_DOMAINS: nextcloud.${HOME_SUBDOMAIN}.${DOMAIN}
+      REDIS_HOST: nextcloud-redis
+      OVERWRITEPROTOCOL: https
+    volumes:
+      - nextcloud-data:/var/www/html
+    networks:
+      - home-services # reachable by Caddy
+      - nextcloud-internal # internal comms
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q --spider http://localhost/status.php 2>/dev/null || exit 1",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s # allows time for initial setup on first boot
+
+  nextcloud-db:
+    image: mariadb:11
+    container_name: nextcloud-db
+    user: "${PUID:-1000}:${PGID:-1000}"
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+      MYSQL_DATABASE: nextcloud
+      MYSQL_USER: nextcloud
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - nextcloud-dbdata:/var/lib/mysql
+    networks:
+      - nextcloud-internal
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  nextcloud-redis:
+    image: redis:7-alpine
+    container_name: nextcloud-redis
+    user: "${PUID:-1000}:${PGID:-1000}"
+    restart: unless-stopped
+    networks:
+      - nextcloud-internal
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  nextcloud-data:
+    name: nextcloud_data
+  nextcloud-dbdata:
+    name: nextcloud_dbdata

@@ -1,0 +1,34 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Service: Kavita (self-hosted digital library for manga, comics, and books)
+# https://wiki.kavitareader.com/en/install/docker
+# ─────────────────────────────────────────────────────────────────────────────
+
+networks:
+  home-services:
+    name: home-services
+    external: true
+
+services:
+  kavita:
+    image: jvmilazz0/kavita:latest
+    container_name: kavita
+    user: "${PUID:-1000}:${PGID:-1000}"
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-UTC}
+    volumes:
+      - kavita-config:/kavita/config
+      - ${BOOKS_PATH:-/mnt/media}/manga:/manga:ro
+    networks:
+      - home-services
+    healthcheck:
+      test:
+        ["CMD-SHELL", "curl -fsSL http://localhost:5000 2>/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  kavita-config:
+    name: kavita_config

@@ -1,0 +1,14 @@
+vars:
+  DB_USERNAME:
+    value: "immich"
+    required: true
+  DB_DATABASE_NAME:
+    value: "immich"
+    required: false
+  IMMICH_VERSION:
+    value: "release"
+    required: false
+
+secrets:
+  DB_PASSWORD:
+    required: true

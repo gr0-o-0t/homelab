@@ -1,0 +1,37 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Service: Copyparty (file server with upload, search, and media streaming)
+# https://github.com/9001/copyparty
+# ─────────────────────────────────────────────────────────────────────────────
+
+networks:
+  home-services:
+    name: home-services
+    external: true
+
+services:
+  copyparty:
+    image: copyparty/copyparty:latest
+    container_name: copyparty
+    user: "${PUID:-1000}:${PGID:-1000}"
+    restart: unless-stopped
+    environment:
+      # enabling mimalloc by replacing "NOPE" with "2" will make some stuff twice as fast, but everything will use twice as much ram:
+      LD_PRELOAD: /usr/lib/libmimalloc-secure.so.NOPE
+      TZ: ${TZ:-UTC}
+    volumes:
+      - copyparty-data:/cfg
+      - ${FILES_PATH:-/mnt/files}:/w:ro
+    networks:
+      - home-services
+    stop_grace_period: 15s # thumbnailer is allowed to continue finishing up for 10s after the shutdown signal
+    healthcheck:
+      # hide it from logs with "/._" so it matches the default --lf-url filter
+      test: ["CMD-SHELL", "wget --spider -q 127.0.0.1:3923/?reset=/._"]
+      interval: 1m
+      timeout: 2s
+      retries: 5
+      start_period: 15s
+
+volumes:
+  copyparty-data:
+    name: copyparty_data

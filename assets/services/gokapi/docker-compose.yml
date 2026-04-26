@@ -1,0 +1,36 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Service: Gokapi (lightweight file sharing server)
+# https://github.com/Forceu/Gokapi
+# ─────────────────────────────────────────────────────────────────────────────
+
+networks:
+  home-services:
+    name: home-services
+    external: true
+
+services:
+  gokapi:
+    image: f0rc3/gokapi:latest
+    container_name: gokapi
+    user: "${PUID:-1000}:${PGID:-1000}"
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-UTC}
+    volumes:
+      - gokapi-data:/app/data
+    networks:
+      - home-services
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q --spider http://localhost:53842 2>/dev/null || exit 1",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  gokapi-data:
+    name: gokapi_data

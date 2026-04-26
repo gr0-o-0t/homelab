@@ -1,0 +1,37 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Service: Radarr (movie collection management and automation)
+# https://wiki.servarr.com/radarr
+# ─────────────────────────────────────────────────────────────────────────────
+
+networks:
+  home-services:
+    name: home-services
+    external: true
+
+services:
+  radarr:
+    image: lscr.io/linuxserver/radarr:latest
+    container_name: radarr
+    user: "${PUID:-1000}:${PGID:-1000}"
+    restart: unless-stopped
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      TZ: ${TZ:-UTC}
+    volumes:
+      - radarr-config:/config
+      - ${MEDIA_PATH:-/mnt/media}:/media
+      - ${DOWNLOADS_PATH:-/mnt/downloads}:/downloads
+    networks:
+      - home-services
+    healthcheck:
+      test:
+        ["CMD-SHELL", "wget -qO- http://localhost:7878 2>/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  radarr-config:
+    name: radarr_data

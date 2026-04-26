@@ -1,0 +1,35 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Service: Overseerr (media discovery and request management)
+# https://docs.overseerr.dev/
+# ─────────────────────────────────────────────────────────────────────────────
+
+networks:
+  home-services:
+    name: home-services
+    external: true
+
+services:
+  seerr:
+    image: lscr.io/linuxserver/overseerr:latest
+    container_name: seerr
+    user: "${PUID:-1000}:${PGID:-1000}"
+    restart: unless-stopped
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      TZ: ${TZ:-UTC}
+    volumes:
+      - seerr-config:/config
+    networks:
+      - home-services
+    healthcheck:
+      test:
+        ["CMD-SHELL", "wget -qO- http://localhost:5055 2>/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  seerr-config:
+    name: seerr_data

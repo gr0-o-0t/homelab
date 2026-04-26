@@ -1,0 +1,6 @@
+vars:
+  KEEP_ALIVE:
+    value: "5m"
+    required: false
+
+secrets: {}

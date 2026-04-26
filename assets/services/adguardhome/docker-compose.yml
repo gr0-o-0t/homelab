@@ -1,0 +1,79 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Service: AdGuard Home (network-wide ad and tracker blocking DNS server)
+# https://github.com/AdguardTeam/AdGuardHome
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# NOTE:
+# resolved
+# If you try to run AdGuardHome on a system where the resolved daemon is started, docker will fail to bind on port 53, because resolved daemon is listening on 127.0.0.53:53. Here's how you can disable DNSStubListener on your machine:
+# Deactivate DNSStubListener and update the DNS server address. Create a new file, /etc/systemd/resolved.conf.d/adguardhome.conf (creating the /etc/systemd/resolved.conf.d directory if needed) and add the following content to it:
+#
+# [Resolve]
+# DNS=127.0.0.1
+# DNSStubListener=no
+#
+# Specifying 127.0.0.1 as the DNS server address is necessary because otherwise the nameserver will be 127.0.0.53 which doesn't work without DNSStubListener.
+# Activate a new resolv.conf file:
+#
+# mv /etc/resolv.conf /etc/resolv.conf.backup
+# ln -s /run/systemd/resolve/resolv.conf /etc/resolv.conf
+#
+# Stop DNSStubListener:
+#
+# systemctl reload-or-restart systemd-resolved
+
+networks:
+  home-services:
+    name: home-services
+    external: true
+
+services:
+  adguardhome:
+    image: adguard/adguardhome:latest
+    container_name: adguardhome
+    user: "${PUID:-1000}:${PGID:-1000}"
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-UTC}
+    volumes:
+      - adguardhome-work:/opt/adguardhome/work
+      - adguardhome-conf:/opt/adguardhome/conf
+    networks:
+      - home-services
+      # - host # uncomment if you want adguardhome to act as your dhcp server
+    # we need to expose ports if we want use adguardhome for host
+    ports:
+      # DNS
+      - "53:53/tcp"
+      - "53:53/udp"
+      # DHCP - uncomment the ports below if you want adguardhome to act as your dhcp server
+      # - "67:67/udp"
+      # - "68:68/tcp"
+      # - "68:68/udp"
+      # DOH
+      - "80:80/tcp"
+      - "443:443/tcp"
+      - "443:443/udp"
+      # DOT
+      - "853:853/tcp"
+      # DOQ
+      - "784:784/udp"
+      - "853:853/udp"
+      - "8853:8853/udp"
+      # DNSCrypt
+      - "5443:5443/tcp"
+      - "5443:5443/udp"
+      # Admin panel
+      - "3000:3000/tcp"
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "adguardhome"]
+      interval: 1m
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  adguardhome-work:
+    name: adguardhome_work
+  adguardhome-conf:
+    name: adguardhome_conf

@@ -1,0 +1,39 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Service: Navidrome (self-hosted music streaming server)
+# https://www.navidrome.org/docs/installation/docker/
+# ─────────────────────────────────────────────────────────────────────────────
+
+networks:
+  home-services:
+    name: home-services
+    external: true
+
+services:
+  navidrome:
+    image: deluan/navidrome:latest
+    container_name: navidrome
+    user: "${PUID:-1000}:${PGID:-1000}"
+    restart: unless-stopped
+    environment:
+      ND_MUSICFOLDER: /music
+      ND_DATAFOLDER: /data
+      ND_SCANSCHEDULE: "@every 1h"
+      ND_LOGLEVEL: info
+      ND_BASEURL: ""
+      TZ: ${TZ:-UTC}
+    volumes:
+      - navidrome-data:/data
+      - ${MEDIA_PATH:-/mnt/media}/music:/music:ro
+    networks:
+      - home-services
+    healthcheck:
+      test:
+        ["CMD-SHELL", "curl -fsSL http://localhost:4533 2>/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  navidrome-data:
+    name: navidrome_data
