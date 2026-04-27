@@ -1,0 +1,130 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Service: Minero (Self hosted aio monero miner)
+# https://github.com/gr0-o-0t/minero
+# ─────────────────────────────────────────────────────────────────────────────
+
+networks:
+  home-services:
+    name: home-services
+    external: true
+  minero-internal:
+    external: false
+
+services:
+  monerod:
+    image: ghcr.io/gr0-o-0t/minero-monerod:latest
+    user: 1000:1000
+    restart: unless-stopped
+    tty: true
+    stdin_open: true
+    networks:
+      - minero-internal
+      - home-services
+    volumes:
+      - bitmonero:/home/monero/.bitmonero
+      - /dev/hugepages:/dev/hugepages
+    healthcheck:
+      test: curl -s http://127.0.0.1:18081/get_info | jq -e '.synchronized == true' >/dev/null
+      interval: 3s
+      timeout: 3s
+      retries: 50
+    ports:
+      # open this port in the firewall
+      # it is required for monerod to function properly
+      - 18080:18080
+    command: >-
+      --rpc-restricted-bind-ip=0.0.0.0
+      --rpc-restricted-bind-port 18089
+      --zmq-pub=tcp://0.0.0.0:18084
+      --confirm-external-bind
+      --restricted-rpc
+      --allow-local-ip
+      --no-igd
+      --fast-block-sync 1
+      --sync-pruned-blocks
+      --prune-blockchain
+      --check-updates disabled
+      --enforce-dns-checkpointing
+      --enable-dns-blocklist
+      --public-node
+      --in-peers 32
+      --out-peers 32
+      --add-priority-node=p2pmd.xmrvsbeast.com:18080
+      --add-priority-node=nodes.hashvault.pro:18080
+      --ban-list=/home/monero/ban_list.txt
+
+  p2pool:
+    image: ghcr.io/gr0-o-0t/minero-p2pool:latest
+    user: 1000:1000
+    restart: unless-stopped
+    tty: true
+    stdin_open: true
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - minero-internal
+      - home-services
+    volumes:
+      - p2pool_data:/data
+      - /dev/hugepages:/dev/hugepages
+    depends_on:
+      monerod:
+        condition: service_healthy
+    ports:
+      # open this port in the firewall
+      # it is required for p2pool to function properly
+      - 37888:37888
+    command: >-
+      --mini
+      --loglevel 3
+      --light-mode
+      --host ${MONEROD_HOST:-monerod}
+      --rpc-port 18089
+      --zmq-port 18084
+      --wallet ${WALLET_ADDRESS:-49NmBGozXvREQQokPw32DX7QK95xMFWPEbeLMZQmYUMf9r95kBv2cTeS45DNrLxq8fUPv7ct9rXjxNe4k4Ay65hHEJxoXdG}
+
+  xmrig:
+    image: ghcr.io/gr0-o-0t/minero-xmrig:latest
+    restart: unless-stopped
+    tty: true
+    stdin_open: true
+    privileged: true
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    deploy:
+      resources:
+        limits:
+          cpus: "0"
+    cap_add:
+      - SYS_NICE
+      - SYS_RAWIO
+    depends_on:
+      - p2pool
+    networks:
+      - minero-internal
+    devices:
+      - /dev/cpu:/dev/cpu
+    volumes:
+      - xmrig_data:/data
+      - ./xmrig/config.json:/config.json
+      - /dev/hugepages:/dev/hugepages
+    command: >-
+      --config=/config.json
+      --syslog
+      --pause-on-battery
+      --randomx-mode fast
+      --randomx-1gb-pages
+      --randomx-cache-qos
+      --huge-pages-jit
+      --donate-level 0
+      -o ${P2POOL_HOST:-p2pool}:3333
+
+volumes:
+  p2pool_data:
+    external: false
+  xmrig_data:
+    external: false
+  bitmonero:
+    external: false

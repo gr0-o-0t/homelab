@@ -172,6 +172,7 @@ homelab/
 │       ├── mattermost/
 │       ├── mealie/
 │       ├── metube/
+│       ├── minero/
 │       ├── miniflux/
 │       ├── navidrome/
 │       ├── netbox/
@@ -286,6 +287,7 @@ the system keyring and injected into docker compose at runtime.
 | [Mattermost](https://mattermost.com) | `chat.home.*` | Team communication |
 | [Mealie](https://mealie.io) | `recipes.home.*` | Recipe manager |
 | [MeTube](https://github.com/alexta69/metube) | `youtube.home.*` | YouTube downloader |
+| [Minero](https://github.com/gr0-o-0t/minero) | `minero.home.*` | AIO xmr miner |
 | [Miniflux](https://miniflux.app) | `rss.home.*` | RSS reader |
 | [Navidrome](https://navidrome.org) | `music.home.*` | Music server |
 | [NetBox](https://netbox.dev) | `netbox.home.*` | IPAM/DCIM |
