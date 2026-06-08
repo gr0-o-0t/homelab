@@ -1,0 +1,13 @@
+# Per-service Yggdrasil port forwarders
+
+Each `.forward` file defines one socat TCP6→TCP4 forwarder.
+Format: shell variables sourced by the entrypoint script.
+
+  PORT=<port-to-listen-on-over-yggdrasil>
+  TARGET=<container-name>:<port>
+
+Example (Jellyfin):
+  PORT=8096
+  TARGET=jellyfin:8096
+
+Managed by: homelab ygg enable/disable

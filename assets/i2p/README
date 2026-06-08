@@ -1,0 +1,10 @@
+# I2P configuration
+
+I2P is configured via its Router Console at http://i2p:7657.
+
+For eepsite hosting:
+1. Open the Router Console
+2. Navigate to Hidden Services Manager
+3. Create a new HTTP tunnel pointing to <service>:<port>
+
+Managed by: homelab i2p enable/disable

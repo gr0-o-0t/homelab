@@ -1,5 +1,5 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# Core stack: Tailscale + Caddy [+ cloudflared]
+# Core stack: Tailscale + Caddy [+ cloudflared] [+ tor] [+ i2p] [+ yggdrasil] [+ ipfs]
 #
 # Architecture
 # ────────────
@@ -19,6 +19,20 @@
 #                  reachable on the tailscale container's Docker IP).
 #                  Start with: homelab core start  (auto-activated when
 #                  CF_TUNNEL_TOKEN secret is configured with setup).
+#
+#   tor          → optional; profile "tor". Exposes services as .onion
+#                  addresses. Auto-activated when TOR_ENABLED=true.
+#
+#   i2p          → optional; profile "i2p". I2P router + eepsite hosting.
+#                  Auto-activated when I2P_ENABLED=true.
+#
+#   yggdrasil    → optional; profile "yggdrasil". IPv6 mesh node with
+#                  socat port-forwarders for per-service exposure.
+#                  Auto-activated when YGGDRASIL_ENABLED=true.
+#
+#   ipfs         → optional; profile "ipfs". IPFS Kubo node for
+#                  content-addressed P2P storage. Gateway fronted by Caddy.
+#                  Auto-activated when IPFS_ENABLED=true.
 #
 # External network `home-services` must be created before starting this stack:
 #   docker network create home-services
@@ -129,6 +143,96 @@ services:
     # Note: no healthcheck — cloudflared's image has no curl/wget, and no other
     # service depends on cloudflared being healthy.
 
+  # ── Tor onion service proxy (optional) ──────────────────────────────
+  # Activated when TOR_ENABLED=true. Uses gnzsnz/torproxy.
+  # Each service gets a HiddenServicePort .onion address.
+  # Reload config via: docker exec tor sh -c 'kill -HUP $(pidof tor)'
+  tor:
+    image: gnzsnz/torproxy:latest
+    container_name: tor
+    profiles: ["tor"]
+    restart: unless-stopped
+    environment:
+      TOR_ENABLED: ${TOR_ENABLED}
+    volumes:
+      - ../tor/torrc:/etc/tor/torrc:ro
+      - ../tor/torrc.d:/etc/tor/torrc.d:ro
+      - tor-data:/var/lib/tor/hidden_service
+    networks:
+      - home-services
+    depends_on:
+      tailscale:
+        condition: service_healthy
+
+  # ── I2P router + eepsite proxy (optional) ───────────────────────────
+  # Activated when I2P_ENABLED=true.
+  # Hosts eepsites (I2P websites) that proxy to Caddy.
+  # Router Console at port 7657, eepsite on port 7658.
+  i2p:
+    image: geti2p/i2p:latest
+    container_name: i2p
+    profiles: ["i2p"]
+    restart: unless-stopped
+    environment:
+      JVM_XMX: ${I2P_JVM_XMX:-512m}
+      EXT_PORT: ${I2P_EXT_PORT:-45678}
+    volumes:
+      - i2p-config:/i2p/.i2p
+    networks:
+      - home-services
+    ports:
+      - "${I2P_EXT_PORT:-45678}:${I2P_EXT_PORT:-45678}"
+      - "${I2P_EXT_PORT:-45678}:${I2P_EXT_PORT:-45678}/udp"
+    depends_on:
+      tailscale:
+        condition: service_healthy
+
+  # ── Yggdrasil IPv6 mesh node (optional) ────────────────────────────
+  # Activated when YGGDRASIL_ENABLED=true.
+  # Custom image (Dockerfile.ygg) bundles yggdrasil + socat.
+  # Each service gets a socat TCP6→TCP4 forwarder for exposure.
+  yggdrasil:
+    build:
+      context: .
+      dockerfile: Dockerfile.ygg
+    container_name: yggdrasil
+    profiles: ["yggdrasil"]
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun
+    volumes:
+      - ../yggdrasil/yggdrasil.conf:/etc/yggdrasil.conf:ro
+      - ../yggdrasil/socat.d:/etc/socat.d:ro
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=0
+    networks:
+      - home-services
+    depends_on:
+      tailscale:
+        condition: service_healthy
+
+  # ── IPFS Kubo node (optional) ──────────────────────────────────────
+  # Activated when IPFS_ENABLED=true.
+  # Content-addressed P2P storage. Gateway HTTP port exposed to
+  # home-services for Caddy reverse proxy.
+  ipfs:
+    image: ipfs/kubo:latest
+    container_name: ipfs
+    profiles: ["ipfs"]
+    restart: unless-stopped
+    environment:
+      IPFS_PROFILE: ${IPFS_PROFILE:-server}
+    volumes:
+      - ipfs-data:/data/ipfs
+      - ipfs-staging:/export
+    networks:
+      - home-services
+    depends_on:
+      tailscale:
+        condition: service_healthy
+
 volumes:
   tailscale-state:
     name: core_tailscale-state
@@ -136,3 +240,11 @@ volumes:
     name: core_caddy-data
   caddy-config:
     name: core_caddy-config
+  tor-data:
+    name: core_tor-data
+  i2p-config:
+    name: core_i2p-config
+  ipfs-data:
+    name: core_ipfs-data
+  ipfs-staging:
+    name: core_ipfs-staging

@@ -6,13 +6,16 @@ package assets
 import "embed"
 
 // CoreFS contains the core infrastructure files:
-//   - core/docker-compose.yml   — Tailscale + Caddy + cloudflared stack
-//   - core/Dockerfile.caddy     — custom Caddy build with Cloudflare DNS plugin
-//   - caddy/Caddyfile            — global Caddy config (ACME, wildcard TLS)
-//   - caddy/conf.d/README        — documentation for the conf.d directory
-//   - caddy/conf.d/_template.conf — example site-block template
+//   - core/docker-compose.yml     — Tailscale + Caddy + cloudflared stack
+//   - core/Dockerfile.caddy       — custom Caddy build with Cloudflare DNS plugin
+//   - core/Dockerfile.ygg         — custom Yggdrasil build with socat
+//   - core/entrypoint.ygg.sh      — Yggdrasil entrypoint script
+//   - caddy/...                   — Caddy configuration
+//   - tor/...                     — Tor onion service configuration
+//   - i2p/...                     — I2P router configuration
+//   - yggdrasil/...               — Yggdrasil mesh node configuration
 //
-//go:embed core caddy
+//go:embed core caddy tor i2p yggdrasil
 var CoreFS embed.FS
 
 // CatalogFS contains the bundled service catalog. Each subdirectory under

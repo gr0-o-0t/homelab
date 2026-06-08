@@ -1,0 +1,15 @@
+Log notice stdout
+DataDirectory /var/lib/tor
+User debian-tor
+
+# SOCKS proxy for Tor network access
+SOCKSPort 0.0.0.0:9050
+
+# Allow all Docker networks so onion services can reach containers
+SOCKSPolicy accept 172.16.0.0/12
+SOCKSPolicy accept 192.168.0.0/16
+SOCKSPolicy accept 100.64.0.0/10
+
+# Include per-service hidden service configs from torrc.d/
+# Each file in torrc.d/*.conf defines one .onion service.
+%include /etc/tor/torrc.d/*.conf

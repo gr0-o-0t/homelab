@@ -1,0 +1,9 @@
+# Per-service Tor onion service configs
+
+Files in this directory are included by torrc via `%include`.
+Each `.conf` file enables one .onion service:
+
+  HiddenServiceDir /var/lib/tor/hidden_service/<service-name>
+  HiddenServicePort 80 <service-name>:<service-port>
+
+Managed by: homelab tor enable/disable
