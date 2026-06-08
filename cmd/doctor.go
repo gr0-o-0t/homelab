@@ -49,7 +49,10 @@ func runDoctor(_ *cobra.Command, _ []string) error {
 
 	fmt.Printf("\n%s\n\n", styles.Header.Render("Homelab Health Check"))
 
-	sm, _ := secrets.Open()
+	sm, err := secrets.Open()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: keyring unavailable (%v)\n", err)
+	}
 
 	pass := true
 	check := func(ok bool, msg string) {
@@ -163,6 +166,26 @@ func runDoctor(_ *cobra.Command, _ []string) error {
 		}
 	}
 
+	// ── Network Extensions ────────────────────────────────────────────────────
+	fmt.Printf("\n  %s\n", styles.Bold.Render("Network Extensions"))
+
+	extNames := []string{"cf", "tor", "i2p", "yggdrasil", "ipfs"}
+	extContainers := map[string]string{
+		"cf":        "cloudflared",
+		"tor":       "tor",
+		"i2p":       "i2p",
+		"yggdrasil": "yggdrasil",
+		"ipfs":      "ipfs",
+	}
+	for _, ext := range extNames {
+		if cfg != nil && cfg.HasExtension(ext) {
+			cName := extContainers[ext]
+			cState := containerStatus(cName)
+			check(cState == "running", fmt.Sprintf("%s (%s) container %s",
+				config.ExtensionLabel(ext), cName, stateLabel(cState)))
+		}
+	}
+
 	// ── Result ────────────────────────────────────────────────────────────────
 	fmt.Println()
 	if pass {
@@ -233,7 +256,10 @@ func runServiceDoctorFor(dir, name string, fix bool) bool {
 		styles.Header.Render("Service Health:"),
 		styles.Bold.Render(name))
 
-	sm, _ := secrets.Open()
+	sm, err := secrets.Open()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: keyring unavailable (%v)\n", err)
+	}
 
 	pass := true
 	check := func(ok bool, msg string) {
@@ -256,7 +282,13 @@ func runServiceDoctorFor(dir, name string, fix bool) bool {
 
 	svcCfg, _ := config.Load(config.ServiceConfigFile(dir, name))
 	if svcCfg != nil {
-		env, _ := config.BuildEnv(rootConfigFile(), dir, name, sm)
+		env, err := config.BuildEnv(rootConfigFile(), dir, name, sm)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: config error (%v)\n", err)
+		}
+		if env == nil {
+			env = make(map[string]string)
+		}
 		for k, e := range svcCfg.Vars {
 			if e.Required {
 				check(env[k] != "", k+" is set")

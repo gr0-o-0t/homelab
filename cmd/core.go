@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 
+	"github.com/groot/homelab/internal/config"
 	"github.com/groot/homelab/internal/run"
 	"github.com/groot/homelab/internal/tui/styles"
 	"github.com/spf13/cobra"
@@ -10,30 +11,30 @@ import (
 
 var coreCmd = &cobra.Command{
 	Use:   "core",
-	Short: "Manage the core stack (Tailscale + Caddy [+ cloudflared])",
+	Short: "Manage the core stack (Tailscale + Caddy + network extensions)",
 }
 
 var coreStartCmd = &cobra.Command{
 	Use:   "start",
-	Short: "Start Tailscale, Caddy, and optionally cloudflared",
+	Short: "Start Tailscale, Caddy, and enabled network extensions",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		dir := configDir()
 		env := buildEnv(dir, "")
 		fmt.Printf("%s Starting core stack…\n", styles.Primary.Render("→"))
-		if env["CF_TUNNEL_TOKEN"] != "" {
-			fmt.Printf("  %s\n", styles.Muted.Render("Cloudflare Tunnel token detected — starting cloudflared"))
+		for _, note := range activeExtNotes(dir) {
+			fmt.Printf("  %s\n", styles.Muted.Render(note))
 		}
 		return run.Default().DockerComposeEnv(
 			run.CoreComposeFile(dir),
 			env,
-			withTunnelProfile(env, "up", "-d", "--build")...,
+			withProfiles(dir, "up", "-d", "--build")...,
 		)
 	},
 }
 
 var coreStopCmd = &cobra.Command{
 	Use:   "stop",
-	Short: "Stop Tailscale, Caddy, and cloudflared",
+	Short: "Stop Tailscale, Caddy, and all network extensions",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		dir := configDir()
 		env := buildEnv(dir, "")
@@ -41,14 +42,14 @@ var coreStopCmd = &cobra.Command{
 		return run.Default().DockerComposeEnv(
 			run.CoreComposeFile(dir),
 			env,
-			withTunnelProfile(env, "down")...,
+			withProfiles(dir, "down")...,
 		)
 	},
 }
 
 var coreRestartCmd = &cobra.Command{
 	Use:   "restart",
-	Short: "Restart Tailscale, Caddy, and cloudflared",
+	Short: "Restart Tailscale, Caddy, and all network extensions",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		dir := configDir()
 		env := buildEnv(dir, "")
@@ -56,7 +57,7 @@ var coreRestartCmd = &cobra.Command{
 		return run.Default().DockerComposeEnv(
 			run.CoreComposeFile(dir),
 			env,
-			withTunnelProfile(env, "restart")...,
+			withProfiles(dir, "restart")...,
 		)
 	},
 }
@@ -70,7 +71,7 @@ var coreLogsCmd = &cobra.Command{
 		return run.Default().DockerComposeEnv(
 			run.CoreComposeFile(dir),
 			env,
-			withTunnelProfile(env, "logs", "-f")...,
+			withProfiles(dir, "logs", "-f")...,
 		)
 	},
 }
@@ -84,7 +85,7 @@ var coreStatusCmd = &cobra.Command{
 		return run.Default().DockerComposeEnv(
 			run.CoreComposeFile(dir),
 			env,
-			withTunnelProfile(env, "ps")...,
+			withProfiles(dir, "ps")...,
 		)
 	},
 }
@@ -93,11 +94,35 @@ func init() {
 	coreCmd.AddCommand(coreStartCmd, coreStopCmd, coreRestartCmd, coreLogsCmd, coreStatusCmd)
 }
 
-// withTunnelProfile prepends --profile tunnel to args when CF_TUNNEL_TOKEN is
-// present in env, activating the optional cloudflared service.
-func withTunnelProfile(env map[string]string, args ...string) []string {
-	if env["CF_TUNNEL_TOKEN"] != "" {
-		return append([]string{"--profile", "tunnel"}, args...)
+// withProfiles prepends --profile <name> for each extension that is
+// enabled in the root config, activating optional Docker Compose services.
+func withProfiles(cfgDir string, args ...string) []string {
+	cfgFile := config.RootConfigFile(cfgDir, rootFlags.configFile)
+	cfg, _ := config.Load(cfgFile)
+
+	var profiles []string
+	if cfg != nil {
+		for _, ext := range cfg.Extensions {
+			profiles = append(profiles, "--profile", config.ExtensionProfile(ext))
+		}
 	}
-	return args
+	if len(profiles) == 0 {
+		return args
+	}
+	return append(profiles, args...)
+}
+
+// activeExtNotes returns user-facing notes about which extensions will start.
+func activeExtNotes(cfgDir string) []string {
+	cfgFile := config.RootConfigFile(cfgDir, rootFlags.configFile)
+	cfg, _ := config.Load(cfgFile)
+
+	var notes []string
+	if cfg != nil {
+		for _, ext := range cfg.Extensions {
+			notes = append(notes, fmt.Sprintf("%s enabled — starting %s",
+				config.ExtensionLabel(ext), ext))
+		}
+	}
+	return notes
 }

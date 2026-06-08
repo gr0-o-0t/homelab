@@ -243,7 +243,7 @@ func TestTunnelStatus_NotConfigured(t *testing.T) {
 	assert.NoError(t, err) // prints "Not configured" but does not error
 }
 
-func TestTunnelRouteAdd_MissingConfig(t *testing.T) {
+func TestTunnelRouteAdd_NotEnabled(t *testing.T) {
 	tmp := t.TempDir()
 
 	rootCmd := cmd.RootCmd()
@@ -251,7 +251,7 @@ func TestTunnelRouteAdd_MissingConfig(t *testing.T) {
 
 	err := rootCmd.Execute()
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "CF_TUNNEL")
+	assert.Contains(t, err.Error(), "not enabled")
 }
 
 // ── completion ────────────────────────────────────────────────────────────────

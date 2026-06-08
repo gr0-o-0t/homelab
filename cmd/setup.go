@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io/fs"
 	"os"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/groot/homelab/assets"
 	"github.com/groot/homelab/internal/config"
+	"github.com/groot/homelab/internal/db"
 	"github.com/groot/homelab/internal/run"
 	"github.com/groot/homelab/internal/secrets"
 	"github.com/groot/homelab/internal/tui/spinner"
@@ -52,6 +54,8 @@ func runSetup(_ *cobra.Command, _ []string) error {
 				"TS_HOSTNAME":    {Value: "caddy-home", Required: true},
 				"PUB_SUBDOMAIN":  {Value: "pub", Required: false},
 				"CF_TUNNEL_NAME": {Value: "", Required: false},
+				"I2P_JVM_XMX":    {Value: "512m", Required: false},
+				"I2P_EXT_PORT":   {Value: "45678", Required: false},
 			},
 			Secrets: map[string]config.SecretEntry{
 				"TS_AUTHKEY":           {Required: true},
@@ -128,6 +132,9 @@ func runSetup(_ *cobra.Command, _ []string) error {
 	} else {
 		step(styles.Success.Render("✓"), "core/ installed to "+filepath.Join(dir, "core"))
 		step(styles.Success.Render("✓"), "caddy/ installed to "+filepath.Join(dir, "caddy"))
+		step(styles.Success.Render("✓"), "tor/ installed to "+filepath.Join(dir, "tor"))
+		step(styles.Success.Render("✓"), "i2p/ installed to "+filepath.Join(dir, "i2p"))
+		step(styles.Success.Render("✓"), "yggdrasil/ installed to "+filepath.Join(dir, "yggdrasil"))
 	}
 
 	// ── Infrastructure ────────────────────────────────────────────────────────
@@ -258,6 +265,34 @@ func runServiceSetup(_ *cobra.Command, args []string) error {
 	if len(svcCfg.Secrets) > 0 {
 		step(styles.Success.Render("✓"), "Secrets stored in keyring")
 	}
+
+	// ── Database provisioning ─────────────────────────────────────────────────
+	ctx := context.Background()
+	p := db.New(dir, sm)
+
+	if svcCfg.Databases.Kind != 0 {
+		svcDB, err := svcCfg.ServiceDatabases()
+		if err != nil {
+			return fmt.Errorf("reading database declarations: %w", err)
+		}
+		if len(svcDB) > 0 {
+			fmt.Printf("\n  %s\n\n", styles.Accent.Render("─── Database Setup ──────────────────────────────────"))
+			for dbType, decl := range svcDB {
+				if err := p.EnsureRunning(ctx, dbType); err != nil {
+					step(styles.Warning.Render("!"), fmt.Sprintf("%s container not running — install and start first:", dbType))
+					fmt.Printf("    homelab service add %s && homelab service up %s\n", dbType, dbType)
+					continue
+				}
+				if err := p.Provision(ctx, dbType, name, decl); err != nil {
+					step(styles.Err.Render("✗"), fmt.Sprintf("Failed to provision %s: %v", dbType, err))
+				} else {
+					step(styles.Success.Render("✓"), fmt.Sprintf("%s database '%s' created with user '%s'",
+						dbType, decl.Database, decl.User))
+				}
+			}
+		}
+	}
+
 	fmt.Println()
 	return nil
 }

@@ -96,11 +96,27 @@ func noColor() bool {
 	return rootFlags.noColor || os.Getenv("NO_COLOR") != ""
 }
 
-// buildEnv assembles the full docker compose environment map. Errors are
-// silently swallowed so a partially-configured setup still starts containers.
+// extEnabled checks whether a named extension is enabled in the root config.
+func extEnabled(cfgDir, name string) bool {
+	cfg, err := config.Load(config.RootConfigFile(cfgDir, rootFlags.configFile))
+	if err != nil || cfg == nil {
+		return false
+	}
+	return cfg.HasExtension(name)
+}
+
+// buildEnv assembles the full docker compose environment map.
+// Non-fatal errors (keyring unavailable, missing config) are logged to stderr
+// so a partially-configured setup still starts containers.
 func buildEnv(cfgDir, svcName string) map[string]string {
-	sm, _ := secrets.Open()
-	env, _ := config.BuildEnv(rootConfigFile(), cfgDir, svcName, sm)
+	sm, err := secrets.Open()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: keyring unavailable (%v)\n", err)
+	}
+	env, err := config.BuildEnv(rootConfigFile(), cfgDir, svcName, sm)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: config error (%v)\n", err)
+	}
 	if env == nil {
 		env = make(map[string]string)
 	}

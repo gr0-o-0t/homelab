@@ -28,9 +28,16 @@ var tunnelStatusCmd = &cobra.Command{
 
 		fmt.Printf("\n%s\n\n", styles.Header.Render("Cloudflare Tunnel"))
 
+		if !extEnabled(root, "cf") {
+			fmt.Printf("  %s  Cloudflare Tunnel not enabled.\n", styles.Warning.Render("!"))
+			fmt.Printf("  Run %s to enable.\n\n",
+				styles.Primary.Render("homelab ext enable cf"))
+			return nil
+		}
+
 		if env["CF_TUNNEL_TOKEN"] == "" {
-			fmt.Printf("  %s  Not configured.\n", styles.Warning.Render("!"))
-			fmt.Printf("\n  Run %s and provide CF_TUNNEL_TOKEN and CF_TUNNEL_NAME.\n\n",
+			fmt.Printf("  %s  CF_TUNNEL_TOKEN not configured.\n", styles.Warning.Render("!"))
+			fmt.Printf("\n  Run %s to provide credentials.\n\n",
 				styles.Primary.Render("homelab setup"))
 			return nil
 		}
@@ -69,7 +76,7 @@ var tunnelLogsCmd = &cobra.Command{
 		return run.Default().DockerComposeEnv(
 			run.CoreComposeFile(root),
 			env,
-			withTunnelProfile(env, "logs", "-f", "cloudflared")...,
+			withProfiles(root, "logs", "-f", "cloudflared")...,
 		)
 	},
 }
@@ -97,6 +104,10 @@ After adding the DNS route, enable the public Caddy config:
 		name := args[0]
 		root := configDir()
 		env := buildEnv(root, "")
+		if !extEnabled(root, "cf") {
+			return fmt.Errorf("Cloudflare Tunnel not enabled\n\n  Run %s to enable",
+				styles.Primary.Render("homelab ext enable cf"))
+		}
 		if err := requireTunnelConfig(env); err != nil {
 			return err
 		}
@@ -118,9 +129,9 @@ After adding the DNS route, enable the public Caddy config:
 }
 
 var tunnelRouteRmCmd = &cobra.Command{
-	Use:   "rm <service>",
-	Short: "Remove a Cloudflare DNS route for a service",
-	Args:  cobra.ExactArgs(1),
+	Use:               "rm <service>",
+	Short:             "Remove a Cloudflare DNS route for a service",
+	Args:              cobra.ExactArgs(1),
 	ValidArgsFunction: completeServiceNames,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := args[0]
