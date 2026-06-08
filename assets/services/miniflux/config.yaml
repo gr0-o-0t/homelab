@@ -4,7 +4,12 @@ vars:
     required: false
 
 secrets:
-  DB_PASSWORD:
-    required: true
   ADMIN_PASSWORD:
     required: true
+
+databases:
+  postgres:
+    database: miniflux
+    user: miniflux
+    env:
+      "postgres://{user}:{password}@{host}:{port}/{database}?sslmode=disable": DATABASE_URL

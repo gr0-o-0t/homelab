@@ -1,0 +1,35 @@
+# ─────────────────────────────────────────────────────────────────
+# Shared PostgreSQL for homelab services
+# ─────────────────────────────────────────────────────────────────
+# Install:   homelab service add postgres && homelab service setup postgres
+# Start:     homelab service up postgres
+# Services that need a database declare `databases: { postgres: ... }`
+# in their config.yaml. The CLI auto-creates databases and users.
+# ─────────────────────────────────────────────────────────────────
+
+networks:
+  home-services:
+    name: home-services
+    external: true
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    container_name: homelab-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_ROOT_PASSWORD}
+      POSTGRES_DB: homelab
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - home-services
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres-data:
+    name: homelab_postgres_data

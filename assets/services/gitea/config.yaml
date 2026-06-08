@@ -6,6 +6,15 @@ vars:
     value: "1000"
     required: false
 
-secrets:
-  DB_PASSWORD:
-    required: true
+secrets: {}
+
+databases:
+  postgres:
+    database: gitea
+    user: gitea
+    env:
+      host: GI_DB_HOST
+      port: GI_DB_PORT
+      user: GI_DB_USER
+      password: GI_DB_PASS
+      database: GI_DB_NAME

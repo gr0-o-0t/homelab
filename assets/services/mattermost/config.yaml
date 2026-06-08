@@ -3,6 +3,11 @@ vars:
     value: "UTC"
     required: false
 
-secrets:
-  DB_PASSWORD:
-    required: true
+secrets: {}
+
+databases:
+  postgres:
+    database: mattermost
+    user: mattermost
+    env:
+      "postgres://{user}:{password}@{host}:{port}/{database}?sslmode=disable&connect_timeout=10": MM_DATASOURCE

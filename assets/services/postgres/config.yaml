@@ -1,0 +1,10 @@
+vars:
+  POSTGRES_VERSION:
+    value: "18-alpine"
+    required: false
+    description: "PostgreSQL image tag"
+
+secrets:
+  POSTGRES_ROOT_PASSWORD:
+    required: true
+    description: "Password for the postgres superuser"

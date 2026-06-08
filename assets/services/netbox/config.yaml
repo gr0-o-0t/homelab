@@ -13,9 +13,18 @@ vars:
     required: false
 
 secrets:
-  DB_PASSWORD:
-    required: true
   SECRET_KEY:
     required: true
   SUPERUSER_PASSWORD:
     required: true
+
+databases:
+  postgres:
+    database: netbox
+    user: netbox
+    env:
+      host: NB_DB_HOST
+      port: NB_DB_PORT
+      user: NB_DB_USER
+      password: NB_DB_PASS
+      database: NB_DB_NAME

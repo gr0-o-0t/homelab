@@ -2,16 +2,14 @@
 # Service: NetBox (network source of truth & IPAM/DCIM)
 # https://docs.linuxserver.io/images/docker-netbox/
 # ─────────────────────────────────────────────────────────────────────────────
+# Database: uses shared PostgreSQL (homelab-postgres). Redis/valkey remains
+# local (two instances needed for main+cache separation).
+# ─────────────────────────────────────────────────────────────────────────────
 
 networks:
-  # Shared network — Caddy (via Tailscale namespace) reaches every service here
   home-services:
     name: home-services
     external: true
-  # Internal-only network for NetBox ↔ database/cache traffic.
-  # Never expose this outside the stack.
-  netbox-internal:
-    internal: true
 
 services:
   netbox:
@@ -20,8 +18,6 @@ services:
     user: "${PUID:-1000}:${PGID:-1000}"
     restart: unless-stopped
     depends_on:
-      netbox-postgres:
-        condition: service_healthy
       netbox-redis:
         condition: service_healthy
       netbox-redis-cache:
@@ -33,10 +29,11 @@ services:
       SUPERUSER_EMAIL: ${SUPERUSER_EMAIL}
       SUPERUSER_PASSWORD: ${SUPERUSER_PASSWORD}
       ALLOWED_HOST: "netbox.${HOME_SUBDOMAIN}.${DOMAIN}"
-      DB_HOST: netbox-postgres
-      DB_NAME: netbox
-      DB_USER: netbox
-      DB_PASSWORD: ${DB_PASSWORD}
+      DB_HOST: ${NB_DB_HOST}
+      DB_PORT: ${NB_DB_PORT}
+      DB_NAME: ${NB_DB_NAME}
+      DB_USER: ${NB_DB_USER}
+      DB_PASSWORD: ${NB_DB_PASS}
       REDIS_HOST: netbox-redis
       REDIS_PORT: 6379
       REDIS_PASSWORD: ""
@@ -47,8 +44,7 @@ services:
     volumes:
       - netbox-data:/config
     networks:
-      - home-services # reachable by Caddy
-      - netbox-internal # internal comms
+      - home-services
     healthcheck:
       test:
         [
@@ -58,27 +54,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 120s # allows time for DB migrations on first boot
-
-  netbox-postgres:
-    image: postgres:16-alpine
-    container_name: netbox-postgres
-    user: "${PUID:-1000}:${PGID:-1000}"
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: netbox
-      POSTGRES_PASSWORD: ${DB_PASSWORD}
-      POSTGRES_DB: netbox
-    volumes:
-      - netbox-pgdata:/var/lib/postgresql/data
-    networks:
-      - netbox-internal
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U netbox"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
+      start_period: 120s
 
   netbox-redis:
     image: docker.io/valkey/valkey:9-alpine
@@ -87,7 +63,7 @@ services:
     restart: unless-stopped
     command: valkey-server --port 6379
     networks:
-      - netbox-internal
+      - home-services
     healthcheck:
       test: ["CMD-SHELL", "valkey-cli -p 6379 ping || exit 1"]
       interval: 10s
@@ -101,7 +77,7 @@ services:
     restart: unless-stopped
     command: valkey-server --port 6380
     networks:
-      - netbox-internal
+      - home-services
     healthcheck:
       test: ["CMD-SHELL", "valkey-cli -p 6380 ping || exit 1"]
       interval: 10s
@@ -111,5 +87,3 @@ services:
 volumes:
   netbox-data:
     name: netbox_data
-  netbox-pgdata:
-    name: netbox_pgdata

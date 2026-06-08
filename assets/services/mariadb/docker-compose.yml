@@ -1,0 +1,33 @@
+# ─────────────────────────────────────────────────────────────────
+# Shared MariaDB for homelab services
+# ─────────────────────────────────────────────────────────────────
+
+networks:
+  home-services:
+    name: home-services
+    external: true
+
+services:
+  mariadb:
+    image: mariadb:11
+    container_name: homelab-mariadb
+    restart: unless-stopped
+    command:
+      - mariadbd
+      - --skip-log-bin
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD}
+      MYSQL_DATABASE: homelab
+    volumes:
+      - mariadb-data:/var/lib/mysql
+    networks:
+      - home-services
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  mariadb-data:
+    name: homelab_mariadb_data

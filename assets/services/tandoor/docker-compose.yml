@@ -2,13 +2,14 @@
 # Service: Tandoor Recipes (self-hosted recipe manager)
 # https://docs.tandoor.dev/install/docker/
 # ─────────────────────────────────────────────────────────────────────────────
+# Database: uses shared PostgreSQL (homelab-postgres). Credentials
+# auto-generated at `homelab service setup tandoor`.
+# ─────────────────────────────────────────────────────────────────────────────
 
 networks:
   home-services:
     name: home-services
     external: true
-  tandoor-internal:
-    internal: true
 
 services:
   tandoor:
@@ -16,17 +17,14 @@ services:
     container_name: tandoor
     user: "${PUID:-1000}:${PGID:-1000}"
     restart: unless-stopped
-    depends_on:
-      tandoor-postgres:
-        condition: service_healthy
     environment:
       SECRET_KEY: ${SECRET_KEY}
       DB_ENGINE: django.db.backends.postgresql
-      POSTGRES_HOST: tandoor-postgres
-      POSTGRES_PORT: 5432
-      POSTGRES_USER: tandoor
-      POSTGRES_PASSWORD: ${DB_PASSWORD}
-      POSTGRES_DB: tandoor
+      POSTGRES_HOST: ${TA_DB_HOST}
+      POSTGRES_PORT: ${TA_DB_PORT}
+      POSTGRES_USER: ${TA_DB_USER}
+      POSTGRES_PASSWORD: ${TA_DB_PASS}
+      POSTGRES_DB: ${TA_DB_NAME}
       ALLOWED_HOSTS: "*"
       GUNICORN_MEDIA: 0
       TZ: ${TZ:-UTC}
@@ -35,7 +33,6 @@ services:
       - tandoor-media:/opt/recipes/mediafiles
     networks:
       - home-services
-      - tandoor-internal
     healthcheck:
       test:
         [
@@ -47,30 +44,8 @@ services:
       retries: 5
       start_period: 60s
 
-  tandoor-postgres:
-    image: postgres:16-alpine
-    container_name: tandoor-postgres
-    user: "${PUID:-1000}:${PGID:-1000}"
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: tandoor
-      POSTGRES_PASSWORD: ${DB_PASSWORD}
-      POSTGRES_DB: tandoor
-    volumes:
-      - tandoor-pgdata:/var/lib/postgresql/data
-    networks:
-      - tandoor-internal
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U tandoor"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
-
 volumes:
   tandoor-static:
     name: tandoor_static
   tandoor-media:
     name: tandoor_media
-  tandoor-pgdata:
-    name: tandoor_pgdata

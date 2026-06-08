@@ -1,0 +1,10 @@
+vars:
+  MARIADB_VERSION:
+    value: "11"
+    required: false
+    description: "MariaDB image tag"
+
+secrets:
+  MARIADB_ROOT_PASSWORD:
+    required: true
+    description: "Password for the MariaDB root user"

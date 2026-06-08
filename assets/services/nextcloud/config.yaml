@@ -4,9 +4,19 @@ vars:
     required: false
 
 secrets:
-  DB_PASSWORD:
-    required: true
-  DB_ROOT_PASSWORD:
-    required: true
   ADMIN_PASSWORD:
     required: true
+
+databases:
+  mariadb:
+    database: nextcloud
+    user: nextcloud
+    env:
+      host: NC_DB_HOST
+      port: NC_DB_PORT
+      user: NC_DB_USER
+      password: NC_DB_PASS
+      database: NC_DB_NAME
+  redis:
+    env:
+      host: NC_REDIS_HOST

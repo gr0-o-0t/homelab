@@ -2,13 +2,14 @@
 # Service: Forgejo (self-hosted Git service, Gitea fork)
 # https://forgejo.org/docs/latest/admin/installation/
 # ─────────────────────────────────────────────────────────────────────────────
+# Database: uses shared PostgreSQL (homelab-postgres). DB credentials are
+# auto-generated at `homelab service setup forgejo` and injected at runtime.
+# ─────────────────────────────────────────────────────────────────────────────
 
 networks:
   home-services:
     name: home-services
     external: true
-  forgejo-internal:
-    internal: true
 
 services:
   forgejo:
@@ -20,10 +21,10 @@ services:
       USER_UID: ${PUID:-1000}
       USER_GID: ${PGID:-1000}
       FORGEJO__database__DB_TYPE: postgres
-      FORGEJO__database__HOST: forgejo-postgres:5432
-      FORGEJO__database__NAME: forgejo
-      FORGEJO__database__USER: forgejo
-      FORGEJO__database__PASSWD: ${DB_PASSWORD}
+      FORGEJO__database__HOST: ${F_DB_HOST}:${F_DB_PORT}
+      FORGEJO__database__NAME: ${F_DB_NAME}
+      FORGEJO__database__USER: ${F_DB_USER}
+      FORGEJO__database__PASSWD: ${F_DB_PASS}
       FORGEJO__server__DOMAIN: forgejo.${HOME_SUBDOMAIN}.${DOMAIN}
       FORGEJO__server__ROOT_URL: https://forgejo.${HOME_SUBDOMAIN}.${DOMAIN}
       FORGEJO__server__SSH_DOMAIN: forgejo.${HOME_SUBDOMAIN}.${DOMAIN}
@@ -34,7 +35,6 @@ services:
       - /etc/localtime:/etc/localtime:ro
     networks:
       - home-services
-      - forgejo-internal
     healthcheck:
       test:
         [
@@ -46,30 +46,8 @@ services:
       retries: 3
       start_period: 60s
 
-  forgejo-postgres:
-    image: postgres:18-alpine
-    container_name: forgejo-postgres
-    user: "${PUID:-1000}:${PGID:-1000}"
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: forgejo
-      POSTGRES_PASSWORD: ${DB_PASSWORD}
-      POSTGRES_DB: forgejo
-    volumes:
-      - forgejo-pgdata:/var/lib/postgresql/data
-    networks:
-      - forgejo-internal
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U forgejo"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
-
 volumes:
   forgejo-data:
     name: forgejo_data
-  forgejo-pgdata:
-    name: forgejo_pgdata
   forgejo-config:
     name: forgejo_config
