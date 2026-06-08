@@ -37,6 +37,11 @@ func (c *Client) Close() error {
 	return c.c.Close()
 }
 
+// NewWithClient wraps an existing Docker SDK client. Used in tests.
+func NewWithClient(c *dockerclient.Client) *Client {
+	return &Client{c: c}
+}
+
 // ShortID returns the first n characters of a container ID.
 func ShortID(id string) string {
 	if len(id) > 12 {
@@ -123,8 +128,8 @@ func (c *Client) InspectContainers(ctx context.Context, summaries []ContainerSum
 			health = info.State.Health.Status
 		}
 
-		startedAt := parseTime(info.State.StartedAt)
-		finishedAt := parseTime(info.State.FinishedAt)
+		startedAt := ParseTime(info.State.StartedAt)
+		finishedAt := ParseTime(info.State.FinishedAt)
 
 		var ports []string
 		for containerPort, bindings := range info.HostConfig.PortBindings {
@@ -184,15 +189,3 @@ func (c *Client) NetworkExists(ctx context.Context, name string) (bool, error) {
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
-
-func shortID(id string) string {
-	if len(id) > 12 {
-		return id[:12]
-	}
-	return id
-}
-
-func parseTime(s string) time.Time {
-	t, _ := time.Parse(time.RFC3339Nano, s)
-	return t
-}

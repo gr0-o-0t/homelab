@@ -15,6 +15,7 @@ import (
 
 	"github.com/groot/homelab/internal/caddy"
 	"github.com/groot/homelab/internal/config"
+	"github.com/groot/homelab/internal/db"
 	"github.com/groot/homelab/internal/docker"
 	"github.com/groot/homelab/internal/run"
 	"github.com/groot/homelab/internal/scaffold"
@@ -78,6 +79,9 @@ var serviceUpCmd = &cobra.Command{
 		}
 		for _, name := range names {
 			if err := validateService(root, name); err != nil {
+				return err
+			}
+			if err := ensureDBDependencies(context.Background(), root, name); err != nil {
 				return err
 			}
 			fmt.Printf("%s Starting %s…\n", styles.Primary.Render("→"), styles.Bold.Render(name))
@@ -1015,5 +1019,34 @@ func scaffoldService(root, name, container, port string, dryRun bool) error {
 	fmt.Printf("  3. %s\n", styles.Primary.Render(fmt.Sprintf("homelab service up %s", name)))
 	fmt.Printf("  4. %s\n", styles.Primary.Render(fmt.Sprintf("homelab service enable %s --private", name)))
 	fmt.Printf("     %s\n\n", styles.Muted.Render(fmt.Sprintf("homelab service enable %s --public   (requires Cloudflare Tunnel)", name)))
+	return nil
+}
+
+// ensureDBDependencies checks whether the service has database dependencies
+// and ensures the corresponding shared DB containers are running.
+func ensureDBDependencies(ctx context.Context, root, name string) error {
+	svcCfg, err := config.Load(config.ServiceConfigFile(root, name))
+	if err != nil {
+		return err
+	}
+	if svcCfg == nil || svcCfg.Databases.Kind == 0 {
+		return nil
+	}
+
+	svcDB, err := svcCfg.ServiceDatabases()
+	if err != nil {
+		return fmt.Errorf("reading database declarations: %w", err)
+	}
+	if len(svcDB) == 0 {
+		return nil
+	}
+
+	p := db.New(root, nil) // nil SM — EnsureRunning doesn't need secrets
+	for dbType := range svcDB {
+		if err := p.EnsureRunning(ctx, dbType); err != nil {
+			return fmt.Errorf("%w\n  Install: homelab service add %s && homelab service up %s",
+				err, dbType, dbType)
+		}
+	}
 	return nil
 }

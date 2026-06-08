@@ -77,6 +77,18 @@ func (c *Commander) run(name string, args ...string) error {
 	return nil
 }
 
+// Run executes a command with configurable stdout/stderr. Public wrapper.
+func (c *Commander) Run(name string, args ...string) error {
+	return c.run(name, args...)
+}
+
+// Output runs a command and returns stdout. Stderr is discarded.
+func (c *Commander) Output(name string, args ...string) ([]byte, error) {
+	cmd := exec.Command(name, args...)
+	cmd.Stderr = io.Discard
+	return cmd.Output()
+}
+
 // mergeEnv returns a new env slice starting from base, with each entry in
 // overrides replacing any same-named key. Our vars always win.
 func MergeEnv(base []string, overrides map[string]string) []string {
