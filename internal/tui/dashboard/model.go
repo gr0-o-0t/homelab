@@ -60,13 +60,22 @@ const (
 // ── messages ──────────────────────────────────────────────────────────────────
 
 type (
-	refreshedMsg  struct{ services []service.Service }
-	opDoneMsg     struct{ msg string }
-	opErrMsg      struct{ err error; output string }
-	coreStatusMsg struct{ ts, caddy, cloudflared string }
-	logTailMsg    struct{ svcName string; lines []string }
-	coreTickMsg   struct{}
-	logTickMsg    struct{}
+	refreshedMsg struct{ services []service.Service }
+	opDoneMsg    struct{ msg string }
+	opErrMsg     struct {
+		err    error
+		output string
+	}
+	coreStatusMsg struct {
+		ts, caddy, cloudflared    string
+		tor, i2p, yggdrasil, ipfs string
+	}
+	logTailMsg struct {
+		svcName string
+		lines   []string
+	}
+	coreTickMsg struct{}
+	logTickMsg  struct{}
 )
 
 // ── core status ───────────────────────────────────────────────────────────────
@@ -75,6 +84,10 @@ type coreStatus struct {
 	tailscale   string
 	caddy       string
 	cloudflared string
+	tor         string
+	i2p         string
+	yggdrasil   string
+	ipfs        string
 }
 
 // ── EnvBuilderFn ──────────────────────────────────────────────────────────────
@@ -102,6 +115,7 @@ type Model struct {
 	dc           *docker.Client
 	services     []service.Service
 	catalogNames []string
+	extensions   []string
 	cursor       int
 	filter       string
 	buildEnv     EnvBuilderFn
@@ -122,7 +136,8 @@ type Model struct {
 // New constructs the dashboard Model.
 // catalogNames lists all names from the embedded service catalog; services not
 // yet installed appear in the list as available-to-install stubs.
-func New(repoRoot string, dc *docker.Client, services []service.Service, catalogNames []string, buildEnv EnvBuilderFn) Model {
+// extensions lists enabled optional network extensions for header pills.
+func New(repoRoot string, dc *docker.Client, services []service.Service, catalogNames []string, extensions []string, buildEnv EnvBuilderFn) Model {
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
 	sp.Style = styles.Primary
@@ -132,6 +147,7 @@ func New(repoRoot string, dc *docker.Client, services []service.Service, catalog
 		dc:           dc,
 		services:     services,
 		catalogNames: catalogNames,
+		extensions:   extensions,
 		buildEnv:     buildEnv,
 		spin:         sp,
 	}
@@ -407,6 +423,21 @@ func (m Model) renderHeader() string {
 	if m.core.cloudflared != "" || m.isTunnelConfigured() {
 		pills = append(pills, m.corePill("tunnel", m.core.cloudflared))
 	}
+	// Optional network extension pills (show when extension is enabled)
+	extPills := map[string]struct {
+		state string
+		label string
+	}{
+		"tor":       {m.core.tor, "tor"},
+		"i2p":       {m.core.i2p, "i2p"},
+		"yggdrasil": {m.core.yggdrasil, "ygg"},
+		"ipfs":      {m.core.ipfs, "ipfs"},
+	}
+	for _, ext := range m.extensions {
+		if p, ok := extPills[ext]; ok {
+			pills = append(pills, m.corePill(p.label, p.state))
+		}
+	}
 	right := strings.Join(pills, "  ")
 
 	summary := m.serviceCountSummary()
@@ -512,6 +543,29 @@ func (m Model) renderListPane(height int) string {
 		}
 	}
 
+	// Available rows for service items = height - 1 (title)
+	// - potential 1 for catalog separator.
+	hasSeparator := m.filter == "" && catalogCount > 0
+	itemRows := height - 1
+	if hasSeparator {
+		itemRows--
+	}
+	if itemRows < 1 {
+		itemRows = 1
+	}
+
+	// Compute scroll offset so the selected item stays visible.
+	// Keep cursor at ~1/3 from the top when scrolled past the window.
+	scrollOffset := 0
+	if m.cursor >= itemRows {
+		targetRow := itemRows / 3
+		scrollOffset = m.cursor - targetRow
+		// Clamp so we don't scroll past the last item.
+		if maxStart := len(visible) - itemRows; scrollOffset > maxStart {
+			scrollOffset = maxStart
+		}
+	}
+
 	var b strings.Builder
 
 	// Title line.
@@ -519,13 +573,12 @@ func (m Model) renderListPane(height int) string {
 	b.WriteString(lipgloss.NewStyle().Width(listInnerWidth).Render(title) + "\n")
 	linesUsed := 1
 
-	// Service rows, with a separator injected before the first catalog-only entry.
+	// Service rows, starting from scrollOffset. Only render up to itemRows items.
 	// The separator is purely visual — it does not affect cursor indexing.
 	separatorInserted := false
-	for i, svc := range visible {
-		if linesUsed >= height {
-			break
-		}
+	rendered := 0
+	for i := scrollOffset; i < len(visible) && rendered < itemRows; i++ {
+		svc := visible[i]
 		// Insert separator before first catalog entry (only when not filtering).
 		if !svc.Installed && !separatorInserted && m.filter == "" {
 			if linesUsed < height {
@@ -539,6 +592,7 @@ func (m Model) renderListPane(height int) string {
 		}
 		b.WriteString(m.renderListItem(svc, i == m.cursor) + "\n")
 		linesUsed++
+		rendered++
 	}
 
 	for linesUsed < height {
@@ -970,10 +1024,15 @@ func coreRefreshCmd(dc *docker.Client) tea.Cmd {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
-		ts := dc.ContainerState(ctx, "tailscale")
-		cdy := dc.ContainerState(ctx, "caddy")
-		cf := dc.ContainerState(ctx, "cloudflared")
-		return coreStatusMsg{ts: ts, caddy: cdy, cloudflared: cf}
+		return coreStatusMsg{
+			ts:          dc.ContainerState(ctx, "tailscale"),
+			caddy:       dc.ContainerState(ctx, "caddy"),
+			cloudflared: dc.ContainerState(ctx, "cloudflared"),
+			tor:         dc.ContainerState(ctx, "tor"),
+			i2p:         dc.ContainerState(ctx, "i2p"),
+			yggdrasil:   dc.ContainerState(ctx, "yggdrasil"),
+			ipfs:        dc.ContainerState(ctx, "ipfs"),
+		}
 	}
 }
 

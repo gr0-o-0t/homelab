@@ -918,6 +918,14 @@ func runDashboardTUI(root string) error {
 
 	catalog := catalogNames()
 
+	// Load root config to get enabled extensions for header pills.
+	cfgFile := config.RootConfigFile(root, rootFlags.configFile)
+	cfg, _ := config.Load(cfgFile)
+	var extensions []string
+	if cfg != nil {
+		extensions = cfg.Extensions
+	}
+
 	for {
 		var svcs []service.Service
 		var err error
@@ -930,7 +938,7 @@ func runDashboardTUI(root string) error {
 			return err
 		}
 
-		model := tuiDashboard.New(root, dc, svcs, catalog, func(name string) map[string]string {
+		model := tuiDashboard.New(root, dc, svcs, catalog, extensions, func(name string) map[string]string {
 			return buildEnv(root, name)
 		})
 		p := tea.NewProgram(model, tea.WithAltScreen())
