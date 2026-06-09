@@ -1,0 +1,21 @@
+# Wrapper image for purplei2p/i2pd that ensures the data volume
+# is writable by the i2pd user (UID 166) and copies host-mounted
+# configs from /config-host/ at startup.
+#
+# The stock image stores config under $DATA_DIR (/home/i2pd/data)
+# and runs as UID 166. Since Docker bind-mounts preserve host UID
+# ownership, config files mounted from the host are unreadable by
+# the i2pd user unless copied through a wrapper entrypoint.
+
+FROM purplei2p/i2pd:latest
+
+USER root
+
+# Pre-create the data directory with correct ownership so that
+# Docker named volumes get initialized with the right permissions.
+RUN mkdir -p /home/i2pd/data && chown -R 166:166 /home/i2pd/data
+
+COPY docker-entrypoint.i2p.sh /docker-entrypoint.i2p.sh
+RUN chmod +x /docker-entrypoint.i2p.sh
+
+ENTRYPOINT ["/docker-entrypoint.i2p.sh"]
