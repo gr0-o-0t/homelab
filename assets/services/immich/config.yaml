@@ -12,3 +12,6 @@ vars:
 secrets:
   DB_PASSWORD:
     required: true
+ports:
+  web:
+    port: 2283

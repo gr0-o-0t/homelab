@@ -21,15 +21,15 @@ var serviceAddCmd = &cobra.Command{
 config directory so you can customise and enable it.
 
 List available services:
-  homelab service add
+  homelab add
 
 Install a service:
-  homelab service add uptime-kuma
+  homelab add uptime-kuma
 
 After installing, run:
-  homelab service setup <name>   # configure vars and secrets
-  homelab service up <name>      # start containers
-  homelab service enable <name> --private`,
+  homelab setup <name>     # configure vars and secrets
+  homelab up <name>        # start containers
+  homelab enable <name>    # expose on private tailnet`,
 	Args:              cobra.MaximumNArgs(1),
 	ValidArgsFunction: completeAddNames,
 	RunE:              runServiceAdd,
@@ -54,7 +54,7 @@ func runServiceAdd(_ *cobra.Command, args []string) error {
 	// Verify the catalog entry exists.
 	srcDir := "services/" + name
 	if _, err := assets.CatalogFS.Open(srcDir); err != nil {
-		return fmt.Errorf("no catalog entry for %q\n\n  Run `homelab service add` to list available services", name)
+		return fmt.Errorf("no catalog entry for %q\n\n  Run `homelab add` to list available services", name)
 	}
 
 	// Copy catalog entry to configDir/services/<name>/
@@ -66,13 +66,13 @@ func runServiceAdd(_ *cobra.Command, args []string) error {
 		rel, _ := filepath.Rel(srcDir, path)
 		dest := filepath.Join(destDir, rel)
 		if d.IsDir() {
-			return os.MkdirAll(dest, 0o755)
+			return os.MkdirAll(dest, 0o750)
 		}
 		data, err := assets.CatalogFS.ReadFile(path)
 		if err != nil {
 			return err
 		}
-		return os.WriteFile(dest, data, 0o644)
+		return os.WriteFile(dest, data, 0o600)
 	}); err != nil {
 		return fmt.Errorf("installing %s: %w", name, err)
 	}
@@ -99,9 +99,9 @@ func runServiceAdd(_ *cobra.Command, args []string) error {
 	}
 
 	fmt.Printf("%s\n", styles.Muted.Render("Next steps:"))
-	fmt.Printf("  1. %s\n", styles.Primary.Render(fmt.Sprintf("homelab service setup %s", name)))
-	fmt.Printf("  2. %s\n", styles.Primary.Render(fmt.Sprintf("homelab service up %s", name)))
-	fmt.Printf("  3. %s\n\n", styles.Primary.Render(fmt.Sprintf("homelab service enable %s --private", name)))
+	fmt.Printf("  1. %s\n", styles.Primary.Render(fmt.Sprintf("homelab setup %s", name)))
+	fmt.Printf("  2. %s\n", styles.Primary.Render(fmt.Sprintf("homelab up %s", name)))
+	fmt.Printf("  3. %s\n\n", styles.Primary.Render(fmt.Sprintf("homelab enable %s --private", name)))
 	return nil
 }
 
@@ -133,7 +133,7 @@ func printCatalog() error {
 		)
 	}
 	fmt.Printf("\n%s\n\n",
-		styles.Muted.Render("Install with: homelab service add <name>"))
+		styles.Muted.Render("Install with: homelab add <name>"))
 	return nil
 }
 

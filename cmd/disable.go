@@ -1,0 +1,172 @@
+package cmd
+
+import (
+	"fmt"
+
+	"github.com/groot/homelab/internal/caddy"
+	"github.com/groot/homelab/internal/configgen"
+	"github.com/groot/homelab/internal/run"
+	"github.com/groot/homelab/internal/tui/styles"
+	"github.com/spf13/cobra"
+)
+
+var disableCmd = &cobra.Command{
+	Use:   "disable <service>",
+	Short: "Disable network exposure for a service",
+	Long: `Remove network exposure layers for a service.
+
+Select which layers to remove with extension flags:
+
+  --cf    remove Cloudflare Tunnel config
+  --i2p   remove I2P eepsite config
+  --tor   remove Tor onion service config
+  --ygg   remove Yggdrasil mesh config
+
+Without flags, only the private tailnet config is removed.
+Use -a to stop the service container as well.
+
+Examples:
+  homelab disable gitea                  # private only
+  homelab disable gitea --cf             # remove CF exposure
+  homelab disable gitea --cf --i2p       # CF + I2P
+  homelab disable gitea -a               # all layers + stop container`,
+	Args:              cobra.ExactArgs(1),
+	ValidArgsFunction: completeServiceNames,
+	RunE:              runDisable,
+}
+
+var (
+	disableCf   bool
+	disableI2P  bool
+	disableTor  bool
+	disableYgg  bool
+	disableAll  bool
+	disableStop bool // -a flag
+)
+
+func init() {
+	disableCmd.Flags().BoolVar(&disableCf, "cf", false, "Remove Cloudflare Tunnel config")
+	disableCmd.Flags().BoolVar(&disableI2P, "i2p", false, "Remove I2P eepsite config")
+	disableCmd.Flags().BoolVar(&disableTor, "tor", false, "Remove Tor onion service config")
+	disableCmd.Flags().BoolVar(&disableYgg, "ygg", false, "Remove Yggdrasil mesh config")
+	disableCmd.Flags().BoolVar(&disableAll, "all", false, "Remove ALL extension configs")
+	disableCmd.Flags().BoolVarP(&disableStop, "stop", "a", false, "Also stop the service container")
+	rootCmd.AddCommand(disableCmd)
+}
+
+func runDisable(cmd *cobra.Command, args []string) error {
+	svcName := args[0]
+	root := configDir()
+
+	// Determine which layers to remove
+	if disableAll {
+		disableCf = true
+		disableI2P = true
+		disableTor = true
+		disableYgg = true
+	}
+
+	hasSpecific := disableCf || disableI2P || disableTor || disableYgg
+
+	fmt.Printf("\n%s\n\n", styles.Header.Render(fmt.Sprintf("Disable: %s", svcName)))
+
+	// Private tailnet (removed when no specific ext flags, or always with -a)
+	if !hasSpecific || disableAll {
+		if err := disablePrivate(root, svcName); err != nil {
+			return err
+		}
+		fmt.Printf("  %s  Private: removed\n", styles.Warning.Render("→"))
+	}
+
+	// Extension layers
+	if disableCf {
+		if err := configgen.RemoveFile(root, "cf", svcName, ""); err != nil {
+			return fmt.Errorf("cf: %w", err)
+		}
+		fmt.Printf("  %s  Cloudflare: removed\n", styles.Warning.Render("→"))
+	}
+	if disableI2P {
+		if err := configgen.RemoveFile(root, "i2p", svcName, ""); err != nil {
+			return fmt.Errorf("i2p: %w", err)
+		}
+		if err := removeI2PTunnel(root, svcName); err != nil {
+			return err
+		}
+		fmt.Printf("  %s  I2P: removed\n", styles.Warning.Render("→"))
+	}
+	if disableTor {
+		if err := configgen.RemoveFile(root, "tor", svcName, ""); err != nil {
+			return fmt.Errorf("tor: %w", err)
+		}
+		if err := removeTorService(root, svcName); err != nil {
+			return err
+		}
+		fmt.Printf("  %s  Tor: removed\n", styles.Warning.Render("→"))
+	}
+	if disableYgg {
+		if err := configgen.RemoveFile(root, "ygg", svcName, ""); err != nil {
+			return fmt.Errorf("ygg: %w", err)
+		}
+		if err := removeYggForwarder(root, svcName); err != nil {
+			return err
+		}
+		fmt.Printf("  %s  Yggdrasil: removed\n", styles.Warning.Render("→"))
+	}
+
+	// Reload Caddy
+	if err := caddy.New(root).Reload(); err != nil {
+		fmt.Printf("  %s  Caddy reload: %v\n", styles.Warning.Render("!"), err)
+	}
+
+	// Reload network extensions
+	if disableI2P && containerStatus(i2pContainer) == containerStateRunning {
+		_ = ReloadI2pd()
+	}
+	if disableTor && containerStatus(torContainer) == containerStateRunning {
+		_ = ReloadTor()
+	}
+
+	if disableStop {
+		fmt.Printf("  %s  Stopping container…\n", styles.Muted.Render("→"))
+		_ = runServiceStop(root, svcName)
+	}
+
+	fmt.Println()
+	return nil
+}
+
+func disablePrivate(root, svcName string) error {
+	// Remove any auto-generated config (may not exist → old symlink fallback)
+	_ = configgen.RemoveFile(root, "private", svcName, "")
+	// Also try old symlink removal
+	return caddy.New(root).Disable(svcName)
+}
+
+// ── Tunnel config removal ────────────────────────────────────────────────
+
+func removeI2PTunnel(root, name string) error {
+	return RemoveI2PTunnel(root, name)
+}
+
+func removeTorService(root, name string) error {
+	return RemoveTorService(root, name)
+}
+
+func removeYggForwarder(root, name string) error {
+	if err := RemoveYggForwarder(root, name); err != nil {
+		return err
+	}
+	if containerStatus(yggContainer) == containerStateRunning {
+		return RestartYgg()
+	}
+	return nil
+}
+
+// runServiceStop stops a service container via docker compose down.
+func runServiceStop(root, name string) error {
+	return run.Default().DockerComposeEnv(
+		run.ServiceComposeFile(root, name),
+		buildEnv(root, name),
+		"down",
+	)
+}

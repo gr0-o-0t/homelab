@@ -203,7 +203,7 @@ func TestEnsureRunning(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected error for missing container")
 		}
-		if !strings.Contains(err.Error(), "homelab service add") {
+		if !strings.Contains(err.Error(), "homelab add") {
 			t.Errorf("error should mention installation, got: %v", err)
 		}
 	})
@@ -219,7 +219,7 @@ func TestEnsureRunning(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected error for stopped container")
 		}
-		if !strings.Contains(err.Error(), "exited") || !strings.Contains(err.Error(), "homelab service up") {
+		if !strings.Contains(err.Error(), "exited") || !strings.Contains(err.Error(), "homelab up") {
 			t.Errorf("error should mention status and service up, got: %v", err)
 		}
 	})

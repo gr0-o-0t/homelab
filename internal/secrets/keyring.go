@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -104,7 +105,7 @@ func (m *Manager) Get(namespace, varName string) (string, error) {
 	}
 	item, err := m.ring.Get(key)
 	if err != nil {
-		if err == keyring.ErrKeyNotFound {
+		if errors.Is(err, keyring.ErrKeyNotFound) {
 			return "", nil
 		}
 		return "", fmt.Errorf("keyring get %s: %w", varName, err)
@@ -128,7 +129,7 @@ func (m *Manager) Delete(namespace, varName string) error {
 		key = ServiceKey(namespace, varName)
 	}
 	err := m.ring.Remove(key)
-	if err == keyring.ErrKeyNotFound {
+	if errors.Is(err, keyring.ErrKeyNotFound) {
 		return nil
 	}
 	return err
@@ -169,7 +170,7 @@ func machinePassphrase() (string, error) {
 	return hex.EncodeToString(h[:16]), nil
 }
 
-// expandHome replaces a leading "~" with the user's home directory.
+// ExpandHome replaces a leading "~" with the user's home directory.
 func ExpandHome(path string) string {
 	if !strings.HasPrefix(path, "~") {
 		return path

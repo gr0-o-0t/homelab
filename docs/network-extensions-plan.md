@@ -35,7 +35,7 @@ config is set, and provides per-service `enable`/`disable` commands.
 | Tor       | `xyz.onion`   | HiddenServicePort in torrc | Directory of `.onion` service configs |
 | I2P       | `xyz.i2p`     | I2P tunnel (eepsite) | i2ptunnel config per service |
 | Yggdrasil | `[200:…]:port` | socat TCP6→TCP4 forwarder | socat instance per service |
-| IPFS      | `ipfs.home.*` | Caddy reverse proxy | Standard `caddy-pub.conf` |
+| IPFS      | `ipfs.home.*` | Caddy reverse proxy | Standard `caddy.cf.conf` |
 
 ### Why IPFS is different
 
@@ -432,7 +432,7 @@ ipfs.{$HOME_SUBDOMAIN}.{$DOMAIN} {
 }
 ```
 
-`caddy-pub.conf`:
+`caddy.cf.conf`:
 ```caddyfile
 ipfs.{$PUB_SUBDOMAIN}.{$DOMAIN} {
     import wildcard_tls

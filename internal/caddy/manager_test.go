@@ -20,7 +20,7 @@ func newRepo(t *testing.T) string {
 	dir := t.TempDir()
 	for _, d := range []string{
 		"caddy/conf.d",
-		"caddy/conf.d-pub",
+		"caddy/conf.d-cf",
 		"services",
 	} {
 		require.NoError(t, os.MkdirAll(filepath.Join(dir, d), 0o755))
@@ -42,8 +42,8 @@ func writeCaddyConf(t *testing.T, repo, name string) {
 
 func writePubCaddyConf(t *testing.T, repo, name string) {
 	t.Helper()
-	path := filepath.Join(repo, "services", name, "caddy-pub.conf")
-	require.NoError(t, os.WriteFile(path, []byte("# caddy-pub.conf\n"), 0o644))
+	path := filepath.Join(repo, "services", name, "caddy.cf.conf")
+	require.NoError(t, os.WriteFile(path, []byte("# caddy.cf.conf\n"), 0o644))
 }
 
 // noopReload is injected in every test to skip Docker exec.
@@ -200,7 +200,7 @@ func TestEnablePublic_CreatesSymlink(t *testing.T) {
 
 	require.NoError(t, mgr(t, repo).EnablePublic("myapp"))
 
-	dest := filepath.Join(repo, "caddy", "conf.d-pub", "myapp.conf")
+	dest := filepath.Join(repo, "caddy", "conf.d-cf", "myapp.conf")
 	fi, err := os.Lstat(dest)
 	require.NoError(t, err)
 	assert.True(t, fi.Mode()&os.ModeSymlink != 0)
@@ -212,20 +212,20 @@ func TestEnablePublic_SymlinkIsRelative(t *testing.T) {
 	writePubCaddyConf(t, repo, "myapp")
 	require.NoError(t, mgr(t, repo).EnablePublic("myapp"))
 
-	dest := filepath.Join(repo, "caddy", "conf.d-pub", "myapp.conf")
+	dest := filepath.Join(repo, "caddy", "conf.d-cf", "myapp.conf")
 	target, err := os.Readlink(dest)
 	require.NoError(t, err)
 	assert.False(t, filepath.IsAbs(target))
-	assert.Equal(t, filepath.Join("..", "..", "services", "myapp", "caddy-pub.conf"), target)
+	assert.Equal(t, filepath.Join("..", "..", "services", "myapp", "caddy.cf.conf"), target)
 }
 
 func TestEnablePublic_ErrorWhenNoPublicCaddyConf(t *testing.T) {
 	repo := newRepo(t)
-	addService(t, repo, "myapp") // no caddy-pub.conf
+	addService(t, repo, "myapp") // no caddy.cf.conf
 
 	err := mgr(t, repo).EnablePublic("myapp")
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "caddy-pub.conf")
+	assert.Contains(t, err.Error(), "caddy.cf.conf")
 }
 
 // ── DisablePublic ─────────────────────────────────────────────────────────────
@@ -238,7 +238,7 @@ func TestDisablePublic_RemovesSymlink(t *testing.T) {
 	require.NoError(t, m.EnablePublic("myapp"))
 	require.NoError(t, m.DisablePublic("myapp"))
 
-	dest := filepath.Join(repo, "caddy", "conf.d-pub", "myapp.conf")
+	dest := filepath.Join(repo, "caddy", "conf.d-cf", "myapp.conf")
 	_, err := os.Lstat(dest)
 	assert.True(t, os.IsNotExist(err))
 }
@@ -285,7 +285,7 @@ func TestDisableBoth_RemovesBothSymlinks(t *testing.T) {
 	require.NoError(t, m.DisableBoth("myapp"))
 
 	privDest := filepath.Join(repo, "caddy", "conf.d", "myapp.conf")
-	pubDest := filepath.Join(repo, "caddy", "conf.d-pub", "myapp.conf")
+	pubDest := filepath.Join(repo, "caddy", "conf.d-cf", "myapp.conf")
 	_, errPriv := os.Lstat(privDest)
 	_, errPub := os.Lstat(pubDest)
 	assert.True(t, os.IsNotExist(errPriv), "private symlink should be removed")

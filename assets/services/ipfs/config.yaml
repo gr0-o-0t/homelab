@@ -4,3 +4,6 @@ vars:
     description: "IPFS configuration profile (server, lowpower, test, default)"
 
 secrets: {}
+ports:
+  web:
+    port: 8080

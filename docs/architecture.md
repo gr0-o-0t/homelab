@@ -74,7 +74,7 @@ The wildcard cert `*.home.example.com` cannot be obtained via HTTP-01 (no public
 ```
 Type:    A
 Name:    *.home        (i.e. *.home.example.com)
-Value:   <Caddy node's Tailscale IP>   (100.x.x.x — get it from `homelab ts status`)
+Value:   <Caddy node's Tailscale IP>   (100.x.x.x — get it from `homelab status`)
 Proxy:   DNS only (grey cloud) — NOT proxied
 TTL:     Auto
 ```
@@ -88,9 +88,9 @@ Set proxy status to **DNS only**. If you proxy through Cloudflare the traffic wo
 For services that need to be publicly accessible on the internet, Cloudflare Tunnel (`cloudflared`) provides an encrypted tunnel from your home server to Cloudflare's edge network. This works alongside private Tailscale access:
 
 - Configure `CF_TUNNEL_TOKEN` and `CF_TUNNEL_NAME` via `homelab setup`
-- Cloudflare Tunnel starts with the core stack: `homelab core start`
-- Add DNS routes: `homelab tunnel route add <service>`
-- Enable public Caddy config: `homelab service enable <service> --public`
+- Cloudflare Tunnel starts with the core stack: `homelab start`
+- Add DNS routes: `homelab ext cf route add <service>`
+- Enable public Caddy config: `homelab enable <service> --cf`
 
 Public services use a separate subdomain (default: `pub.example.com`) and are served through Cloudflare's global network.
 
@@ -98,9 +98,9 @@ Public services use a separate subdomain (default: `pub.example.com`) and are se
 
 Each service directory ships with two Caddyfile snippets:
 - `caddy.conf` — Private reverse proxy (tailnet-only)
-- `caddy-pub.conf` — Public reverse proxy (Cloudflare Tunnel)
+- `caddy.cf.conf` — Public reverse proxy (Cloudflare Tunnel)
 
-Running `homelab service enable <name> --private` symlinks `caddy.conf` into `caddy/conf.d/` and reloads Caddy gracefully (no downtime, no cert re-issuance). Running `homelab service enable <name> --public` symlinks `caddy-pub.conf` instead. `homelab service disable` removes the symlink.
+Running `homelab enable <name>` symlinks `caddy.conf` into `caddy/conf.d/` and reloads Caddy gracefully (no downtime, no cert re-issuance). Running `homelab enable <name> --cf` symlinks `caddy.cf.conf` instead. `homelab disable <name>` removes the symlink.
 
 ## Network traffic flow (per request)
 

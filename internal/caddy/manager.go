@@ -1,5 +1,5 @@
 // Package caddy manages Caddy routing: enabling/disabling services via
-// symlinks into caddy/conf.d/ (private) and caddy/conf.d-pub/ (public),
+// symlinks into caddy/conf.d/ (private) and caddy/conf.d-cf/ (Cloudflare),
 // and reloading the running Caddy container.
 package caddy
 
@@ -69,24 +69,24 @@ func (m *Manager) IsEnabled(name string) (bool, error) {
 
 // ── Public routing (Cloudflare Tunnel) ───────────────────────────────────────
 
-// EnablePublic symlinks services/<name>/caddy-pub.conf into
-// caddy/conf.d-pub/<name>.conf and triggers a graceful Caddy reload.
+// EnablePublic symlinks services/<name>/caddy.cf.conf into
+// caddy/conf.d-cf/<name>.conf and triggers a graceful Caddy reload.
 func (m *Manager) EnablePublic(name string) error {
-	src := filepath.Join(m.RepoRoot, "services", name, "caddy-pub.conf")
-	dest := filepath.Join(m.RepoRoot, "caddy", "conf.d-pub", name+".conf")
-	relTarget := filepath.Join("..", "..", "services", name, "caddy-pub.conf")
-	return m.link(src, dest, relTarget, name, "caddy-pub.conf")
+	src := filepath.Join(m.RepoRoot, "services", name, "caddy.cf.conf")
+	dest := filepath.Join(m.RepoRoot, "caddy", "conf.d-cf", name+".conf")
+	relTarget := filepath.Join("..", "..", "services", name, "caddy.cf.conf")
+	return m.link(src, dest, relTarget, name, "caddy.cf.conf")
 }
 
-// DisablePublic removes the caddy/conf.d-pub/<name>.conf symlink and reloads Caddy.
+// DisablePublic removes the caddy/conf.d-cf/<name>.conf symlink and reloads Caddy.
 func (m *Manager) DisablePublic(name string) error {
-	dest := filepath.Join(m.RepoRoot, "caddy", "conf.d-pub", name+".conf")
+	dest := filepath.Join(m.RepoRoot, "caddy", "conf.d-cf", name+".conf")
 	return m.unlink(dest, name, "public")
 }
 
 // IsPublicEnabled reports whether the public route symlink is active.
 func (m *Manager) IsPublicEnabled(name string) (bool, error) {
-	dest := filepath.Join(m.RepoRoot, "caddy", "conf.d-pub", name+".conf")
+	dest := filepath.Join(m.RepoRoot, "caddy", "conf.d-cf", name+".conf")
 	return isSymlink(dest)
 }
 
@@ -97,7 +97,7 @@ func (m *Manager) IsPublicEnabled(name string) (bool, error) {
 // are silently ignored — the operation is idempotent.
 func (m *Manager) DisableBoth(name string) error {
 	privateLink := filepath.Join(m.RepoRoot, "caddy", "conf.d", name+".conf")
-	publicLink := filepath.Join(m.RepoRoot, "caddy", "conf.d-pub", name+".conf")
+	publicLink := filepath.Join(m.RepoRoot, "caddy", "conf.d-cf", name+".conf")
 
 	for _, link := range []string{privateLink, publicLink} {
 		fi, err := os.Lstat(link)
@@ -116,6 +116,51 @@ func (m *Manager) DisableBoth(name string) error {
 	}
 
 	return m.Reload()
+}
+
+// ── Per-service config reload ─────────────────────────────────────────────────
+
+// ReloadService re-links the private and public Caddy config symlinks for a
+// service and reloads Caddy. Missing config files are silently skipped so the
+// command is safe to run on any service regardless of which routes are active.
+func (m *Manager) ReloadService(name string) error {
+	linked := false
+
+	privateSrc := filepath.Join(m.RepoRoot, "services", name, "caddy.conf")
+	privateDest := filepath.Join(m.RepoRoot, "caddy", "conf.d", name+".conf")
+	if _, err := os.Stat(privateSrc); err == nil {
+		relTarget := filepath.Join("..", "..", "services", name, "caddy.conf")
+		if err := m.replaceSymlink(privateDest, relTarget); err != nil {
+			return fmt.Errorf("re-linking private config: %w", err)
+		}
+		linked = true
+	}
+
+	publicSrc := filepath.Join(m.RepoRoot, "services", name, "caddy.cf.conf")
+	publicDest := filepath.Join(m.RepoRoot, "caddy", "conf.d-cf", name+".conf")
+	if _, err := os.Stat(publicSrc); err == nil {
+		relTarget := filepath.Join("..", "..", "services", name, "caddy.cf.conf")
+		if err := m.replaceSymlink(publicDest, relTarget); err != nil {
+			return fmt.Errorf("re-linking public config: %w", err)
+		}
+		linked = true
+	}
+
+	if !linked {
+		return fmt.Errorf("no caddy.conf or caddy.cf.conf found for service %q", name)
+	}
+
+	return m.Reload()
+}
+
+// replaceSymlink removes any existing symlink at dest and creates a new one.
+func (m *Manager) replaceSymlink(dest, relTarget string) error {
+	if _, err := os.Lstat(dest); err == nil {
+		if err := os.Remove(dest); err != nil {
+			return fmt.Errorf("removing old symlink: %w", err)
+		}
+	}
+	return os.Symlink(relTarget, dest)
 }
 
 // ── Caddy lifecycle ───────────────────────────────────────────────────────────

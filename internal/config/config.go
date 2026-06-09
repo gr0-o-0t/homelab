@@ -25,6 +25,12 @@ type SecretEntry struct {
 	Required bool `yaml:"required"`
 }
 
+// PortEntry describes a single port exposed by a service.
+type PortEntry struct {
+	Port     int    `yaml:"port"`
+	Protocol string `yaml:"protocol,omitempty"` // "tcp" (default) or "udp"
+}
+
 // DBType identifies a supported database engine.
 type DBType string
 
@@ -72,6 +78,7 @@ type Config struct {
 	Groups     map[string][]string    `yaml:"groups,omitempty"`
 	Databases  yaml.Node              `yaml:"databases,omitempty"`
 	Extensions []string               `yaml:"extensions,omitempty"`
+	Ports      map[string]PortEntry   `yaml:"ports,omitempty"`
 }
 
 // AllExtensions returns all valid extension identifiers.
@@ -214,7 +221,7 @@ const configFileName = "config.yaml"
 // Load reads a config.yaml at path. Returns (nil, nil) if the file does not
 // exist — callers treat absence as an empty config, not an error.
 func Load(path string) (*Config, error) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) // nosec G304 -- path is CLI config path, never user-controlled
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -230,14 +237,14 @@ func Load(path string) (*Config, error) {
 
 // Save writes cfg to path, creating parent directories as needed.
 func Save(path string, cfg *Config) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return fmt.Errorf("creating config dir: %w", err)
 	}
 	data, err := yaml.Marshal(cfg)
 	if err != nil {
 		return fmt.Errorf("encoding config: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	if err := os.WriteFile(path, data, 0o600); err != nil {
 		return fmt.Errorf("writing %s: %w", path, err)
 	}
 	return nil

@@ -1,6 +1,5 @@
 Log notice stdout
 DataDirectory /var/lib/tor
-User debian-tor
 
 # SOCKS proxy for Tor network access
 SOCKSPort 0.0.0.0:9050

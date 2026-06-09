@@ -30,6 +30,7 @@ import (
 var serviceCmd = &cobra.Command{
 	Use:     "service",
 	Aliases: []string{"svc"},
+	Hidden:  true,
 	Short:   "Manage services",
 	Long:    "Start, stop, expose, and inspect individual service stacks.",
 	RunE:    runServiceList,
@@ -61,119 +62,33 @@ func runServiceList(_ *cobra.Command, _ []string) error {
 
 // ── up ────────────────────────────────────────────────────────────────────────
 
-var upFlags struct {
-	all   bool
-	group string
-}
-
 var serviceUpCmd = &cobra.Command{
 	Use:               "up [service]",
 	Short:             "Start a service stack",
+	Long:              `Start one or more service containers.`,
 	Args:              cobra.MaximumNArgs(1),
 	ValidArgsFunction: completeServiceNames,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		root := configDir()
-		names, err := resolveTargets(root, upFlags.all, upFlags.group, args)
-		if err != nil {
-			return err
-		}
-		for _, name := range names {
-			if err := validateService(root, name); err != nil {
-				return err
-			}
-			if err := ensureDBDependencies(context.Background(), root, name); err != nil {
-				return err
-			}
-			fmt.Printf("%s Starting %s…\n", styles.Primary.Render("→"), styles.Bold.Render(name))
-			if err := run.Default().DockerComposeEnv(
-				run.ServiceComposeFile(root, name),
-				buildEnv(root, name),
-				"up", "-d",
-			); err != nil {
-				return err
-			}
-		}
-		return nil
-	},
+	RunE:              runServiceUp,
 }
 
 // ── down ──────────────────────────────────────────────────────────────────────
-
-var downFlags struct {
-	all   bool
-	group string
-}
 
 var serviceDownCmd = &cobra.Command{
 	Use:               "down [service]",
 	Short:             "Stop a service stack and remove it from all Caddy routing",
 	Args:              cobra.MaximumNArgs(1),
 	ValidArgsFunction: completeServiceNames,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		root := configDir()
-		names, err := resolveTargets(root, downFlags.all, downFlags.group, args)
-		if err != nil {
-			return err
-		}
-		for _, name := range names {
-			if err := validateService(root, name); err != nil {
-				return err
-			}
-			// Always clean up routing before stopping — leaves Caddy in a valid state.
-			if err := runWithSpinner(
-				fmt.Sprintf("Disabling %s routes…", name),
-				func(r *run.Commander) error {
-					return caddy.NewWithRunner(root, r).DisableBoth(name)
-				},
-			); err != nil {
-				fmt.Printf("  %s\n", styles.Muted.Render(fmt.Sprintf("(routing cleanup: %v)", err)))
-			}
-			fmt.Printf("%s Stopping %s…\n", styles.Warning.Render("→"), styles.Bold.Render(name))
-			if err := run.Default().DockerComposeEnv(
-				run.ServiceComposeFile(root, name),
-				buildEnv(root, name),
-				"down",
-			); err != nil {
-				return err
-			}
-		}
-		return nil
-	},
+	RunE:              runServiceDown,
 }
 
 // ── restart ───────────────────────────────────────────────────────────────────
-
-var restartFlags struct {
-	all   bool
-	group string
-}
 
 var serviceRestartCmd = &cobra.Command{
 	Use:               "restart [service]",
 	Short:             "Restart a service stack",
 	Args:              cobra.MaximumNArgs(1),
 	ValidArgsFunction: completeServiceNames,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		root := configDir()
-		names, err := resolveTargets(root, restartFlags.all, restartFlags.group, args)
-		if err != nil {
-			return err
-		}
-		for _, name := range names {
-			if err := validateService(root, name); err != nil {
-				return err
-			}
-			fmt.Printf("%s Restarting %s…\n", styles.Primary.Render("→"), styles.Bold.Render(name))
-			if err := run.Default().DockerComposeEnv(
-				run.ServiceComposeFile(root, name),
-				buildEnv(root, name),
-				"restart",
-			); err != nil {
-				return err
-			}
-		}
-		return nil
-	},
+	RunE:              runServiceRestart,
 }
 
 // ── logs ──────────────────────────────────────────────────────────────────────
@@ -189,32 +104,7 @@ var serviceLogsCmd = &cobra.Command{
 	Short:             "Tail service logs",
 	Args:              cobra.ExactArgs(1),
 	ValidArgsFunction: completeServiceNames,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		name := args[0]
-		root := configDir()
-		if err := validateService(root, name); err != nil {
-			return err
-		}
-		// Use the interactive TUI only when on a TTY with no explicit log flags.
-		if isTTY() && !logsFlags.follow && logsFlags.tail == "" && logsFlags.since == "" {
-			return runLogTUI(root, name)
-		}
-		logArgs := []string{"logs"}
-		if logsFlags.follow {
-			logArgs = append(logArgs, "-f")
-		}
-		if logsFlags.tail != "" {
-			logArgs = append(logArgs, "--tail", logsFlags.tail)
-		}
-		if logsFlags.since != "" {
-			logArgs = append(logArgs, "--since", logsFlags.since)
-		}
-		return run.Default().DockerComposeEnv(
-			run.ServiceComposeFile(root, name),
-			buildEnv(root, name),
-			logArgs...,
-		)
-	},
+	RunE:              runServiceLogs,
 }
 
 // ── ps ────────────────────────────────────────────────────────────────────────
@@ -265,133 +155,6 @@ var servicePsCmd = &cobra.Command{
 	},
 }
 
-// ── enable ────────────────────────────────────────────────────────────────────
-
-var enableFlags struct {
-	private bool
-	public  bool
-	all     bool
-	group   string
-}
-
-var serviceEnableCmd = &cobra.Command{
-	Use:   "enable [service]",
-	Short: "Expose a service via Caddy (--private, --public, or both)",
-	Long: `Add a service to Caddy routing. At least one route flag is required.
-
-Single service:
-  homelab service enable gitea --private           # tailnet only
-  homelab service enable gitea --public            # Cloudflare Tunnel
-  homelab service enable gitea --private --public  # both
-
-Batch:
-  homelab service enable --all --private           # expose all services on tailnet
-  homelab service enable --group media --private   # expose a service group`,
-	Args:              cobra.MaximumNArgs(1),
-	ValidArgsFunction: completeServiceNames,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		if !enableFlags.private && !enableFlags.public {
-			return fmt.Errorf("at least one of --private or --public is required\n\n  Example: homelab service enable %s --private",
-				firstOrEmpty(args))
-		}
-		root := configDir()
-		names, err := resolveTargets(root, enableFlags.all, enableFlags.group, args)
-		if err != nil {
-			return err
-		}
-
-		// Guard: public requires cloudflared to be configured.
-		if enableFlags.public {
-			env := buildEnv(root, "")
-			if env["CF_TUNNEL_TOKEN"] == "" {
-				return fmt.Errorf(
-					"--public requires Cloudflare Tunnel to be configured\n\n" +
-						"  Run `homelab setup` and provide a CF_TUNNEL_TOKEN, then\n" +
-						"  restart the core stack with `homelab core start`",
-				)
-			}
-		}
-
-		env := buildEnv(root, "")
-		batch := len(names) > 1
-
-		for _, name := range names {
-			if err := validateService(root, name); err != nil {
-				if batch {
-					fmt.Printf("  %s  %s: not found, skipping\n", styles.Warning.Render("!"), name)
-					continue
-				}
-				return err
-			}
-			msgs, err := enableServiceRouting(root, name, enableFlags.private, enableFlags.public, env, batch)
-			if err != nil {
-				if batch {
-					fmt.Printf("  %s  %s: %v\n", styles.Err.Render("✗"), name, err)
-					continue
-				}
-				return err
-			}
-			for _, m := range msgs {
-				fmt.Println(m)
-			}
-		}
-		return nil
-	},
-}
-
-// ── disable ───────────────────────────────────────────────────────────────────
-
-var disableFlags struct {
-	private bool
-	public  bool
-	all     bool
-	group   string
-}
-
-var serviceDisableCmd = &cobra.Command{
-	Use:   "disable [service]",
-	Short: "Remove a service from Caddy routing (--private, --public, or both)",
-	Long: `Remove a service from Caddy routing. Without flags, both routes are removed.
-
-  homelab service disable gitea --private   # remove tailnet route only
-  homelab service disable gitea --public    # remove public route only
-  homelab service disable gitea             # remove both
-
-Batch:
-  homelab service disable --all             # remove all services from routing
-  homelab service disable --group media --private`,
-	Args:              cobra.MaximumNArgs(1),
-	ValidArgsFunction: completeServiceNames,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		root := configDir()
-		names, err := resolveTargets(root, disableFlags.all, disableFlags.group, args)
-		if err != nil {
-			return err
-		}
-
-		both := !disableFlags.private && !disableFlags.public
-		batch := len(names) > 1
-
-		for _, name := range names {
-			if err := validateService(root, name); err != nil {
-				if batch {
-					fmt.Printf("  %s  %s: not found, skipping\n", styles.Warning.Render("!"), name)
-					continue
-				}
-				return err
-			}
-			if err := disableServiceRouting(root, name, disableFlags.private, disableFlags.public, both, batch); err != nil {
-				if batch {
-					fmt.Printf("  %s  %s: %v\n", styles.Err.Render("✗"), name, err)
-					continue
-				}
-				return err
-			}
-		}
-		return nil
-	},
-}
-
 // ── new ───────────────────────────────────────────────────────────────────────
 
 var newFlags struct {
@@ -406,11 +169,11 @@ var serviceNewCmd = &cobra.Command{
 	Long: `Scaffold boilerplate files for a new service.
 
 Interactive wizard (TTY, no flags required):
-  homelab service new
-  homelab service new paperless
+  homelab new
+  homelab new paperless
 
 Non-interactive (all flags required):
-  homelab service new paperless --container paperless-ngx --port 8000`,
+  homelab new paperless --container paperless-ngx --port 8000`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		root := configDir()
@@ -431,7 +194,7 @@ Non-interactive (all flags required):
 			return fmt.Errorf("service name is required in non-interactive mode")
 		}
 		if newFlags.container == "" || newFlags.port == "" {
-			return fmt.Errorf("--container and --port are required in non-interactive mode\n\n  Example: homelab service new %s --container %s-app --port 8080", name, name)
+			return fmt.Errorf("--container and --port are required in non-interactive mode\n\n  Example: homelab new %s --container %s-app --port 8080", name, name)
 		}
 		return scaffoldService(root, name, newFlags.container, newFlags.port, newFlags.dryRun)
 	},
@@ -442,28 +205,7 @@ func init() {
 	serviceNewCmd.Flags().StringVar(&newFlags.port, "port", "", "Port the container listens on")
 	serviceNewCmd.Flags().BoolVar(&newFlags.dryRun, "dry-run", false, "Print generated files without writing them")
 
-	// enable / disable route flags
-	serviceEnableCmd.Flags().BoolVar(&enableFlags.private, "private", false, "Enable private route (tailnet, via Caddy conf.d/)")
-	serviceEnableCmd.Flags().BoolVar(&enableFlags.public, "public", false, "Enable public route (Cloudflare Tunnel, via Caddy conf.d-pub/)")
-	serviceEnableCmd.Flags().BoolVar(&enableFlags.all, "all", false, "Enable routing for all installed services")
-	serviceEnableCmd.Flags().StringVar(&enableFlags.group, "group", "", "Enable routing for a named service group")
-	_ = serviceEnableCmd.RegisterFlagCompletionFunc("group", completeGroupNames)
-
-	serviceDisableCmd.Flags().BoolVar(&disableFlags.private, "private", false, "Disable private route only")
-	serviceDisableCmd.Flags().BoolVar(&disableFlags.public, "public", false, "Disable public route only")
-	serviceDisableCmd.Flags().BoolVar(&disableFlags.all, "all", false, "Disable routing for all installed services")
-	serviceDisableCmd.Flags().StringVar(&disableFlags.group, "group", "", "Disable routing for a named service group")
-	_ = serviceDisableCmd.RegisterFlagCompletionFunc("group", completeGroupNames)
-
-	// up / down / restart batch flags
-	serviceUpCmd.Flags().BoolVar(&upFlags.all, "all", false, "Start all installed services")
-	serviceUpCmd.Flags().StringVar(&upFlags.group, "group", "", "Start a named service group")
-	_ = serviceUpCmd.RegisterFlagCompletionFunc("group", completeGroupNames)
-
-	serviceDownCmd.Flags().BoolVar(&downFlags.all, "all", false, "Stop all installed services")
-	serviceDownCmd.Flags().StringVar(&downFlags.group, "group", "", "Stop a named service group")
-	_ = serviceDownCmd.RegisterFlagCompletionFunc("group", completeGroupNames)
-
+	// restart batch flags
 	serviceRestartCmd.Flags().BoolVar(&restartFlags.all, "all", false, "Restart all installed services")
 	serviceRestartCmd.Flags().StringVar(&restartFlags.group, "group", "", "Restart a named service group")
 	_ = serviceRestartCmd.RegisterFlagCompletionFunc("group", completeGroupNames)
@@ -475,128 +217,131 @@ func init() {
 
 	serviceCmd.AddCommand(
 		serviceListCmd,
-		serviceUpCmd,
-		serviceDownCmd,
-		serviceRestartCmd,
-		serviceLogsCmd,
 		servicePsCmd,
-		serviceEnableCmd,
-		serviceDisableCmd,
-		serviceNewCmd,
 	)
 }
 
-// ── routing helpers ───────────────────────────────────────────────────────────
-
-// enableServiceRouting enables private/public Caddy routes for a single service.
-// In non-batch mode it uses a spinner; batch mode prints inline status.
-func enableServiceRouting(root, name string, private, public bool, env map[string]string, batch bool) ([]string, error) {
-	var msgs []string
-	mgr := caddy.New(root)
-
-	if private {
-		var err error
-		if batch {
-			err = mgr.Enable(name)
-		} else {
-			err = runWithSpinner(
-				fmt.Sprintf("Enabling private route for %s…", name),
-				func(r *run.Commander) error { return caddy.NewWithRunner(root, r).Enable(name) },
-			)
-		}
-		if err != nil {
-			return msgs, fmt.Errorf("private route: %w", err)
-		}
-		msgs = append(msgs, fmt.Sprintf("  %s  private  → %s.%s.%s",
-			styles.Success.Render("✓"), name, env["HOME_SUBDOMAIN"], env["DOMAIN"]))
+func runServiceUp(_ *cobra.Command, args []string) error {
+	root := configDir()
+	names, err := resolveTargets(root, startFlags.all, startFlags.group, args)
+	if err != nil {
+		return err
 	}
-
-	if public {
-		var err error
-		if batch {
-			err = mgr.EnablePublic(name)
-		} else {
-			err = runWithSpinner(
-				fmt.Sprintf("Enabling public route for %s…", name),
-				func(r *run.Commander) error { return caddy.NewWithRunner(root, r).EnablePublic(name) },
-			)
-		}
-		if err != nil {
-			return msgs, fmt.Errorf("public route: %w", err)
-		}
-		pubSub := env["PUB_SUBDOMAIN"]
-		if pubSub == "" {
-			pubSub = "pub"
-		}
-		msgs = append(msgs, fmt.Sprintf("  %s  public   → %s.%s.%s",
-			styles.Success.Render("✓"), name, pubSub, env["DOMAIN"]))
-	}
-
-	return msgs, nil
-}
-
-// disableServiceRouting removes private/public Caddy routes for a single service.
-func disableServiceRouting(root, name string, private, public, both, batch bool) error {
-	if both {
-		var err error
-		if batch {
-			err = caddy.New(root).DisableBoth(name)
-		} else {
-			err = runWithSpinner(
-				fmt.Sprintf("Disabling all routes for %s…", name),
-				func(r *run.Commander) error { return caddy.NewWithRunner(root, r).DisableBoth(name) },
-			)
-		}
-		if err != nil {
+	for _, name := range names {
+		if err := validateService(root, name); err != nil {
 			return err
 		}
-		if !batch {
-			fmt.Printf("%s %s removed from all routing\n",
-				styles.Success.Render("✓"), styles.Bold.Render(name))
+		if err := ensureDBDependencies(context.Background(), root, name); err != nil {
+			return err
 		}
-		return nil
-	}
-
-	mgr := caddy.New(root)
-	if private {
-		var err error
-		if batch {
-			err = mgr.Disable(name)
-		} else {
-			err = runWithSpinner(
-				fmt.Sprintf("Disabling private route for %s…", name),
-				func(r *run.Commander) error { return caddy.NewWithRunner(root, r).Disable(name) },
-			)
+		fmt.Printf("%s Starting %s…\n", styles.Primary.Render("→"), styles.Bold.Render(name))
+		upArgs := []string{"up", "-d"}
+		if startFlags.build {
+			upArgs = append(upArgs, "--build")
 		}
-		if err != nil {
-			return fmt.Errorf("private route: %w", err)
-		}
-		if !batch {
-			fmt.Printf("%s %s removed from private routing\n",
-				styles.Success.Render("✓"), styles.Bold.Render(name))
-		}
-	}
-
-	if public {
-		var err error
-		if batch {
-			err = mgr.DisablePublic(name)
-		} else {
-			err = runWithSpinner(
-				fmt.Sprintf("Disabling public route for %s…", name),
-				func(r *run.Commander) error { return caddy.NewWithRunner(root, r).DisablePublic(name) },
-			)
-		}
-		if err != nil {
-			return fmt.Errorf("public route: %w", err)
-		}
-		if !batch {
-			fmt.Printf("%s %s removed from public routing\n",
-				styles.Success.Render("✓"), styles.Bold.Render(name))
+		if err := run.Default().DockerComposeEnv(
+			run.ServiceComposeFile(root, name),
+			buildEnv(root, name),
+			upArgs...,
+		); err != nil {
+			return err
 		}
 	}
 	return nil
 }
+
+func runServiceDown(_ *cobra.Command, args []string) error {
+	root := configDir()
+	names, err := resolveTargets(root, stopFlags.all, stopFlags.group, args)
+	if err != nil {
+		return err
+	}
+	for _, name := range names {
+		if err := validateService(root, name); err != nil {
+			return err
+		}
+		// Always clean up routing before stopping — leaves Caddy in a valid state.
+		if err := runWithSpinner(
+			fmt.Sprintf("Disabling %s routes…", name),
+			func(r *run.Commander) error {
+				return caddy.NewWithRunner(root, r).DisableBoth(name)
+			},
+		); err != nil {
+			fmt.Printf("  %s\n", styles.Muted.Render(fmt.Sprintf("(routing cleanup: %v)", err)))
+		}
+		fmt.Printf("%s Stopping %s…\n", styles.Warning.Render("→"), styles.Bold.Render(name))
+		if err := run.Default().DockerComposeEnv(
+			run.ServiceComposeFile(root, name),
+			buildEnv(root, name),
+			"down",
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func runServiceRestart(_ *cobra.Command, args []string) error {
+	root := configDir()
+	names, err := resolveTargets(root, restartFlags.all, restartFlags.group, args)
+	if err != nil {
+		return err
+	}
+	for _, name := range names {
+		if err := validateService(root, name); err != nil {
+			return err
+		}
+		if restartFlags.build {
+			fmt.Printf("%s Rebuilding and recreating %s…\n", styles.Primary.Render("→"), styles.Bold.Render(name))
+			if err := run.Default().DockerComposeEnv(
+				run.ServiceComposeFile(root, name),
+				buildEnv(root, name),
+				"up", "-d", "--build",
+			); err != nil {
+				return err
+			}
+		} else {
+			fmt.Printf("%s Restarting %s…\n", styles.Primary.Render("→"), styles.Bold.Render(name))
+			if err := run.Default().DockerComposeEnv(
+				run.ServiceComposeFile(root, name),
+				buildEnv(root, name),
+				"restart",
+			); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func runServiceLogs(_ *cobra.Command, args []string) error {
+	name := args[0]
+	root := configDir()
+	if err := validateService(root, name); err != nil {
+		return err
+	}
+	// Use the interactive TUI only when on a TTY with no explicit log flags.
+	if isTTY() && !logsFlags.follow && logsFlags.tail == "" && logsFlags.since == "" {
+		return runLogTUI(root, name)
+	}
+	logArgs := []string{"logs"}
+	if logsFlags.follow {
+		logArgs = append(logArgs, "-f")
+	}
+	if logsFlags.tail != "" {
+		logArgs = append(logArgs, "--tail", logsFlags.tail)
+	}
+	if logsFlags.since != "" {
+		logArgs = append(logArgs, "--since", logsFlags.since)
+	}
+	return run.Default().DockerComposeEnv(
+		run.ServiceComposeFile(root, name),
+		buildEnv(root, name),
+		logArgs...,
+	)
+}
+
+// ── helpers ───────────────────────────────────────────────────────────────────
 
 // resolveTargets returns the service names to operate on based on --all, --group, or positional args.
 func resolveTargets(root string, all bool, group string, args []string) ([]string, error) {
@@ -610,7 +355,7 @@ func resolveTargets(root string, all bool, group string, args []string) ([]strin
 		return []string{args[0]}, nil
 	}
 	if !all && group == "" {
-		return nil, fmt.Errorf("service name, --all, or --group <name> required\n\n  Examples:\n    homelab service up jellyfin\n    homelab service up --all\n    homelab service up --group media")
+		return nil, fmt.Errorf("service name, --all, or --group <name> required\n\n  Examples:\n    homelab up jellyfin\n    homelab up --all\n    homelab up --group media")
 	}
 
 	svcs, err := service.Discover(root)
@@ -761,7 +506,7 @@ func printPsTable(name string, summaries []docker.ContainerSummary, details []do
 		if details != nil && i < len(details) {
 			d := details[i]
 			cHealth = styles.Width(wHealth).Render(styles.HealthTag(d.Health))
-			if d.State == "running" && !d.StartedAt.IsZero() {
+			if d.State == containerStateRunning && !d.StartedAt.IsZero() {
 				cUptime = styles.Width(wUptime).Render(
 					styles.Success.Render("↑ " + formatUptime(time.Since(d.StartedAt))))
 			} else if !d.FinishedAt.IsZero() && d.FinishedAt.Year() > 1 {
@@ -1019,14 +764,14 @@ func scaffoldService(root, name, container, port string, dryRun bool) error {
 	fmt.Printf("\n%s  Scaffolded services/%s/\n", styles.Success.Render("✓"), name)
 	fmt.Printf("  %s docker-compose.yml\n", styles.Muted.Render("├──"))
 	fmt.Printf("  %s caddy.conf        %s\n", styles.Muted.Render("├──"), styles.Muted.Render("(private — tailnet)"))
-	fmt.Printf("  %s caddy-pub.conf    %s\n", styles.Muted.Render("├──"), styles.Muted.Render("(public — Cloudflare Tunnel)"))
+	fmt.Printf("  %s caddy.cf.conf     %s\n", styles.Muted.Render("├──"), styles.Muted.Render("(Cloudflare Tunnel)"))
 	fmt.Printf("  %s config.yaml       %s\n\n", styles.Muted.Render("└──"), styles.Muted.Render("(vars + secrets schema)"))
 	fmt.Printf("%s\n", styles.Muted.Render("Next steps:"))
 	fmt.Printf("  1. Edit %s\n", styles.Primary.Render(fmt.Sprintf("services/%s/docker-compose.yml", name)))
-	fmt.Printf("  2. %s\n", styles.Primary.Render(fmt.Sprintf("homelab service setup %s", name)))
-	fmt.Printf("  3. %s\n", styles.Primary.Render(fmt.Sprintf("homelab service up %s", name)))
-	fmt.Printf("  4. %s\n", styles.Primary.Render(fmt.Sprintf("homelab service enable %s --private", name)))
-	fmt.Printf("     %s\n\n", styles.Muted.Render(fmt.Sprintf("homelab service enable %s --public   (requires Cloudflare Tunnel)", name)))
+	fmt.Printf("  2. %s\n", styles.Primary.Render(fmt.Sprintf("homelab setup %s", name)))
+	fmt.Printf("  3. %s\n", styles.Primary.Render(fmt.Sprintf("homelab up %s", name)))
+	fmt.Printf("  4. %s\n", styles.Primary.Render(fmt.Sprintf("homelab enable %s", name)))
+	fmt.Printf("     %s\n\n", styles.Muted.Render(fmt.Sprintf("homelab enable %s --cf   (requires Cloudflare Tunnel)", name)))
 	return nil
 }
 
@@ -1052,7 +797,7 @@ func ensureDBDependencies(ctx context.Context, root, name string) error {
 	p := db.New(root, nil) // nil SM — EnsureRunning doesn't need secrets
 	for dbType := range svcDB {
 		if err := p.EnsureRunning(ctx, dbType); err != nil {
-			return fmt.Errorf("%w\n  Install: homelab service add %s && homelab service up %s",
+			return fmt.Errorf("%w\n  Install: homelab add %s && homelab up %s",
 				err, dbType, dbType)
 		}
 	}

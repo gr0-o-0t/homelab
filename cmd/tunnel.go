@@ -11,8 +11,8 @@ import (
 
 const cloudflaredContainer = "cloudflared"
 
-var tunnelCmd = &cobra.Command{
-	Use:   "tunnel",
+var cfCmd = &cobra.Command{
+	Use:   "cf",
 	Short: "Manage Cloudflare Tunnel (cloudflared)",
 	Long:  "Inspect cloudflared and manage DNS routes for public-internet service exposure.",
 }
@@ -43,11 +43,11 @@ var tunnelStatusCmd = &cobra.Command{
 		}
 
 		state := containerStatus(cloudflaredContainer)
-		if state == "running" {
+		if state == containerStateRunning {
 			fmt.Printf("  %s  cloudflared  %s\n", styles.Success.Render("✓"), styles.StateTag(state))
 		} else {
 			fmt.Printf("  %s  cloudflared  %s\n", styles.Err.Render("✗"), styles.StateTag(state))
-			fmt.Printf("\n  Start with: %s\n\n", styles.Primary.Render("homelab core start"))
+			fmt.Printf("\n  Start with: %s\n\n", styles.Primary.Render("homelab start"))
 			return nil
 		}
 
@@ -94,10 +94,10 @@ var tunnelRouteAddCmd = &cobra.Command{
 	Long: `Register a DNS CNAME so Cloudflare Tunnel serves the service publicly.
 
 Requires CF_TUNNEL_NAME to be set (run 'homelab setup') and the cloudflared
-container to be running ('homelab core start').
+container to be running ('homelab start').
 
 After adding the DNS route, enable the public Caddy config:
-  homelab service enable <service> --public`,
+  homelab enable <service> --cf`,
 	Args:              cobra.ExactArgs(1),
 	ValidArgsFunction: completeServiceNames,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -105,7 +105,7 @@ After adding the DNS route, enable the public Caddy config:
 		root := configDir()
 		env := buildEnv(root, "")
 		if !extEnabled(root, "cf") {
-			return fmt.Errorf("Cloudflare Tunnel not enabled\n\n  Run %s to enable",
+			return fmt.Errorf("cloudflare tunnel not enabled\n\n  Run %s to enable",
 				styles.Primary.Render("homelab ext enable cf"))
 		}
 		if err := requireTunnelConfig(env); err != nil {
@@ -123,7 +123,7 @@ After adding the DNS route, enable the public Caddy config:
 		}
 		fmt.Printf("%s DNS route added: %s\n", styles.Success.Render("✓"), styles.Bold.Render(hostname))
 		fmt.Printf("  Enable public routing: %s\n\n",
-			styles.Primary.Render(fmt.Sprintf("homelab service enable %s --public", name)))
+			styles.Primary.Render(fmt.Sprintf("homelab enable %s --cf", name)))
 		return nil
 	},
 }
@@ -188,6 +188,5 @@ func publicHostname(svcName string, env map[string]string) string {
 
 func init() {
 	tunnelRouteCmd.AddCommand(tunnelRouteAddCmd, tunnelRouteRmCmd)
-	tunnelCmd.AddCommand(tunnelStatusCmd, tunnelLogsCmd, tunnelRouteCmd)
-	rootCmd.AddCommand(tunnelCmd)
+	cfCmd.AddCommand(tunnelRouteCmd)
 }

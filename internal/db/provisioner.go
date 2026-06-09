@@ -90,12 +90,12 @@ func (p *Provisioner) EnsureRunning(ctx context.Context, dbType config.DBType) e
 
 	out, err := p.RC.Output("docker", "inspect", "--format={{.State.Status}}", container)
 	if err != nil {
-		return fmt.Errorf("%s container %q not found or not running\n  Install: homelab service add %s && homelab service up %s",
+		return fmt.Errorf("%s container %q not found or not running\n  Install: homelab add %s && homelab up %s",
 			dbType, container, dbType, dbType)
 	}
 	status := strings.TrimSpace(string(out))
 	if status != "running" {
-		return fmt.Errorf("%s container %q is %s, not running\n  Start: homelab service up %s",
+		return fmt.Errorf("%s container %q is %s, not running\n  Start: homelab up %s",
 			dbType, container, status, dbType)
 	}
 	return nil
@@ -174,7 +174,7 @@ func (p *Provisioner) provisionPostgres(ctx context.Context, svcName string, dec
 	// 4. Extensions.
 	for _, ext := range decl.Extensions {
 		_ = p.RC.Run("docker", "exec", container, "psql", "-U", "postgres", "-d", decl.Database,
-			"-c", fmt.Sprintf("CREATE EXTENSION IF NOT EXISTS \"%s\"", ext))
+			"-c", fmt.Sprintf("CREATE EXTENSION IF NOT EXISTS %q", ext))
 	}
 
 	return nil

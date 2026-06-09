@@ -10,8 +10,13 @@ vars:
 
 secrets:
   # Declare secrets below. Values are stored in the system keyring via
-  # `homelab service setup {{.Name}}` — never written to disk.
+  # `homelab setup {{.Name}}` — never written to disk.
   #
   # Example:
   # APP_SECRET_KEY:
   #   required: true
+
+ports:
+  web:
+    port: {{.Port}}
+    protocol: tcp

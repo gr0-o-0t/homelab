@@ -18,3 +18,6 @@ databases:
       user: GI_DB_USER
       password: GI_DB_PASS
       database: GI_DB_NAME
+ports:
+  web:
+    port: 3000

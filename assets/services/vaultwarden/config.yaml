@@ -26,3 +26,6 @@ secrets:
     required: true
   SMTP_PASSWORD:
     required: false
+ports:
+  web:
+    port: 80

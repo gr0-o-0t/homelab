@@ -29,13 +29,13 @@ type File struct {
 // Render executes all three templates with data and returns the results.
 func Render(data ServiceData) ([]File, error) {
 	type entry struct {
-		tmpl     string
-		relPath  string
+		tmpl    string
+		relPath string
 	}
 	entries := []entry{
 		{"docker-compose.yml.tmpl", fmt.Sprintf("services/%s/docker-compose.yml", data.Name)},
 		{"caddy.conf.tmpl", fmt.Sprintf("services/%s/caddy.conf", data.Name)},
-		{"caddy-pub.conf.tmpl", fmt.Sprintf("services/%s/caddy-pub.conf", data.Name)},
+		{"caddy.cf.conf.tmpl", fmt.Sprintf("services/%s/caddy.cf.conf", data.Name)},
 		{"config.yaml.tmpl", fmt.Sprintf("services/%s/config.yaml", data.Name)},
 	}
 
@@ -63,10 +63,10 @@ func Write(repoRoot string, files []File) error {
 	}
 	for _, f := range files {
 		path := filepath.Join(repoRoot, f.RelPath)
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 			return fmt.Errorf("mkdir %s: %w", filepath.Dir(path), err)
 		}
-		if err := os.WriteFile(path, []byte(f.Content), 0o644); err != nil {
+		if err := os.WriteFile(path, []byte(f.Content), 0o600); err != nil {
 			return fmt.Errorf("writing %s: %w", path, err)
 		}
 	}
@@ -88,4 +88,3 @@ func exec(name string, data ServiceData) (string, error) {
 	}
 	return buf.String(), nil
 }
-

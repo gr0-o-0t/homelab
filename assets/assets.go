@@ -1,5 +1,5 @@
 // Package assets embeds the homelab core stack files and service catalog into
-// the binary so that `homelab setup` and `homelab service add` can install
+// the binary so that `homelab setup` and `homelab add` can install
 // them to the user's config directory without needing the source repository.
 package assets
 
@@ -23,7 +23,7 @@ var CoreFS embed.FS
 // `homelab service add <name>`. Files per service:
 //   - docker-compose.yml  — container stack definition
 //   - caddy.conf          — private (tailnet) reverse-proxy snippet
-//   - caddy-pub.conf      — public (Cloudflare Tunnel) reverse-proxy snippet
+//   - caddy.cf.conf       — Cloudflare Tunnel reverse-proxy snippet
 //   - config.yaml         — vars + secrets schema with sensible defaults
 //
 //go:embed services

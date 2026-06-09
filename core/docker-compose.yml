@@ -109,11 +109,11 @@ services:
     volumes:
       # Main Caddyfile
       - ../caddy/Caddyfile:/etc/caddy/Caddyfile:ro
-      # conf.d, conf.d-pub, and services are mounted under a shared /homelab/
+      # conf.d, conf.d-cf, and services are mounted under a shared /homelab/
       # prefix so that relative symlinks (../../services/…) from conf.d/ resolve
       # to /homelab/services/… in the container — matching the host repo layout.
       - ../caddy/conf.d:/homelab/caddy/conf.d:ro
-      - ../caddy/conf.d-pub:/homelab/caddy/conf.d-pub:ro
+      - ../caddy/conf.d-cf:/homelab/caddy/conf.d-cf:ro
       - ../services:/homelab/services:ro
       # Persistent ACME certs and Caddy state — never delete this volume!
       - caddy-data:/data

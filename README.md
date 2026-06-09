@@ -74,17 +74,19 @@ You will be prompted for:
 ### 4. Start the core stack
 
 ```bash
-homelab core start
-homelab ts status   # copy the 100.x.x.x IP → set as A record value in Cloudflare DNS
+homelab start                   # starts Tailscale + Caddy + enabled extensions
+homelab status                  # check everything is running
 ```
+
+Get the Tailscale IP from `homelab status` and set it as the A record value in Cloudflare DNS.
 
 ### 5. Add and start a service
 
 ```bash
-homelab service add uptime-kuma     # copy from embedded catalog to ~/.config/homelab/services/
-homelab service setup uptime-kuma   # configure vars and secrets interactively
-homelab service up uptime-kuma
-homelab service enable uptime-kuma --private
+homelab add uptime-kuma        # copy from embedded catalog to ~/.config/homelab/services/
+homelab setup uptime-kuma      # configure vars and secrets interactively
+homelab start uptime-kuma      # start (or: homelab up uptime-kuma)
+homelab enable uptime-kuma     # expose on tailnet via Caddy
 ```
 
 Visit `https://status.home.example.com` from any device on your tailnet.
@@ -93,44 +95,105 @@ Visit `https://status.home.example.com` from any device on your tailnet.
 
 ## CLI reference
 
+### Global flags
+
 ```
-homelab                              # interactive service browser (TUI)
-
-homelab service list                 # list all services and their status
-homelab service add [name]           # install a bundled service from the catalog
-homelab service up <name>            # start a service stack
-homelab service down <name>          # stop a service stack
-homelab service restart <name>       # restart a service stack
-homelab service logs <name>          # tail logs (TUI log viewer)
-homelab service ps <name>            # show container status
-homelab service enable <name>        # expose via Caddy (--private, --public, or both)
-homelab service disable <name>       # remove from Caddy routing
-homelab service setup <name>         # configure vars and secrets interactively
-homelab service doctor <name>        # health check for a specific service
-homelab service update <name>        # pull latest images and restart
-homelab service new [name]           # scaffold a new service (interactive wizard)
-
-homelab core start                   # start Tailscale + Caddy
-homelab core stop                    # stop Tailscale + Caddy
-homelab core restart                 # restart core stack
-homelab core logs                    # tail core stack logs
-homelab core status                  # show core container status
-
-homelab caddy reload                 # validate + gracefully reload Caddy
-homelab caddy validate               # validate Caddyfile syntax only
-
-homelab ts status                    # print Tailscale node FQDN
-
-homelab tunnel status                # show Cloudflare Tunnel status
-homelab tunnel logs                  # stream cloudflared logs
-homelab tunnel route add <service>   # add DNS route for public exposure
-homelab tunnel route rm <service>    # remove DNS route
-
-homelab setup                        # interactive config wizard (config.yaml + keyring)
-homelab doctor                       # health check
+--config-dir <path>   config directory (default: ~/.config/homelab)
+--config <file>       root config file; overrides config-dir/config.yaml
+--json                output as JSON (on commands that support it)
+--no-color            disable coloured output
 ```
 
-Global flags: `--config-dir <path>`, `--config <file>`, `--no-color`, `--json`
+### Service lifecycle
+
+```
+homelab add [name]              Install from catalog (no name → list catalog)
+homelab new [name]              Scaffold a new service directory (interactive wizard)
+homelab setup [service]         Configure vars and secrets (no arg → root setup wizard)
+homelab start [service]         Start core stack or service(s)
+homelab stop [service]          Stop core stack or service(s)
+homelab restart [service]       Restart containers
+homelab reload [service]        Reload Caddy config or a service's routing config
+homelab update [service]        Pull latest images and recreate containers
+homelab delete <service>        Remove service entirely (alias: rm)
+homelab status [service]        Show status overview or per-service detail
+homelab logs [service]          Tail logs (TTY → interactive TUI log viewer)
+```
+
+`start`, `stop`, and `restart` accept batch flags:
+
+```
+homelab start --all                  # all services
+homelab start --group media          # by group (defined in config.yaml)
+homelab start --group media --all    # error: mutually exclusive
+```
+
+Aliases: `start` ↔ `up`, `stop` ↔ `down`
+
+### Network routing
+
+```
+homelab enable <service>           Expose on tailnet via Caddy (private)
+homelab enable <service> --cf      Also expose via Cloudflare Tunnel (public)
+homelab enable <service> --tor     Also expose as Tor .onion service
+homelab enable <service> --i2p     Also expose as I2P eepsite
+homelab enable <service> --ygg     Also expose on Yggdrasil mesh
+
+homelab disable <service>          Remove private tailnet route
+homelab disable <service> --cf     Remove Cloudflare Tunnel route
+homelab disable <service> --tor    Remove Tor .onion service
+homelab disable <service> --i2p    Remove I2P eepsite tunnel
+homelab disable <service> --ygg    Remove Yggdrasil forwarder
+```
+
+### Diagnostics
+
+```
+homelab doctor                     Environment health check
+homelab doctor <service>           Per-service health check
+homelab doctor --all               Check all installed services
+homelab validate                   Validate Caddyfile syntax only
+```
+
+### Network extensions
+
+Extensions are managed via the `ext` subcommand:
+
+```
+homelab ext list                   List extensions and their enabled/disabled status
+homelab ext status [ext]           Show container status for all or one
+homelab ext logs [ext]             Stream container logs for all or one
+homelab ext start [ext]            Start extension container(s)
+homelab ext stop [ext]             Stop extension container(s)
+```
+
+Service-level exposure (through an extension) is managed via the root
+`enable`/`disable` commands:
+
+```
+homelab enable <svc> --i2p    expose via I2P eepsite
+homelab enable <svc> --tor    expose as Tor .onion service
+homelab enable <svc> --ygg    expose on Yggdrasil mesh
+homelab disable <svc> --i2p   remove I2P exposure
+```
+
+Extension-specific advanced subcommands:
+
+```
+homelab ext cf route add <service>     # add Cloudflare DNS route
+homelab ext cf route rm <service>      # remove Cloudflare DNS route
+homelab ext ipfs gateway enable        # enable IPFS Gateway Caddy route
+homelab ext ipfs gateway disable       # disable IPFS Gateway Caddy route
+```
+
+### Service subcommand (legacy, hidden)
+
+The `service` subcommand still exists for backward compatibility:
+
+```
+homelab service list               # list all services and their exposure status
+homelab service ps <service>       # show container status
+```
 
 ---
 
@@ -199,17 +262,31 @@ homelab/
 │       └── vaultwarden/
 │
 ├── cmd/                      # Cobra command definitions
-│   ├── root.go               # --config-dir / --config flags
-│   ├── service.go            # service lifecycle commands
-│   ├── add.go                # homelab service add
-│   ├── update.go             # homelab service update
-│   ├── tunnel.go             # homelab tunnel commands
-│   ├── setup.go              # homelab setup + homelab service setup
-│   ├── core.go               # homelab core *
-│   ├── caddy.go              # homelab caddy *
-│   ├── tailscale.go          # homelab ts status
-│   ├── doctor.go             # homelab doctor + homelab service doctor
-│   └── completion.go         # shell completion generation
+│   ├── root.go               # --config-dir / --config flags, TUI launcher
+│   ├── service.go            # service lifecycle functions (runServiceUp, etc.)
+│   ├── add.go                # homelab add
+│   ├── caddy.go              # homelab reload + homelab validate
+│   ├── delete.go             # homelab delete (alias: rm)
+│   ├── disable.go            # homelab disable
+│   ├── doctor.go             # homelab doctor
+│   ├── enable.go             # homelab enable
+│   ├── ext.go                # homelab ext (list + extension command hub)
+│   ├── i2p.go                # homelab ext i2p
+│   ├── ipfs.go               # homelab ext ipfs
+│   ├── logs.go               # homelab logs
+│   ├── new.go                # homelab new
+│   ├── restart.go            # homelab restart
+│   ├── setup.go              # homelab setup
+│   ├── start.go              # homelab start (+ up alias)
+│   ├── status.go             # homelab status
+│   ├── stop.go               # homelab stop (+ down alias)
+│   ├── tor.go                # homelab ext tor
+│   ├── tunnel.go             # homelab ext cf
+│   ├── update.go             # homelab update
+│   ├── yggdrasil.go          # homelab ext ygg
+│   ├── completion.go         # shell completion generation
+│   ├── commands_test.go      # integration tests
+│   └── service_add_test.go   # add command tests
 │
 ├── internal/                 # Go packages
 │   ├── caddy/                # symlink management + Caddy reload
@@ -249,7 +326,7 @@ All runtime state lives under `${XDG_CONFIG_HOME:-$HOME/.config}/homelab/`:
     └── uptime-kuma/
         ├── docker-compose.yml
         ├── caddy.conf
-        ├── caddy-pub.conf
+        ├── caddy.cf.conf
         └── config.yaml  # vars + secrets schema
 ```
 
@@ -339,21 +416,21 @@ docker exec caddy ping <container-name>
 **TLS cert not issuing**
 
 ```bash
-homelab core logs caddy | grep -i "acme\|tls\|cloudflare"
+homelab logs | grep -i "acme\|tls\|cloudflare"
 # Check CLOUDFLARE_API_TOKEN has DNS:Edit permission
 ```
 
 **Tailscale not connecting**
 
 ```bash
-homelab core logs tailscale
+homelab logs | grep tailscale
 # Check TS_AUTHKEY hasn't expired
 ```
 
-**`homelab service enable` fails Caddyfile validation**
+**`homelab enable` fails Caddyfile validation**
 
 ```bash
-homelab caddy validate
+homelab validate
 # Check caddy/conf.d/<service>.conf for syntax errors
 ```
 
@@ -404,7 +481,7 @@ Contributions are welcome! The project is in active development, and many servic
 
 See [docs/adding-a-service.md](docs/adding-a-service.md) for step-by-step instructions. The key requirements:
 
-- Create `assets/services/<name>/` with `docker-compose.yml`, `caddy.conf`, `caddy-pub.conf`, and `config.yaml`
+- Create `assets/services/<name>/` with `docker-compose.yml`, `caddy.conf`, `caddy.cf.conf`, and `config.yaml`
 - Follow the network pattern: main container on `home-services`, databases/workers on `internal: true` network
 - Use sensible defaults in `config.yaml` with `vars` (non-secrets) and `secrets` (keyring-stored) sections
 - Test the service end-to-end before submitting

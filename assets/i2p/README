@@ -1,10 +1,19 @@
-# I2P configuration
+# I2P (i2pd) configuration
 
-I2P is configured via its Router Console at http://i2p:7657.
+i2pd is a lightweight C++ I2P router. Replaces Java I2P.
 
-For eepsite hosting:
-1. Open the Router Console
-2. Navigate to Hidden Services Manager
-3. Create a new HTTP tunnel pointing to <service>:<port>
+## Ports
+- 7070 - Web Console (http://i2p:7070)
+- 4444 - HTTP proxy (outbound)
+- 4447 - SOCKS proxy (outbound)
+- 7656 - SAM bridge (app access)
+- 45678 - NTCP2/SSU2 transport (external, configurable)
 
-Managed by: homelab i2p enable/disable
+## Eepsite management
+Eepsite tunnels are defined in tunnels.conf.
+Use the CLI:
+  homelab i2p enable <service>   # add eepsite tunnel
+  homelab i2p disable <service>  # remove eepsite tunnel
+  homelab i2p list               # list active tunnels
+
+After changes, i2pd reloads config automatically via SIGHUP.

@@ -6,3 +6,6 @@ vars:
 secrets:
   WEBUI_SECRET_KEY:
     required: true
+ports:
+  web:
+    port: 8080

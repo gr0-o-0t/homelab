@@ -71,7 +71,7 @@ func TestCaddyValidate_MissingCaddyfile(t *testing.T) {
 	rootCmd := cmd.RootCmd()
 	rootCmd.SetArgs([]string{
 		"--config-dir", tmp,
-		"caddy", "validate",
+		"validate",
 	})
 
 	err := rootCmd.Execute()
@@ -84,7 +84,7 @@ func TestServiceUp_MissingService(t *testing.T) {
 	rootCmd := cmd.RootCmd()
 	rootCmd.SetArgs([]string{
 		"--config-dir", tmp,
-		"service", "up", "nonexistent-service",
+		"up", "nonexistent-service",
 	})
 
 	err := rootCmd.Execute()
@@ -97,33 +97,7 @@ func TestServiceDown_MissingService(t *testing.T) {
 	rootCmd := cmd.RootCmd()
 	rootCmd.SetArgs([]string{
 		"--config-dir", tmp,
-		"service", "down", "nonexistent-service",
-	})
-
-	err := rootCmd.Execute()
-	assert.Error(t, err)
-}
-
-func TestServiceEnable_MissingService(t *testing.T) {
-	tmp := t.TempDir()
-
-	rootCmd := cmd.RootCmd()
-	rootCmd.SetArgs([]string{
-		"--config-dir", tmp,
-		"service", "enable", "nonexistent-service",
-	})
-
-	err := rootCmd.Execute()
-	assert.Error(t, err)
-}
-
-func TestServiceDisable_MissingService(t *testing.T) {
-	tmp := t.TempDir()
-
-	rootCmd := cmd.RootCmd()
-	rootCmd.SetArgs([]string{
-		"--config-dir", tmp,
-		"service", "disable", "nonexistent-service",
+		"down", "nonexistent-service",
 	})
 
 	err := rootCmd.Execute()
@@ -153,18 +127,17 @@ func TestServiceUpdate_NoArgs(t *testing.T) {
 	tmp := t.TempDir()
 
 	rootCmd := cmd.RootCmd()
-	rootCmd.SetArgs([]string{"--config-dir", tmp, "service", "update"})
+	rootCmd.SetArgs([]string{"--config-dir", tmp, "update"})
 
 	err := rootCmd.Execute()
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "required")
+	assert.Error(t, err) // core stack update fails because no Docker containers
 }
 
 func TestServiceUpdate_MissingService(t *testing.T) {
 	tmp := t.TempDir()
 
 	rootCmd := cmd.RootCmd()
-	rootCmd.SetArgs([]string{"--config-dir", tmp, "service", "update", "nonexistent"})
+	rootCmd.SetArgs([]string{"--config-dir", tmp, "update", "nonexistent"})
 
 	err := rootCmd.Execute()
 	assert.Error(t, err)
@@ -175,33 +148,20 @@ func TestServiceUpdate_AllEmpty(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(tmp, "services"), 0o755))
 
 	rootCmd := cmd.RootCmd()
-	rootCmd.SetArgs([]string{"--config-dir", tmp, "service", "update", "--all"})
+	rootCmd.SetArgs([]string{"--config-dir", tmp, "update", "--all"})
 
 	err := rootCmd.Execute()
 	assert.NoError(t, err)
 }
 
-// ── service enable / disable ──────────────────────────────────────────────────
-
-func TestServiceEnable_MissingRouteFlags(t *testing.T) {
-	tmp := t.TempDir()
-
-	rootCmd := cmd.RootCmd()
-	rootCmd.SetArgs([]string{"--config-dir", tmp, "service", "enable", "jellyfin"})
-
-	err := rootCmd.Execute()
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "--private")
-}
-
-// ── service up --all ──────────────────────────────────────────────────────────
+// ── up --all ──────────────────────────────────────────────────────────────────
 
 func TestServiceUp_AllEmpty(t *testing.T) {
 	tmp := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(tmp, "services"), 0o755))
 
 	rootCmd := cmd.RootCmd()
-	rootCmd.SetArgs([]string{"--config-dir", tmp, "service", "up", "--all"})
+	rootCmd.SetArgs([]string{"--config-dir", tmp, "up", "--all"})
 
 	err := rootCmd.Execute()
 	assert.NoError(t, err)
@@ -213,11 +173,10 @@ func TestServiceDoctor_NoArgsNoAll(t *testing.T) {
 	tmp := t.TempDir()
 
 	rootCmd := cmd.RootCmd()
-	rootCmd.SetArgs([]string{"--config-dir", tmp, "service", "doctor"})
+	rootCmd.SetArgs([]string{"--config-dir", tmp, "doctor"})
 
 	err := rootCmd.Execute()
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "required")
+	assert.NoError(t, err) // root doctor runs health checks, succeeds
 }
 
 func TestServiceDoctor_AllNoServices(t *testing.T) {
@@ -225,7 +184,7 @@ func TestServiceDoctor_AllNoServices(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(tmp, "services"), 0o755))
 
 	rootCmd := cmd.RootCmd()
-	rootCmd.SetArgs([]string{"--config-dir", tmp, "service", "doctor", "--all"})
+	rootCmd.SetArgs([]string{"--config-dir", tmp, "doctor", "--all"})
 
 	err := rootCmd.Execute()
 	assert.NoError(t, err)
@@ -237,7 +196,7 @@ func TestTunnelStatus_NotConfigured(t *testing.T) {
 	tmp := t.TempDir()
 
 	rootCmd := cmd.RootCmd()
-	rootCmd.SetArgs([]string{"--config-dir", tmp, "tunnel", "status"})
+	rootCmd.SetArgs([]string{"--config-dir", tmp, "ext", "cf", "status"})
 
 	err := rootCmd.Execute()
 	assert.NoError(t, err) // prints "Not configured" but does not error
@@ -247,7 +206,7 @@ func TestTunnelRouteAdd_NotEnabled(t *testing.T) {
 	tmp := t.TempDir()
 
 	rootCmd := cmd.RootCmd()
-	rootCmd.SetArgs([]string{"--config-dir", tmp, "tunnel", "route", "add", "jellyfin"})
+	rootCmd.SetArgs([]string{"--config-dir", tmp, "ext", "cf", "route", "add", "jellyfin"})
 
 	err := rootCmd.Execute()
 	assert.Error(t, err)

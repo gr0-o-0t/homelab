@@ -18,3 +18,8 @@ databases:
       user: F_DB_USER
       password: F_DB_PASS
       database: F_DB_NAME
+ports:
+  web:
+    port: 3000
+  ssh:
+    port: 22

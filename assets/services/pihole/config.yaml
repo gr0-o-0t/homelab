@@ -6,3 +6,6 @@ vars:
 secrets:
   WEB_PASSWORD:
     required: true
+ports:
+  web:
+    port: 80

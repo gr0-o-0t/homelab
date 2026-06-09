@@ -120,7 +120,7 @@ gitignored export (`make catalog`) for local browsing only.
 Each service directory contains:
 - `docker-compose.yml` — UI container joins `home-services`; databases use `internal: true` network
 - `caddy.conf` — private reverse proxy snippet (tailnet)
-- `caddy-pub.conf` — public reverse proxy snippet (Cloudflare Tunnel)
+- `caddy.cf.conf` — public reverse proxy snippet (Cloudflare Tunnel)
 - `config.yaml` — vars + secrets schema with sensible defaults
 
 ### Config Schema — Groups

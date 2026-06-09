@@ -23,7 +23,7 @@ var testData = scaffold.ServiceData{
 func TestRender_ProducesFourFiles(t *testing.T) {
 	files, err := scaffold.Render(testData)
 	require.NoError(t, err)
-	require.Len(t, files, 4, "expected docker-compose, caddy.conf, caddy-pub.conf, config.yaml")
+	require.Len(t, files, 4, "expected docker-compose, caddy.conf, caddy.cf.conf, config.yaml")
 }
 
 func TestRender_ExpectedPaths(t *testing.T) {
@@ -36,7 +36,7 @@ func TestRender_ExpectedPaths(t *testing.T) {
 	}
 	assert.Contains(t, paths, "services/myapp/docker-compose.yml")
 	assert.Contains(t, paths, "services/myapp/caddy.conf")
-	assert.Contains(t, paths, "services/myapp/caddy-pub.conf")
+	assert.Contains(t, paths, "services/myapp/caddy.cf.conf")
 	assert.Contains(t, paths, "services/myapp/config.yaml")
 }
 
@@ -64,9 +64,9 @@ func TestRender_PublicCaddyConf(t *testing.T) {
 	files, err := scaffold.Render(testData)
 	require.NoError(t, err)
 
-	conf := findFile(t, files, "services/myapp/caddy-pub.conf")
+	conf := findFile(t, files, "services/myapp/caddy.cf.conf")
 	assert.Contains(t, conf, "myapp.{$PUB_SUBDOMAIN}.{$DOMAIN}",
-		"public caddy-pub.conf should use PUB_SUBDOMAIN")
+		"public caddy.cf.conf should use PUB_SUBDOMAIN")
 	assert.Contains(t, conf, "reverse_proxy myapp-server:3000")
 	assert.Contains(t, conf, "import wildcard_tls")
 }
@@ -94,7 +94,7 @@ func TestRender_PrivateAndPublicDiffer(t *testing.T) {
 	require.NoError(t, err)
 
 	private := findFile(t, files, "services/myapp/caddy.conf")
-	public := findFile(t, files, "services/myapp/caddy-pub.conf")
+	public := findFile(t, files, "services/myapp/caddy.cf.conf")
 	assert.NotEqual(t, private, public,
 		"private and public Caddy configs should use different subdomain variables")
 	assert.True(t, strings.Contains(private, "HOME_SUBDOMAIN") && strings.Contains(public, "PUB_SUBDOMAIN"))

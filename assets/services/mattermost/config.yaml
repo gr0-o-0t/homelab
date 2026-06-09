@@ -11,3 +11,6 @@ databases:
     user: mattermost
     env:
       "postgres://{user}:{password}@{host}:{port}/{database}?sslmode=disable&connect_timeout=10": MM_DATASOURCE
+ports:
+  web:
+    port: 8065

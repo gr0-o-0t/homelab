@@ -1,2 +1,5 @@
 vars: {}
 secrets: {}
+ports:
+  web:
+    port: 5380

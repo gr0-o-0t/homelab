@@ -10,18 +10,59 @@ linters:
     - errcheck
     - staticcheck
     - govet
-
-linters-settings:
-  errcheck:
-    check-type-assertions: true
-    check-blank: true
-  staticcheck:
-    checks:
-      - "all"
-      - "-ST1000"
-      - "-SA*"
+    - ineffassign
+    - errorlint
+    - gosec
+    - goconst
+    - intrange
+    - gocritic
+  settings:
+    errcheck:
+      check-type-assertions: false
+      check-blank: false
+    staticcheck:
+      checks:
+        - "all"
+        - "-ST1000"
+    gosec:
+      excludes:
+        - G115
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - performance
+      disabled-checks:
+        - ifElseChain
+        - hugeParam
+    goconst:
+      min-len: 3
+      min-occurrences: 10
+  exclusions:
+    rules:
+      - path: '(.+)_test\.go'
+        linters:
+          - goconst
+          - gocritic
+      - path: internal/run/commander.go
+        text: G204
+      - path: cmd/doctor.go
+        text: G204
+      - path: cmd/tor.go
+        text: G204|G304
+      - path: cmd/i2p.go
+        text: G304|G306|G703
+      - path: internal/configgen/configgen.go
+        text: G306|QF1012
+      - path: internal/tui/logs/model.go
+        text: G204
+      - path: internal/config/config.go
+        text: G304
+      - path: cmd/yggdrasil.go
+        text: G304
+      - path: _test\.go
+        linters:
+          - gosec
 
 issues:
-  exclude-use-default: false
   max-issues-per-linter: 0
   max-same-issues: 0

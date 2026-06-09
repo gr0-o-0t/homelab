@@ -19,7 +19,7 @@ func newRepo(t *testing.T) string {
 	dir := t.TempDir()
 	for _, d := range []string{
 		"caddy/conf.d",
-		"caddy/conf.d-pub",
+		"caddy/conf.d-cf",
 		"services",
 	} {
 		require.NoError(t, os.MkdirAll(filepath.Join(dir, d), 0o755))
@@ -56,12 +56,12 @@ func enablePrivate(t *testing.T, repo, name string) {
 	require.NoError(t, os.Symlink(src, dest))
 }
 
-// enablePublic creates the caddy/conf.d-pub/<name>.conf symlink.
+// enablePublic creates the caddy/conf.d-cf/<name>.conf symlink.
 func enablePublic(t *testing.T, repo, name string) {
 	t.Helper()
-	src := filepath.Join(repo, "services", name, "caddy-pub.conf")
-	write(t, src, "# caddy-pub.conf\n")
-	dest := filepath.Join(repo, "caddy", "conf.d-pub", name+".conf")
+	src := filepath.Join(repo, "services", name, "caddy.cf.conf")
+	write(t, src, "# caddy.cf.conf\n")
+	dest := filepath.Join(repo, "caddy", "conf.d-cf", name+".conf")
 	require.NoError(t, os.Symlink(src, dest))
 }
 
@@ -111,7 +111,7 @@ func TestDiscover_HasCaddyConf(t *testing.T) {
 
 func TestDiscover_HasPublicCaddyConf(t *testing.T) {
 	repo := newRepo(t)
-	addService(t, repo, "myapp", "caddy-pub.conf", "# pub conf\n")
+	addService(t, repo, "myapp", "caddy.cf.conf", "# pub conf\n")
 
 	svcs, err := service.Discover(repo)
 	require.NoError(t, err)
@@ -141,7 +141,7 @@ func TestDiscover_PublicEnabled(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, svcs, 1)
 	assert.False(t, svcs[0].Enabled)
-	assert.True(t, svcs[0].PublicEnabled, "symlink in conf.d-pub → PublicEnabled=true")
+	assert.True(t, svcs[0].PublicEnabled, "symlink in conf.d-cf → PublicEnabled=true")
 }
 
 func TestDiscover_BothEnabled(t *testing.T) {

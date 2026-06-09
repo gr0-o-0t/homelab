@@ -24,27 +24,60 @@ import (
 // ── homelab doctor ────────────────────────────────────────────────────────────
 
 var doctorFixFlag bool
+var doctorAllFlag bool
 
 var doctorCmd = &cobra.Command{
-	Use:   "doctor",
-	Short: "Check homelab health and configuration",
-	Long: `Runs a series of health checks on the homelab environment:
+	Use:   "doctor [service]",
+	Short: "Check homelab or service health",
+	Long: `Runs health checks. Without arguments, checks the homelab environment.
+With a service name, checks that specific service.
 
-  • Config directory present and config.yaml valid
-  • Required vars and secrets populated
-  • Docker daemon running
-  • home-services network present
-  • /dev/net/tun device available
-  • Core containers (tailscale, caddy) running
-  • Caddy config valid
-  • Tailscale connected
+  homelab doctor          # core stack + environment
+  homelab doctor jellyfin # single service
+  homelab doctor --all    # all installed services
 
 Pass --fix to automatically repair safe issues (missing network, broken symlinks).`,
-	RunE: runDoctor,
+	Args:              cobra.MaximumNArgs(1),
+	ValidArgsFunction: completeServiceNames,
+	RunE:              runDoctor,
 }
 
-func runDoctor(_ *cobra.Command, _ []string) error {
+func runDoctor(_ *cobra.Command, args []string) error {
 	dir := configDir()
+
+	// Service doctor — --all or named service
+	if doctorAllFlag || len(args) > 0 {
+		if doctorAllFlag {
+			svcs, err := service.Discover(dir)
+			if err != nil {
+				return err
+			}
+			if len(svcs) == 0 {
+				fmt.Println(styles.Muted.Render("\n  No services found.\n"))
+				return nil
+			}
+			var failed []string
+			for _, svc := range svcs {
+				ok := runServiceDoctorFor(dir, svc.Name, doctorFixFlag)
+				if !ok {
+					failed = append(failed, svc.Name)
+				}
+			}
+			fmt.Println()
+			if len(failed) > 0 {
+				fmt.Printf("  %s %s\n\n",
+					styles.Err.Render("Checks failed for:"),
+					strings.Join(failed, ", "))
+			} else {
+				fmt.Printf("  %s\n\n", styles.Success.Render("All services healthy."))
+			}
+			return nil
+		}
+		// Single service
+		runServiceDoctorFor(dir, args[0], doctorFixFlag)
+		return nil
+	}
+
 	cfgFile := rootConfigFile()
 
 	fmt.Printf("\n%s\n\n", styles.Header.Render("Homelab Health Check"))
@@ -115,14 +148,14 @@ func runDoctor(_ *cobra.Command, _ []string) error {
 	fmt.Printf("\n  %s\n", styles.Bold.Render("Caddy routing"))
 
 	caddyConfD := filepath.Join(dir, "caddy", "conf.d")
-	caddyConfDPub := filepath.Join(dir, "caddy", "conf.d-pub")
+	caddyConfDPub := filepath.Join(dir, "caddy", "conf.d-cf")
 
 	for _, d := range []string{caddyConfD, caddyConfDPub} {
 		rel, _ := filepath.Rel(dir, d)
 		if _, err := os.Stat(d); os.IsNotExist(err) {
 			check(false, rel+" directory present")
 			if doctorFixFlag {
-				if mkErr := os.MkdirAll(d, 0o755); mkErr == nil {
+				if mkErr := os.MkdirAll(d, 0o750); mkErr == nil {
 					fmt.Printf("  %s  %s created\n", styles.Success.Render("✓"), rel)
 				} else {
 					warn(fmt.Sprintf("Could not create %s: %v", rel, mkErr))
@@ -144,10 +177,10 @@ func runDoctor(_ *cobra.Command, _ []string) error {
 	check(fileExistsAt(run.CoreComposeFile(dir)), "core/docker-compose.yml present")
 
 	tsState := containerStatus("tailscale")
-	check(tsState == "running", fmt.Sprintf("tailscale container %s", stateLabel(tsState)))
+	check(tsState == containerStateRunning, fmt.Sprintf("tailscale container %s", stateLabel(tsState)))
 
 	caddyState := containerStatus("caddy")
-	caddyRunning := caddyState == "running"
+	caddyRunning := caddyState == containerStateRunning
 	check(caddyRunning, fmt.Sprintf("caddy container %s", stateLabel(caddyState)))
 
 	if caddyRunning {
@@ -157,7 +190,7 @@ func runDoctor(_ *cobra.Command, _ []string) error {
 		check(valErr == nil, "Caddy config valid")
 	}
 
-	if tsState == "running" {
+	if tsState == containerStateRunning {
 		ip, connected := tailscaleIP()
 		if connected {
 			check(true, fmt.Sprintf("Tailscale connected (%s)", ip))
@@ -169,7 +202,7 @@ func runDoctor(_ *cobra.Command, _ []string) error {
 	// ── Network Extensions ────────────────────────────────────────────────────
 	fmt.Printf("\n  %s\n", styles.Bold.Render("Network Extensions"))
 
-	extNames := []string{"cf", "tor", "i2p", "yggdrasil", "ipfs"}
+	extNames := []string{"cf", torContainer, i2pContainer, yggContainer, ipfsContainer}
 	extContainers := map[string]string{
 		"cf":        "cloudflared",
 		"tor":       "tor",
@@ -181,7 +214,7 @@ func runDoctor(_ *cobra.Command, _ []string) error {
 		if cfg != nil && cfg.HasExtension(ext) {
 			cName := extContainers[ext]
 			cState := containerStatus(cName)
-			check(cState == "running", fmt.Sprintf("%s (%s) container %s",
+			check(cState == containerStateRunning, fmt.Sprintf("%s (%s) container %s",
 				config.ExtensionLabel(ext), cName, stateLabel(cState)))
 		}
 	}
@@ -317,7 +350,7 @@ func runServiceDoctorFor(dir, name string, fix bool) bool {
 			check(false, "no containers found")
 		} else {
 			for _, s := range summaries {
-				check(s.State == "running",
+				check(s.State == containerStateRunning,
 					fmt.Sprintf("%s %s", s.Name, stateLabel(s.State)))
 			}
 		}
@@ -356,6 +389,7 @@ func runServiceDoctorFor(dir, name string, fix bool) bool {
 
 func init() {
 	doctorCmd.Flags().BoolVar(&doctorFixFlag, "fix", false, "Auto-repair safe issues (missing network, broken symlinks, missing dirs)")
+	doctorCmd.Flags().BoolVar(&doctorAllFlag, "all", false, "Run doctor for all installed services")
 	serviceDoctorCmd.Flags().BoolVar(&serviceDoctorFlags.all, "all", false, "Run doctor for all installed services")
 	serviceDoctorCmd.Flags().BoolVar(&serviceDoctorFlags.fix, "fix", false, "Auto-repair safe issues")
 	serviceCmd.AddCommand(serviceDoctorCmd)
@@ -376,7 +410,7 @@ func dockerDaemonUp() bool {
 }
 
 func containerStatus(name string) string {
-	out, err := exec.Command(
+	out, err := exec.Command( // nosec G204 -- binary is "docker", name is service name constant
 		"docker", "inspect", "--format={{.State.Status}}", name,
 	).Output()
 	if err != nil {
@@ -387,8 +421,8 @@ func containerStatus(name string) string {
 
 func stateLabel(state string) string {
 	switch state {
-	case "running":
-		return styles.Success.Render("running")
+	case containerStateRunning:
+		return styles.Success.Render(containerStateRunning)
 	case "not found":
 		return styles.Err.Render("not found")
 	default:

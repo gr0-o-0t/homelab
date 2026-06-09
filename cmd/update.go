@@ -14,27 +14,31 @@ var updateAllFlag bool
 
 var serviceUpdateCmd = &cobra.Command{
 	Use:   "update [service]",
-	Short: "Pull latest images and restart a service",
-	Long: `Pull the latest Docker images and recreate containers for a service.
+	Short: "Pull latest images and restart core stack or a service",
+	Long: `Pull the latest Docker images and recreate containers.
 
-  homelab service update jellyfin     # update one service
-  homelab service update --all        # update every installed service`,
+  homelab update              # update core stack (tailscale, caddy, extensions)
+  homelab update jellyfin     # update one service
+  homelab update --all        # update every installed service`,
 	Args:              cobra.MaximumNArgs(1),
 	ValidArgsFunction: completeServiceNames,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		root := configDir()
-		if updateAllFlag {
-			return updateAllServices(root)
-		}
-		if len(args) == 0 {
-			return fmt.Errorf("service name required (or use --all)")
-		}
+	RunE:              runServiceUpdate,
+}
+
+func runServiceUpdate(_ *cobra.Command, args []string) error {
+	root := configDir()
+	if updateAllFlag {
+		return updateAllServices(root)
+	}
+	if len(args) > 0 {
 		name := args[0]
 		if err := validateService(root, name); err != nil {
 			return err
 		}
 		return updateOneService(root, name)
-	},
+	}
+	// No args → update core stack
+	return updateCoreStack(root)
 }
 
 func updateOneService(root, name string) error {
@@ -53,6 +57,25 @@ func updateOneService(root, name string) error {
 	}
 
 	fmt.Printf("%s %s updated\n\n", styles.Success.Render("✓"), styles.Bold.Render(name))
+	return nil
+}
+
+func updateCoreStack(root string) error {
+	fmt.Printf("%s Updating core stack…\n", styles.Primary.Render("→"))
+	env := buildEnv(root, "")
+	composeFile := run.CoreComposeFile(root)
+
+	fmt.Printf("  %s\n", styles.Muted.Render("pulling latest images…"))
+	if err := run.Default().DockerComposeEnv(composeFile, env, "pull"); err != nil {
+		return fmt.Errorf("pulling core images: %w", err)
+	}
+
+	fmt.Printf("  %s\n", styles.Muted.Render("recreating containers…"))
+	if err := run.Default().DockerComposeEnv(composeFile, env, "up", "-d", "--remove-orphans"); err != nil {
+		return fmt.Errorf("restarting core stack: %w", err)
+	}
+
+	fmt.Printf("%s Core stack updated\n", styles.Success.Render("✓"))
 	return nil
 }
 
@@ -81,5 +104,4 @@ func updateAllServices(root string) error {
 
 func init() {
 	serviceUpdateCmd.Flags().BoolVar(&updateAllFlag, "all", false, "Update all installed services")
-	serviceCmd.AddCommand(serviceUpdateCmd)
 }

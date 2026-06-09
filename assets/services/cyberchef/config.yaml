@@ -1,3 +1,6 @@
 vars: {}
 
 secrets: {}
+ports:
+  web:
+    port: 80

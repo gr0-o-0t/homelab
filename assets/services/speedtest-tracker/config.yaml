@@ -13,3 +13,6 @@ secrets:
   APP_KEY:
     required: true
     description: "Laravel app key — run: echo base64:$(openssl rand -base64 32)"
+ports:
+  web:
+    port: 8888

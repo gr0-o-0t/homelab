@@ -16,7 +16,7 @@ const torContainer = "tor"
 const torHiddenServiceDir = "/var/lib/tor/hidden_service"
 
 var torCmd = &cobra.Command{
-	Use:   "tor",
+	Use:   torContainer,
 	Short: "Manage Tor onion service proxy",
 	Long:  "Inspect gnzsnz/torproxy and manage .onion hidden services.",
 }
@@ -39,11 +39,11 @@ var torStatusCmd = &cobra.Command{
 		}
 
 		state := containerStatus(torContainer)
-		if state == "running" {
+		if state == containerStateRunning {
 			fmt.Printf("  %s  tor  %s\n", styles.Success.Render("✓"), styles.StateTag(state))
 		} else {
 			fmt.Printf("  %s  tor  %s\n", styles.Err.Render("✗"), styles.StateTag(state))
-			fmt.Printf("\n  Start with: %s\n\n", styles.Primary.Render("homelab core start"))
+			fmt.Printf("\n  Start with: %s\n\n", styles.Primary.Render("homelab start"))
 			return nil
 		}
 
@@ -62,7 +62,7 @@ var torStatusCmd = &cobra.Command{
 				continue
 			}
 			name := strings.TrimSuffix(e.Name(), ".conf")
-			onion, err := exec.Command(
+			onion, err := exec.Command( // nosec G204 -- binary is "docker", paths are programmatic
 				"docker", "exec", torContainer,
 				"cat", filepath.Join(torHiddenServiceDir, name, "hostname"),
 			).Output()
@@ -124,7 +124,7 @@ var torListCmd = &cobra.Command{
 				continue
 			}
 			name := strings.TrimSuffix(e.Name(), ".conf")
-			onion, err := exec.Command(
+			onion, err := exec.Command( // nosec G204 -- binary is "docker", paths are programmatic
 				"docker", "exec", torContainer,
 				"cat", filepath.Join(torHiddenServiceDir, name, "hostname"),
 			).Output()
@@ -180,20 +180,20 @@ Use --port to override the port detected from caddy.conf.`,
 
 		// Write config snippet to torrc.d/<name>.conf
 		confDir := filepath.Join(root, "tor", "torrc.d")
-		if err := os.MkdirAll(confDir, 0o755); err != nil {
+		if err := os.MkdirAll(confDir, 0o750); err != nil {
 			return fmt.Errorf("creating torrc.d: %w", err)
 		}
 		confPath := filepath.Join(confDir, name+".conf")
 		content := fmt.Sprintf("HiddenServiceDir %s/%s\nHiddenServicePort %s %s:%s\n",
 			torHiddenServiceDir, name, port, name, port)
 
-		if err := os.WriteFile(confPath, []byte(content), 0o644); err != nil {
+		if err := os.WriteFile(confPath, []byte(content), 0o600); err != nil {
 			return fmt.Errorf("writing %s: %w", confPath, err)
 		}
 		fmt.Printf("  %s  %s written\n", styles.Success.Render("✓"), confPath)
 
 		// Reload tor config
-		if err := reloadTor(); err != nil {
+		if err := ReloadTor(); err != nil {
 			return fmt.Errorf("reloading tor: %w", err)
 		}
 		fmt.Printf("  %s  Tor config reloaded\n", styles.Success.Render("✓"))
@@ -243,7 +243,7 @@ var torDisableCmd = &cobra.Command{
 		}
 		fmt.Printf("  %s  %s removed\n", styles.Warning.Render("→"), confPath)
 
-		if err := reloadTor(); err != nil {
+		if err := ReloadTor(); err != nil {
 			return fmt.Errorf("reloading tor: %w", err)
 		}
 		fmt.Printf("  %s  Tor config reloaded\n", styles.Success.Render("✓"))
@@ -254,19 +254,44 @@ var torDisableCmd = &cobra.Command{
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-// reloadTor sends SIGHUP to the tor process inside the container.
-// gnzsnz/torproxy runs tor under tini (PID 1). SIGHUP to the tor PID
-// triggers a graceful config reload without downtime.
-func reloadTor() error {
+// ReloadTor sends SIGHUP to the tor process inside the container.
+func ReloadTor() error {
 	return run.Default().DockerExec(torContainer,
 		"sh", "-c", "kill -HUP $(pidof tor)")
+}
+
+// TorServicePath returns the torrc.d config path for a service.
+func TorServicePath(root, name string) string {
+	return filepath.Join(root, "tor", "torrc.d", name+".conf")
+}
+
+// AppendTorService writes a torrc.d config for a service.
+func AppendTorService(root, name, port string) error {
+	confDir := filepath.Join(root, "tor", "torrc.d")
+	if err := os.MkdirAll(confDir, 0o750); err != nil {
+		return fmt.Errorf("creating torrc.d: %w", err)
+	}
+	confPath := TorServicePath(root, name)
+	content := fmt.Sprintf("HiddenServiceDir %s/%s\nHiddenServicePort %s %s:%s\n",
+		torHiddenServiceDir, name, port, name, port)
+	return os.WriteFile(confPath, []byte(content), 0o600)
+}
+
+// RemoveTorService removes a torrc.d config for a service.
+func RemoveTorService(root, name string) error {
+	confPath := TorServicePath(root, name)
+	err := os.Remove(confPath)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	return err
 }
 
 // detectServicePort reads the service's caddy.conf and extracts the
 // reverse_proxy target port.
 func detectServicePort(root, name string) (string, error) {
 	caddyConf := filepath.Join(root, "services", name, "caddy.conf")
-	data, err := os.ReadFile(caddyConf)
+	data, err := os.ReadFile(caddyConf) // nosec G304 -- path is programmatically constructed
 	if err != nil {
 		return "", err
 	}
@@ -287,6 +312,4 @@ func detectServicePort(root, name string) (string, error) {
 }
 
 func init() {
-	torCmd.AddCommand(torStatusCmd, torLogsCmd, torListCmd, torEnableCmd, torDisableCmd)
-	rootCmd.AddCommand(torCmd)
 }

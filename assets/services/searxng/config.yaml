@@ -3,3 +3,6 @@ vars: {}
 secrets:
   SECRET_KEY:
     required: true
+ports:
+  web:
+    port: 8080

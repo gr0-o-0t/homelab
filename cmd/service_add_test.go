@@ -16,7 +16,7 @@ func TestServiceAdd_PrintsCatalog(t *testing.T) {
 	t.Setenv("HOME", tmp)
 
 	rootCmd := cmd.RootCmd()
-	rootCmd.SetArgs([]string{"--config-dir", tmp, "service", "add"})
+	rootCmd.SetArgs([]string{"--config-dir", tmp, "add"})
 
 	err := rootCmd.Execute()
 	assert.NoError(t, err)
@@ -29,7 +29,7 @@ func TestServiceAdd_InstallsService(t *testing.T) {
 	rootCmd := cmd.RootCmd()
 	rootCmd.SetArgs([]string{
 		"--config-dir", tmp,
-		"service", "add", "uptime-kuma",
+		"add", "uptime-kuma",
 	})
 
 	err := rootCmd.Execute()
@@ -55,14 +55,14 @@ func TestServiceAdd_DuplicateFails(t *testing.T) {
 	rootCmd := cmd.RootCmd()
 	rootCmd.SetArgs([]string{
 		"--config-dir", tmp,
-		"service", "add", "uptime-kuma",
+		"add", "uptime-kuma",
 	})
 	require.NoError(t, rootCmd.Execute())
 
 	rootCmd2 := cmd.RootCmd()
 	rootCmd2.SetArgs([]string{
 		"--config-dir", tmp,
-		"service", "add", "uptime-kuma",
+		"add", "uptime-kuma",
 	})
 
 	err := rootCmd2.Execute()
@@ -77,7 +77,7 @@ func TestServiceAdd_InvalidServiceFails(t *testing.T) {
 	rootCmd := cmd.RootCmd()
 	rootCmd.SetArgs([]string{
 		"--config-dir", tmp,
-		"service", "add", "nonexistent-service-xyz",
+		"add", "nonexistent-service-xyz",
 	})
 
 	err := rootCmd.Execute()

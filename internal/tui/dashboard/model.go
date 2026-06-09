@@ -127,6 +127,9 @@ type Model struct {
 	logLines   []string
 	logSvcName string
 
+	// key sequence tracking
+	lastKey string // for detecting multi-key sequences (gg)
+
 	// exit signals
 	SelectedForLogs    string
 	SelectedForNew     bool
@@ -313,6 +316,11 @@ func (m Model) handleKey(msg tea.KeyMsg, cmds []tea.Cmd) (Model, []tea.Cmd) {
 
 	// ── normal mode ───────────────────────────────────────────────────────────
 	case stateNormal:
+		// Reset key sequence tracker on any non-g key.
+		if msg.String() != "g" && msg.String() != "ctrl+u" && msg.String() != "ctrl+d" {
+			m.lastKey = ""
+		}
+
 		switch msg.String() {
 		case "q":
 			return m, append(cmds, tea.Quit)
@@ -338,6 +346,54 @@ func (m Model) handleKey(msg tea.KeyMsg, cmds []tea.Cmd) (Model, []tea.Cmd) {
 					m.cursor++
 					cmds = append(cmds, m.fetchLogsCmd())
 				}
+			}
+
+		case "g":
+			// gg → jump to top
+			if m.focused == paneList && m.lastKey == "g" {
+				m.cursor = 0
+				cmds = append(cmds, m.fetchLogsCmd())
+				m.lastKey = ""
+			} else {
+				m.lastKey = "g"
+			}
+
+		case "G":
+			// G → jump to bottom
+			if m.focused == paneList {
+				if visible := m.visibleServices(); len(visible) > 0 {
+					m.cursor = len(visible) - 1
+					cmds = append(cmds, m.fetchLogsCmd())
+				}
+			}
+
+		case "ctrl+u":
+			// Ctrl+u → half page up
+			if m.focused == paneList {
+				scrollBy := (m.height - headerLines - statusbarLines) / 2
+				if scrollBy < 1 {
+					scrollBy = 1
+				}
+				m.cursor -= scrollBy
+				if m.cursor < 0 {
+					m.cursor = 0
+				}
+				cmds = append(cmds, m.fetchLogsCmd())
+			}
+
+		case "ctrl+d":
+			// Ctrl+d → half page down
+			if m.focused == paneList {
+				scrollBy := (m.height - headerLines - statusbarLines) / 2
+				if scrollBy < 1 {
+					scrollBy = 1
+				}
+				if visible := m.visibleServices(); m.cursor+scrollBy >= len(visible) {
+					m.cursor = len(visible) - 1
+				} else {
+					m.cursor += scrollBy
+				}
+				cmds = append(cmds, m.fetchLogsCmd())
 			}
 
 		case "/":
@@ -705,13 +761,13 @@ func (m Model) renderCatalogDetail(svc *service.Service, height, width int) stri
 	b.WriteString("\n " + styles.Muted.Render("Bundled service — not yet installed.") + "\n\n")
 
 	b.WriteString(" " + styles.PaneTitle.Render("Install") + "\n\n")
-	b.WriteString(fmt.Sprintf("  Press %s to install this service.\n", key("i")))
-	b.WriteString(fmt.Sprintf("  Or run: %s\n\n", styles.Primary.Render("homelab service add "+svc.Name)))
+	fmt.Fprintf(&b, "  Press %s to install this service.\n", key("i"))
+	fmt.Fprintf(&b, "  Or run: %s\n\n", styles.Primary.Render("homelab add "+svc.Name))
 
 	b.WriteString(" " + styles.Muted.Render("After installing:") + "\n")
-	b.WriteString("  " + styles.Muted.Render(fmt.Sprintf("homelab service setup %s", svc.Name)) + "\n")
-	b.WriteString("  " + styles.Muted.Render(fmt.Sprintf("homelab service up %s", svc.Name)) + "\n")
-	b.WriteString("  " + styles.Muted.Render(fmt.Sprintf("homelab service enable %s --private", svc.Name)) + "\n")
+	b.WriteString("  " + styles.Muted.Render(fmt.Sprintf("homelab setup %s", svc.Name)) + "\n")
+	b.WriteString("  " + styles.Muted.Render(fmt.Sprintf("homelab up %s", svc.Name)) + "\n")
+	b.WriteString("  " + styles.Muted.Render(fmt.Sprintf("homelab enable %s", svc.Name)) + "\n")
 
 	content := b.String()
 	for strings.Count(content, "\n") < height {
@@ -751,21 +807,21 @@ func (m Model) renderInstalledDetail(svc *service.Service, height, width int) st
 	if svc.HasCaddyConf {
 		if svc.Enabled {
 			url := fmt.Sprintf("https://%s.%s.%s", svc.Name, homeSub, domain)
-			b.WriteString(fmt.Sprintf("  %s private   %s\n",
-				styles.Success.Render("●"), styles.Primary.Render(url)))
+			fmt.Fprintf(&b, "  %s private   %s\n",
+				styles.Success.Render("●"), styles.Primary.Render(url))
 		} else {
-			b.WriteString(fmt.Sprintf("  %s private   %s\n",
-				styles.Muted.Render("○"), styles.Muted.Render("not exposed")))
+			fmt.Fprintf(&b, "  %s private   %s\n",
+				styles.Muted.Render("○"), styles.Muted.Render("not exposed"))
 		}
 	}
 	if svc.HasPublicCaddyConf {
 		if svc.PublicEnabled {
 			url := fmt.Sprintf("https://%s.%s.%s", svc.Name, pubSub, domain)
-			b.WriteString(fmt.Sprintf("  %s public    %s\n",
-				styles.Success.Render("●"), styles.Primary.Render(url)))
+			fmt.Fprintf(&b, "  %s public    %s\n",
+				styles.Success.Render("●"), styles.Primary.Render(url))
 		} else {
-			b.WriteString(fmt.Sprintf("  %s public    %s\n",
-				styles.Muted.Render("○"), styles.Muted.Render("not exposed")))
+			fmt.Fprintf(&b, "  %s public    %s\n",
+				styles.Muted.Render("○"), styles.Muted.Render("not exposed"))
 		}
 	}
 
@@ -781,9 +837,9 @@ func (m Model) renderInstalledDetail(svc *service.Service, height, width int) st
 				stateStyle = styles.Warning
 			}
 			cName := clip(c.Name, 22)
-			b.WriteString(fmt.Sprintf("  %s  %s\n",
+			fmt.Fprintf(&b, "  %s  %s\n",
 				lipgloss.NewStyle().Width(22).Render(cName),
-				stateStyle.Render(c.State)))
+				stateStyle.Render(c.State))
 		}
 	}
 
@@ -844,6 +900,8 @@ func (m Model) renderStatusBar() string {
 					key("n") + " new  " +
 					key("/") + " filter  " +
 					key("R") + " refresh  " +
+					key("j") + "↓  " +
+					key("k") + "↑  " +
 					key("q") + " quit"
 			} else {
 				hints = key("u") + " start  " +
@@ -855,6 +913,10 @@ func (m Model) renderStatusBar() string {
 					key("n") + " new  " +
 					key("tab") + " pane  " +
 					key("/") + " filter  " +
+					key("j") + "↓  " +
+					key("k") + "↑  " +
+					key("gg") + " top  " +
+					key("G") + " bot  " +
 					key("q") + " quit"
 			}
 		}

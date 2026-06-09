@@ -16,7 +16,7 @@ import (
 const ipfsContainer = "ipfs"
 
 var ipfsCmd = &cobra.Command{
-	Use:   "ipfs",
+	Use:   ipfsContainer,
 	Short: "Manage IPFS Kubo node",
 	Long:  "Inspect the IPFS node and manage the HTTP Gateway route.",
 }
@@ -40,11 +40,11 @@ var ipfsStatusCmd = &cobra.Command{
 		}
 
 		state := containerStatus(ipfsContainer)
-		if state == "running" {
+		if state == containerStateRunning {
 			fmt.Printf("  %s  ipfs  %s\n", styles.Success.Render("✓"), styles.StateTag(state))
 		} else {
 			fmt.Printf("  %s  ipfs  %s\n", styles.Err.Render("✗"), styles.StateTag(state))
-			fmt.Printf("\n  Start with: %s\n\n", styles.Primary.Render("homelab core start"))
+			fmt.Printf("\n  Start with: %s\n\n", styles.Primary.Render("homelab start"))
 			return nil
 		}
 
@@ -111,7 +111,9 @@ var ipfsGatewayEnableCmd = &cobra.Command{
 
 		// Create a caddy.conf for IPFS gateway
 		svcDir := filepath.Join(root, "services", "ipfs")
-		os.MkdirAll(svcDir, 0o755)
+		if err := os.MkdirAll(svcDir, 0o750); err != nil {
+			return err
+		}
 
 		caddyConf := `ipfs.{$HOME_SUBDOMAIN}.{$DOMAIN} {
     import wildcard_tls
@@ -119,7 +121,7 @@ var ipfsGatewayEnableCmd = &cobra.Command{
 }
 `
 		confPath := filepath.Join(svcDir, "caddy.conf")
-		if err := os.WriteFile(confPath, []byte(caddyConf), 0o644); err != nil {
+		if err := os.WriteFile(confPath, []byte(caddyConf), 0o600); err != nil {
 			return fmt.Errorf("writing caddy.conf: %w", err)
 		}
 
@@ -166,6 +168,5 @@ var ipfsGatewayCmd = &cobra.Command{
 
 func init() {
 	ipfsGatewayCmd.AddCommand(ipfsGatewayEnableCmd, ipfsGatewayDisableCmd)
-	ipfsCmd.AddCommand(ipfsStatusCmd, ipfsLogsCmd, ipfsGatewayCmd)
-	rootCmd.AddCommand(ipfsCmd)
+	ipfsCmd.AddCommand(ipfsGatewayCmd)
 }

@@ -49,7 +49,7 @@ func TestCatalogFS_ContainsServices(t *testing.T) {
 
 func TestCatalogService_HasRequiredFiles(t *testing.T) {
 	services := []string{"immich", "jellyfin", "uptime-kuma", "vaultwarden"}
-	requiredFiles := []string{"docker-compose.yml", "caddy.conf", "caddy-pub.conf", "config.yaml"}
+	requiredFiles := []string{"docker-compose.yml", "caddy.conf", "caddy.cf.conf", "config.yaml"}
 
 	for _, svc := range services {
 		for _, file := range requiredFiles {

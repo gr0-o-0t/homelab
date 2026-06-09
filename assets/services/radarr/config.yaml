@@ -16,3 +16,6 @@ vars:
     required: false
 
 secrets: {}
+ports:
+  web:
+    port: 7878

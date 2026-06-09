@@ -16,9 +16,9 @@ type Service struct {
 	Name               string
 	Dir                string // absolute path to services/<name>/
 	HasCaddyConf       bool   // services/<name>/caddy.conf exists
-	HasPublicCaddyConf bool   // services/<name>/caddy-pub.conf exists
+	HasPublicCaddyConf bool   // services/<name>/caddy.cf.conf exists
 	Enabled            bool   // caddy/conf.d/<name>.conf symlink is present (private)
-	PublicEnabled      bool   // caddy/conf.d-pub/<name>.conf symlink is present (public)
+	PublicEnabled      bool   // caddy/conf.d-cf/<name>.conf symlink is present (cf)
 	Installed          bool   // true = exists on disk; false = catalog-only (not yet added)
 
 	// Populated by DiscoverWithDocker; zero-value when Docker is unavailable.
@@ -148,9 +148,9 @@ func discover(repoRoot string) ([]Service, error) {
 			Name:               name,
 			Dir:                dir,
 			HasCaddyConf:       fileExists(filepath.Join(dir, "caddy.conf")),
-			HasPublicCaddyConf: fileExists(filepath.Join(dir, "caddy-pub.conf")),
+			HasPublicCaddyConf: fileExists(filepath.Join(dir, "caddy.cf.conf")),
 			Enabled:            symlinkExists(filepath.Join(repoRoot, "caddy", "conf.d", name+".conf")),
-			PublicEnabled:      symlinkExists(filepath.Join(repoRoot, "caddy", "conf.d-pub", name+".conf")),
+			PublicEnabled:      symlinkExists(filepath.Join(repoRoot, "caddy", "conf.d-cf", name+".conf")),
 			Installed:          true,
 		})
 	}

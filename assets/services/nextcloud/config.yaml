@@ -20,3 +20,6 @@ databases:
   redis:
     env:
       host: NC_REDIS_HOST
+ports:
+  web:
+    port: 80

@@ -23,16 +23,20 @@ import (
 // ── homelab setup ─────────────────────────────────────────────────────────────
 
 var setupCmd = &cobra.Command{
-	Use:   "setup",
-	Short: "Configure homelab variables and secrets interactively",
-	Long: `Interactive wizard that configures the homelab root settings.
+	Use:   "setup [service]",
+	Short: "Configure homelab or service variables and secrets",
+	Long: `Configure homelab root settings, or a specific service's config.
 
-Non-secret values (domain, email, hostnames) are saved to config.yaml in the
-homelab config directory.  Secrets (Tailscale auth key, Cloudflare tokens) are
-stored in the system keyring (SecretService, Keychain, or encrypted file).
-
-Run once after first installation, then again whenever credentials change.`,
-	RunE: runSetup,
+Without a service argument, runs the homelab root setup wizard.
+With a service argument, runs the per-service setup wizard.`,
+	Args:              cobra.MaximumNArgs(1),
+	ValidArgsFunction: completeServiceNames,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if len(args) > 0 {
+			return runServiceSetup(cmd, args)
+		}
+		return runSetup(cmd, args)
+	},
 }
 
 func runSetup(_ *cobra.Command, _ []string) error {
@@ -54,7 +58,6 @@ func runSetup(_ *cobra.Command, _ []string) error {
 				"TS_HOSTNAME":    {Value: "caddy-home", Required: true},
 				"PUB_SUBDOMAIN":  {Value: "pub", Required: false},
 				"CF_TUNNEL_NAME": {Value: "", Required: false},
-				"I2P_JVM_XMX":    {Value: "512m", Required: false},
 				"I2P_EXT_PORT":   {Value: "45678", Required: false},
 			},
 			Secrets: map[string]config.SecretEntry{
@@ -99,21 +102,66 @@ func runSetup(_ *cobra.Command, _ []string) error {
 		}
 	}
 
-	// ── Cloudflare Tunnel (optional) ──────────────────────────────────────────
-	fmt.Printf("\n  %s\n", styles.Accent.Render("─── Cloudflare Tunnel (optional) ───────────────────"))
-	fmt.Printf("  %s\n\n", styles.Muted.Render("Required for public internet exposure. Press Enter to skip."))
+	// ── Network Extensions (optional) ─────────────────────────────────────────
+	fmt.Printf("\n  %s\n", styles.Accent.Render("─── Network Extensions (optional) ────────────────────"))
+	fmt.Printf("  %s\n\n", styles.Muted.Render("Enable alternative network exposure. Press Enter to skip."))
 
-	pubEntry := cfg.Vars["PUB_SUBDOMAIN"]
-	pubEntry.Value = promptStr(sc, "Public subdomain prefix", pubEntry.Value)
-	cfg.Vars["PUB_SUBDOMAIN"] = pubEntry
+	extNames := []struct {
+		Name  string
+		Label string
+	}{
+		{"cf", "Cloudflare Tunnel (public internet via cloudflared)"},
+		{torContainer, "Tor onion service proxy (.onion addresses)"},
+		{i2pContainer, "I2P router + eepsite proxy (.i2p addresses)"},
+		{yggContainer, "Yggdrasil IPv6 mesh node (socat port forwarding)"},
+		{ipfsContainer, "IPFS Kubo node (content-addressed P2P storage)"},
+	}
+	for _, ext := range extNames {
+		added := cfg.HasExtension(ext.Name)
+		var prompt string
+		if added {
+			prompt = "n/Y"
+		} else {
+			prompt = "y/N"
+		}
+		fmt.Printf("  Add %s? [%s]: ", ext.Label, prompt)
+		var answer string
+		if sc.Scan() {
+			answer = strings.TrimSpace(sc.Text())
+		}
+		if added {
+			// Already added: n removes, anything else (Enter) keeps
+			if strings.EqualFold(answer, "n") {
+				cfg.DisableExtension(ext.Name)
+			} else {
+				cfg.EnableExtension(ext.Name)
+			}
+		} else {
+			// Not added: y adds, anything else (Enter) skips
+			if strings.EqualFold(answer, "y") {
+				cfg.EnableExtension(ext.Name)
+			} else {
+				cfg.DisableExtension(ext.Name)
+			}
+		}
+	}
 
-	tunnelNameEntry := cfg.Vars["CF_TUNNEL_NAME"]
-	tunnelNameEntry.Value = promptStr(sc, "Cloudflare Tunnel name (from dash.cloudflare.com, or press Enter to skip)", tunnelNameEntry.Value)
-	cfg.Vars["CF_TUNNEL_NAME"] = tunnelNameEntry
+	// ── Cloudflare configuration (only when cf extension enabled) ────────────
+	if cfg.HasExtension("cf") {
+		fmt.Printf("\n  %s\n\n", styles.Accent.Render("─── Cloudflare Tunnel configuration ─────────────────"))
 
-	if val := promptSecret("CF_TUNNEL_TOKEN", sm.IsSet("", "CF_TUNNEL_TOKEN")); val != "" {
-		if err := sm.Set("", "CF_TUNNEL_TOKEN", val); err != nil {
-			return fmt.Errorf("storing CF_TUNNEL_TOKEN in keyring: %w", err)
+		pubEntry := cfg.Vars["PUB_SUBDOMAIN"]
+		pubEntry.Value = promptStr(sc, "Public subdomain prefix", pubEntry.Value)
+		cfg.Vars["PUB_SUBDOMAIN"] = pubEntry
+
+		tunnelNameEntry := cfg.Vars["CF_TUNNEL_NAME"]
+		tunnelNameEntry.Value = promptStr(sc, "Cloudflare Tunnel name (from dash.cloudflare.com, or press Enter to skip)", tunnelNameEntry.Value)
+		cfg.Vars["CF_TUNNEL_NAME"] = tunnelNameEntry
+
+		if val := promptSecret("CF_TUNNEL_TOKEN", sm.IsSet("", "CF_TUNNEL_TOKEN")); val != "" {
+			if err := sm.Set("", "CF_TUNNEL_TOKEN", val); err != nil {
+				return fmt.Errorf("storing CF_TUNNEL_TOKEN in keyring: %w", err)
+			}
 		}
 	}
 
@@ -163,14 +211,14 @@ func runSetup(_ *cobra.Command, _ []string) error {
 
 	// ── Next steps ────────────────────────────────────────────────────────────
 	fmt.Printf("\n%s\n", styles.Header.Render("Setup complete — next steps:"))
-	fmt.Printf("  1. %s\n", styles.Primary.Render("homelab service add <name>   # install a bundled service"))
-	fmt.Printf("  2. %s\n", styles.Primary.Render("homelab service setup <name>"))
-	fmt.Printf("  3. %s\n", styles.Primary.Render("homelab core start"))
+	fmt.Printf("  1. %s\n", styles.Primary.Render("homelab add <name>   # install a bundled service"))
+	fmt.Printf("  2. %s\n", styles.Primary.Render("homelab setup <name>"))
+	fmt.Printf("  3. %s\n", styles.Primary.Render("homelab start"))
 	fmt.Printf("  4. %s   %s\n",
-		styles.Primary.Render("homelab ts status"),
+		styles.Primary.Render("homelab status"),
 		styles.Muted.Render("— verify Tailscale joined your tailnet"))
-	fmt.Printf("  5. %s\n", styles.Primary.Render("homelab service up <name>"))
-	fmt.Printf("  6. %s\n\n", styles.Primary.Render("homelab service enable <name> --private"))
+	fmt.Printf("  5. %s\n", styles.Primary.Render("homelab up <name>"))
+	fmt.Printf("  6. %s\n\n", styles.Primary.Render("homelab enable <name>"))
 	return nil
 }
 
@@ -280,7 +328,7 @@ func runServiceSetup(_ *cobra.Command, args []string) error {
 			for dbType, decl := range svcDB {
 				if err := p.EnsureRunning(ctx, dbType); err != nil {
 					step(styles.Warning.Render("!"), fmt.Sprintf("%s container not running — install and start first:", dbType))
-					fmt.Printf("    homelab service add %s && homelab service up %s\n", dbType, dbType)
+					fmt.Printf("    homelab add %s && homelab up %s\n", dbType, dbType)
 					continue
 				}
 				if err := p.Provision(ctx, dbType, name, decl); err != nil {
@@ -315,16 +363,16 @@ func installAssets(configDir string) error {
 		}
 		dest := filepath.Join(configDir, path)
 		if d.IsDir() {
-			return os.MkdirAll(dest, 0o755)
+			return os.MkdirAll(dest, 0o750)
 		}
 		data, err := assets.CoreFS.ReadFile(path)
 		if err != nil {
 			return err
 		}
-		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(dest), 0o750); err != nil {
 			return err
 		}
-		return os.WriteFile(dest, data, 0o644)
+		return os.WriteFile(dest, data, 0o600)
 	})
 }
 

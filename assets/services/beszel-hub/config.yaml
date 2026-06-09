@@ -9,3 +9,6 @@ vars:
     value: "UTC"
     required: false
 secrets: {}
+ports:
+  web:
+    port: 8090

@@ -46,7 +46,7 @@ See [docs/adding-a-service.md](docs/adding-a-service.md) for step-by-step instru
 1. **Use official images**: Prefer official Docker images from the upstream project
 2. **Network isolation**: Main container on `home-services`, databases/workers on `internal: true` network
 3. **Configuration schema**: Use `config.yaml` with `vars` (non-secrets) and `secrets` (keyring-stored)
-4. **Caddy configs**: Provide both `caddy.conf` (private) and `caddy-pub.conf` (public)
+4. **Caddy configs**: Provide both `caddy.conf` (private) and `caddy.cf.conf` (public)
 5. **Test end-to-end**: Verify the service works from the catalog before submitting
 
 ### Service template
@@ -55,7 +55,7 @@ See [docs/adding-a-service.md](docs/adding-a-service.md) for step-by-step instru
 assets/services/<name>/
 ├── docker-compose.yml    # Service definition
 ├── caddy.conf            # Private reverse proxy (tailnet)
-├── caddy-pub.conf        # Public reverse proxy (Cloudflare Tunnel)
+├── caddy.cf.conf        # Public reverse proxy (Cloudflare Tunnel)
 └── config.yaml           # Configuration schema
 ```
 

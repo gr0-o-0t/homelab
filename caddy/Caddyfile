@@ -32,7 +32,7 @@
 # ── Wildcard TLS snippet ──────────────────────────────────────────────────────
 # Declare the wildcard cert once as a named snippet.  Every site block in
 # conf.d/ that matches *.{$HOME_SUBDOMAIN}.{$DOMAIN} will reuse this cert.
-# Public site blocks in conf.d-pub/ use the same DNS-01 mechanism for
+# Public site blocks in conf.d-cf/ use the same DNS-01 mechanism for
 # *.{$PUB_SUBDOMAIN}.{$DOMAIN}.
 (wildcard_tls) {
     tls {
@@ -49,4 +49,4 @@ import /homelab/caddy/conf.d/*.conf
 # Symlinked by `homelab service enable <name> --public`.
 # Each file handles <service>.{$PUB_SUBDOMAIN}.{$DOMAIN}.
 # Traffic arrives via cloudflared → http://tailscale:80, TLS is terminated here.
-import /homelab/caddy/conf.d-pub/*.conf
+import /homelab/caddy/conf.d-cf/*.conf

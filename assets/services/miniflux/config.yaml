@@ -13,3 +13,6 @@ databases:
     user: miniflux
     env:
       "postgres://{user}:{password}@{host}:{port}/{database}?sslmode=disable": DATABASE_URL
+ports:
+  web:
+    port: 8080

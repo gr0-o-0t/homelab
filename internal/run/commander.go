@@ -1,7 +1,13 @@
 // Package run wraps os/exec for docker and docker compose invocations.
+//
+// All subprocess calls use a hardcoded binary (docker). gosec G204 is
+// intentionally suppressed — the binary is never user-controlled.
+//
+//nolint:gosec
 package run
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -53,7 +59,8 @@ func DockerNetworkExists(name string) (bool, error) {
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
 	if err := cmd.Run(); err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
 			return false, nil
 		}
 		return false, err
@@ -89,7 +96,7 @@ func (c *Commander) Output(name string, args ...string) ([]byte, error) {
 	return cmd.Output()
 }
 
-// mergeEnv returns a new env slice starting from base, with each entry in
+// MergeEnv returns a new env slice starting from base, with each entry in
 // overrides replacing any same-named key. Our vars always win.
 func MergeEnv(base []string, overrides map[string]string) []string {
 	merged := make(map[string]string, len(base)+len(overrides))

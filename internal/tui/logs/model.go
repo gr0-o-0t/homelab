@@ -22,7 +22,7 @@ const maxLines = 2000 // keep the last N lines to bound memory
 // ── messages ──────────────────────────────────────────────────────────────────
 
 type logLineMsg struct{ line string }
-type logEndMsg  struct{}
+type logEndMsg struct{}
 
 // ── model ─────────────────────────────────────────────────────────────────────
 
@@ -203,7 +203,7 @@ func startLogStream(repoRoot, serviceName string, env map[string]string) (<-chan
 		}
 		args = append(args, "logs", "-f")
 
-		cmd := exec.Command("docker", args...)
+		cmd := exec.Command("docker", args...) // nosec G204 -- binary is "docker", args are programmatic
 
 		stdout, err := cmd.StdoutPipe()
 		if err != nil {

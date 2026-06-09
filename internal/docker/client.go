@@ -94,18 +94,18 @@ func (c *Client) ServiceContainers(ctx context.Context, projectName string) ([]C
 	}
 
 	out := make([]ContainerSummary, len(list))
-	for i, ctr := range list {
+	for i := range list {
 		name := ""
-		if len(ctr.Names) > 0 {
-			name = strings.TrimPrefix(ctr.Names[0], "/")
+		if len(list[i].Names) > 0 {
+			name = strings.TrimPrefix(list[i].Names[0], "/")
 		}
 		out[i] = ContainerSummary{
-			ID:      ShortID(ctr.ID),
+			ID:      ShortID(list[i].ID),
 			Name:    name,
-			Service: ctr.Labels["com.docker.compose.service"],
-			State:   ctr.State,
-			Status:  ctr.Status,
-			Image:   ctr.Image,
+			Service: list[i].Labels["com.docker.compose.service"],
+			State:   list[i].State,
+			Status:  list[i].Status,
+			Image:   list[i].Image,
 		}
 	}
 	return out, nil
@@ -180,8 +180,8 @@ func (c *Client) NetworkExists(ctx context.Context, name string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	for _, n := range networks {
-		if n.Name == name {
+	for i := range networks {
+		if networks[i].Name == name {
 			return true, nil
 		}
 	}

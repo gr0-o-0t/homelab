@@ -2,44 +2,72 @@ package cmd
 
 import (
 	"fmt"
-	"sort"
+	"strings"
 
 	"github.com/groot/homelab/internal/config"
+	"github.com/groot/homelab/internal/run"
 	"github.com/groot/homelab/internal/tui/styles"
 	"github.com/spf13/cobra"
 )
 
-// validExts is the set of extensions that can be enabled/disabled.
-// Must match config.AllExtensions().
-var validExts = map[string]string{
-	"cf":        "Cloudflare Tunnel",
-	"tor":       "Tor onion service proxy",
-	"i2p":       "I2P router + eepsite proxy",
-	"yggdrasil": "Yggdrasil mesh node",
-	"ipfs":      "IPFS Kubo node",
+// extContainer maps extension names to their Docker Compose service/container name
+// as defined in the core docker-compose.yml.
+var extContainer = map[string]string{
+	"cf":        "cloudflared",
+	"tor":       torContainer,
+	"i2p":       i2pContainer,
+	"ygg":       yggContainer,
+	"yggdrasil": yggContainer,
+	"ipfs":      ipfsContainer,
+}
+
+// extProfile maps extension names to their Docker Compose profile name.
+var extProfile = map[string]string{
+	"cf":   "tunnel",
+	"tor":  "tor",
+	"i2p":  "i2p",
+	"ygg":  "yggdrasil",
+	"ipfs": "ipfs",
 }
 
 var extCmd = &cobra.Command{
 	Use:   "ext",
-	Short: "Manage optional network extensions",
-	Long: `Enable, disable, and list optional core stack extensions.
+	Short: "Manage network extensions",
+	Long: `Manage network extensions that add exposure layers to the core stack.
 
-Extensions add network exposure layers to the core stack:
-  cf         Cloudflare Tunnel (public internet via cloudflared)
-  tor        Tor onion service proxy (.onion addresses)
-  i2p        I2P router + eepsite proxy (.i2p addresses)
-  yggdrasil  Yggdrasil IPv6 mesh node
-  ipfs       IPFS Kubo node (content-addressed storage)
+Extensions:
+  cf   Cloudflare Tunnel  (public internet via cloudflared)
+  tor  Tor onion service  (.onion addresses)
+  i2p  I2P eepsite proxy  (.i2p addresses)
+  ygg  Yggdrasil mesh     (IPv6 mesh)
+  ipfs IPFS Kubo node     (content-addressed storage)
 
-Enable an extension:
-  homelab ext enable tor
-  homelab ext enable cf
+Commands:
+  ext list                 List extensions and their enabled/disabled status
+  ext status [ext]         Show container status for all or one extension
+  ext logs [ext]           Stream logs for all or one extension
+  ext start [ext]          Start extension containers
+  ext stop [ext]           Stop extension containers
 
-Disable an extension:
-  homelab ext disable i2p
+Extension-specific subcommands:
+  ext cf route             Manage Cloudflare DNS routes
+  ext ipfs gateway         Manage IPFS Gateway Caddy route
 
-List enabled extensions:
-  homelab ext list`,
+Service-level exposure is managed via the root enable/disable command:
+  homelab enable <svc> --i2p    expose via I2P eepsite
+  homelab enable <svc> --tor    expose as Tor .onion service
+  homelab enable <svc> --ygg    expose on Yggdrasil mesh
+  homelab disable <svc> --i2p   remove I2P eepsite`,
+}
+
+// ── valid extensions ─────────────────────────────────────────────────────────
+
+func validExtNames() []string {
+	return []string{"cf", "tor", "i2p", "ygg", "yggdrasil", "ipfs"}
+}
+
+func completeExtNames(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+	return validExtNames(), cobra.ShellCompDirectiveNoFileComp
 }
 
 // ── list ──────────────────────────────────────────────────────────────────────
@@ -82,117 +110,202 @@ var extListCmd = &cobra.Command{
 	},
 }
 
-// ── enable ────────────────────────────────────────────────────────────────────
+// ── status ────────────────────────────────────────────────────────────────────
 
-var extEnableCmd = &cobra.Command{
-	Use:   "enable <extension>",
-	Short: "Enable a network extension in the core stack",
-	Long: `Mark a network extension as enabled.
+var extStatusCmd = &cobra.Command{
+	Use:   "status [extension]",
+	Short: "Show extension container status",
+	Long: `Show whether each extension's container is running.
 
-After enabling, run 'homelab core start' to activate the extension
-(or 'homelab core restart' if the core stack is already running).
-
-Available extensions: cf, tor, i2p, yggdrasil, ipfs`,
-	Args:              cobra.ExactArgs(1),
+Without an argument, shows status for every enabled extension.
+With an extension name, show status for that specific extension.`,
+	Args:              cobra.MaximumNArgs(1),
 	ValidArgsFunction: completeExtNames,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		name := args[0]
-		if _, ok := validExts[name]; !ok {
-			return fmt.Errorf("unknown extension %q\n\nAvailable: cf, tor, i2p, yggdrasil, ipfs", name)
-		}
-
-		cfgFile := rootConfigFile()
-		cfg, err := config.Load(cfgFile)
+		targets, err := resolveExtTargets(args)
 		if err != nil {
-			return fmt.Errorf("reading config: %w", err)
+			return err
 		}
-		if cfg == nil {
-			cfg = &config.Config{}
-		}
-
-		if cfg.HasExtension(name) {
-			fmt.Printf("  %s  %s already enabled\n",
-				styles.Muted.Render("!"), styles.Bold.Render(name))
-			fmt.Println()
+		if len(targets) == 0 {
+			fmt.Println(styles.Muted.Render("\n  No extensions enabled.\n"))
 			return nil
 		}
-
-		cfg.EnableExtension(name)
-		if err := config.Save(cfgFile, cfg); err != nil {
-			return fmt.Errorf("saving config: %w", err)
+		fmt.Println()
+		for _, ext := range targets {
+			state := containerStatus(extContainer[ext])
+			label := config.ExtensionLabel(ext)
+			if state == containerStateRunning {
+				fmt.Printf("  %s  %s  %s\n",
+					styles.Success.Render("✓"),
+					styles.Bold.Render(ext),
+					label)
+			} else {
+				fmt.Printf("  %s  %s  %s  [%s]\n",
+					styles.Muted.Render("·"),
+					ext,
+					label,
+					styles.Muted.Render(state))
+			}
 		}
-
-		fmt.Printf("  %s  %s enabled\n",
-			styles.Success.Render("✓"), styles.Bold.Render(config.ExtensionLabel(name)))
-		fmt.Printf("  %s  Run %s to activate\n\n",
-			styles.Muted.Render("→"), styles.Primary.Render("homelab core restart"))
+		fmt.Println()
 		return nil
 	},
 }
 
-// ── disable ───────────────────────────────────────────────────────────────────
+// ── logs ──────────────────────────────────────────────────────────────────────
 
-var extDisableCmd = &cobra.Command{
-	Use:   "disable <extension>",
-	Short: "Disable a network extension",
-	Long: `Remove a network extension from the core stack.
+var extLogsCmd = &cobra.Command{
+	Use:   "logs [extension]",
+	Short: "Stream extension container logs",
+	Long: `Stream logs from extension containers.
 
-After disabling, run 'homelab core down && homelab core start' to fully
-stop and remove the extension's containers.
-
-Available extensions: cf, tor, i2p, yggdrasil, ipfs`,
-	Args:              cobra.ExactArgs(1),
+Without an argument, shows logs for all enabled extensions.
+With an extension name, shows logs for that specific extension.`,
+	Args:              cobra.MaximumNArgs(1),
 	ValidArgsFunction: completeExtNames,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		name := args[0]
-		if _, ok := validExts[name]; !ok {
-			return fmt.Errorf("unknown extension %q\n\nAvailable: cf, tor, i2p, yggdrasil, ipfs", name)
-		}
+		dir := configDir()
+		env := buildEnv(dir, "")
 
-		cfgFile := rootConfigFile()
-		cfg, err := config.Load(cfgFile)
+		targets, err := resolveExtTargets(args)
 		if err != nil {
-			return fmt.Errorf("reading config: %w", err)
+			return err
 		}
-		if cfg == nil {
-			fmt.Printf("  %s  %s not enabled\n",
-				styles.Muted.Render("!"), styles.Bold.Render(name))
-			fmt.Println()
-			return nil
+		if len(targets) == 0 {
+			return fmt.Errorf("no extensions enabled or specified")
 		}
 
-		if !cfg.HasExtension(name) {
-			fmt.Printf("  %s  %s not currently enabled\n",
-				styles.Muted.Render("!"), styles.Bold.Render(name))
-			fmt.Println()
-			return nil
+		logArgs := []string{"logs", "-f"}
+		for _, ext := range targets {
+			container := extContainer[ext]
+			if container != "" {
+				logArgs = append(logArgs, container)
+			}
 		}
-
-		cfg.DisableExtension(name)
-		if err := config.Save(cfgFile, cfg); err != nil {
-			return fmt.Errorf("saving config: %w", err)
-		}
-
-		fmt.Printf("  %s  %s disabled\n",
-			styles.Warning.Render("→"), styles.Bold.Render(config.ExtensionLabel(name)))
-		fmt.Printf("  %s  Run %s to stop containers\n\n",
-			styles.Muted.Render("→"), styles.Primary.Render("homelab core down && homelab core start"))
-		return nil
+		return run.Default().DockerComposeEnv(
+			run.CoreComposeFile(dir),
+			env,
+			withProfiles(dir, logArgs...)...,
+		)
 	},
 }
 
-// ── completion ────────────────────────────────────────────────────────────────
+// ── start ─────────────────────────────────────────────────────────────────────
 
-func completeExtNames(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
-	names := make([]string, 0, len(validExts))
-	for n := range validExts {
-		names = append(names, n)
+var extBuild bool
+
+var extStartCmd = &cobra.Command{
+	Use:   "start [extension]",
+	Short: "Start extension containers",
+	Long: `Start extension Docker containers.
+
+  homelab ext start          # start all enabled extensions
+  homelab ext start tor      # start Tor container`,
+	Args:              cobra.MaximumNArgs(1),
+	ValidArgsFunction: completeExtNames,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runExtStartStop(args, false, extBuild)
+	},
+}
+
+// ── stop ─────────────────────────────────────────────────────────────────────
+
+var extStopCmd = &cobra.Command{
+	Use:   "stop [extension]",
+	Short: "Stop extension containers",
+	Long: `Stop extension Docker containers.
+
+  homelab ext stop           # stop all enabled extensions
+  homelab ext stop tor       # stop Tor container`,
+	Args:              cobra.MaximumNArgs(1),
+	ValidArgsFunction: completeExtNames,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runExtStartStop(args, true, false)
+	},
+}
+
+// ── helpers ───────────────────────────────────────────────────────────────────
+
+// resolveExtTargets returns extension names to operate on. With no args,
+// returns all currently enabled extensions from config.
+func resolveExtTargets(args []string) ([]string, error) {
+	if len(args) > 0 {
+		ext := args[0]
+		if _, ok := extContainer[ext]; !ok {
+			return nil, fmt.Errorf("unknown extension %q\n\nAvailable: %s", ext, strings.Join(validExtNames(), ", "))
+		}
+		return []string{ext}, nil
 	}
-	sort.Strings(names)
-	return names, cobra.ShellCompDirectiveNoFileComp
+	cfg, err := config.Load(rootConfigFile())
+	if err != nil || cfg == nil {
+		return nil, nil
+	}
+	return cfg.Extensions, nil
 }
+
+// runExtStartStop starts or stops extension containers via docker compose.
+// build forces image rebuild before starting (no-op for stop).
+func runExtStartStop(args []string, stop bool, build bool) error {
+	dir := configDir()
+	env := buildEnv(dir, "")
+
+	// Determine which extension(s) to act on.
+	extNames, err := resolveExtTargets(args)
+	if err != nil {
+		return err
+	}
+	if len(extNames) == 0 {
+		return fmt.Errorf("no extensions enabled or specified")
+	}
+
+	// Collect unique profiles.
+	seen := make(map[string]bool)
+	var profiles []string
+	for _, ext := range extNames {
+		p := extProfile[ext]
+		if p != "" && !seen[p] {
+			seen[p] = true
+			profiles = append(profiles, "--profile", p)
+		}
+	}
+
+	if stop {
+		fmt.Printf("%s Stopping extension containers…\n", styles.Warning.Render("→"))
+		containers := make([]string, len(extNames))
+		for i, ext := range extNames {
+			containers[i] = extContainer[ext]
+		}
+		return run.Default().DockerComposeEnv(
+			run.CoreComposeFile(dir),
+			env,
+			append([]string{"stop"}, containers...)...,
+		)
+	}
+
+	fmt.Printf("%s Starting extension containers…\n", styles.Primary.Render("→"))
+	upArgs := []string{"up", "-d"}
+	if build {
+		upArgs = append(upArgs, "--build")
+	}
+	return run.Default().DockerComposeEnv(
+		run.CoreComposeFile(dir),
+		env,
+		append(profiles, upArgs...)...,
+	)
+}
+
+// ── init ──────────────────────────────────────────────────────────────────────
 
 func init() {
-	extCmd.AddCommand(extListCmd, extEnableCmd, extDisableCmd)
+	extStartCmd.Flags().BoolVar(&extBuild, "build", false, "Rebuild images before starting")
+
+	extCmd.AddCommand(
+		extListCmd,
+		extStatusCmd,
+		extLogsCmd,
+		extStartCmd,
+		extStopCmd,
+		i2pCmd, torCmd, cfCmd, yggCmd, ipfsCmd,
+	)
 	rootCmd.AddCommand(extCmd)
 }

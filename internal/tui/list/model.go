@@ -33,7 +33,7 @@ func (i svcItem) FilterValue() string { return i.svc.Name }
 
 type itemDelegate struct{}
 
-func (d itemDelegate) Height() int                              { return 1 }
+func (d itemDelegate) Height() int                             { return 1 }
 func (d itemDelegate) Spacing() int                            { return 0 }
 func (d itemDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd { return nil }
 
@@ -85,8 +85,8 @@ func (d itemDelegate) Render(w io.Writer, m list.Model, index int, item list.Ite
 // ── messages ──────────────────────────────────────────────────────────────────
 
 type refreshedMsg struct{ services []service.Service }
-type opDoneMsg    struct{ msg string }
-type opErrMsg     struct {
+type opDoneMsg struct{ msg string }
+type opErrMsg struct {
 	err    error
 	output string
 }
@@ -113,9 +113,9 @@ type Model struct {
 	spin     spinner.Model
 	services []service.Service
 
-	repoRoot   string
-	dc         *docker.Client
-	buildEnv   EnvBuilderFn
+	repoRoot string
+	dc       *docker.Client
+	buildEnv EnvBuilderFn
 
 	uiState uiState
 	busyMsg string
@@ -333,7 +333,8 @@ func renderFooter() string {
 	type hint struct{ k, v string }
 	hints := []hint{
 		{"e", "enable"}, {"d", "disable"}, {"u", "start"}, {"x", "stop"},
-		{"l", "logs"}, {"r", "restart"}, {"n", "new"}, {"R", "refresh"}, {"/", "filter"}, {"q", "quit"},
+		{"l", "logs"}, {"r", "restart"}, {"n", "new"}, {"R", "refresh"},
+		{"/", "filter"}, {"j", "↓"}, {"k", "↑"}, {"gg", "top"}, {"G", "bot"}, {"q", "quit"},
 	}
 	parts := make([]string, len(hints))
 	for i, h := range hints {

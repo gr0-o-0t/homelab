@@ -17,3 +17,6 @@ databases:
       user: TA_DB_USER
       password: TA_DB_PASS
       database: TA_DB_NAME
+ports:
+  web:
+    port: 9001

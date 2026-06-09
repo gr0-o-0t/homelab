@@ -32,7 +32,7 @@ This creates:
 ~/.config/homelab/services/paperless/
 ├── docker-compose.yml
 ├── caddy.conf          # private reverse proxy (tailnet)
-├── caddy-pub.conf      # public reverse proxy (Cloudflare Tunnel)
+├── caddy.cf.conf      # public reverse proxy (Cloudflare Tunnel)
 └── config.yaml         # vars + secrets schema
 ```
 
@@ -102,7 +102,7 @@ paperless.{$HOME_SUBDOMAIN}.{$DOMAIN} {
 
 The hostname `paperless-ngx` matches `container_name` in your compose file. Caddy resolves it via Docker DNS on the `home-services` network.
 
-### 4. Edit `caddy-pub.conf` (optional public access)
+### 4. Edit `caddy.cf.conf` (optional public access)
 
 ```caddyfile
 paperless.{$PUB_SUBDOMAIN}.{$DOMAIN} {
@@ -258,5 +258,5 @@ For contributing to the catalog:
 - [ ] `docker-compose.yml` uses official images from the upstream project
 - [ ] Network isolation follows the `internal: true` pattern
 - [ ] `config.yaml` has required/sensitive fields in `secrets` section
-- [ ] Both `caddy.conf` and `caddy-pub.conf` are present and correct
+- [ ] Both `caddy.conf` and `caddy.cf.conf` are present and correct
 - [ ] README or upstream documentation link included in `config.yaml` description

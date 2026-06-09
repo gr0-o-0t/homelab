@@ -21,10 +21,10 @@
 #                  CF_TUNNEL_TOKEN secret is configured with setup).
 #
 #   tor          → optional; profile "tor". Exposes services as .onion
-#                  addresses. Auto-activated when TOR_ENABLED=true.
+#                  addresses. Activate with: homelab ext enable tor
 #
-#   i2p          → optional; profile "i2p". I2P router + eepsite hosting.
-#                  Auto-activated when I2P_ENABLED=true.
+#   i2p          → optional; profile "i2p". I2P router + eepsite hosting
+#                  via i2pd (C++). Activate with: homelab ext enable i2p
 #
 #   yggdrasil    → optional; profile "yggdrasil". IPv6 mesh node with
 #                  socat port-forwarders for per-service exposure.
@@ -114,11 +114,11 @@ services:
     volumes:
       # Main Caddyfile
       - ../caddy/Caddyfile:/etc/caddy/Caddyfile:ro
-      # conf.d, conf.d-pub, and services are mounted under a shared /homelab/
+      # conf.d, conf.d-cf, and services are mounted under a shared /homelab/
       # prefix so that relative symlinks (../../services/…) from conf.d/ resolve
       # to /homelab/services/… in the container — matching the host repo layout.
       - ../caddy/conf.d:/homelab/caddy/conf.d:ro
-      - ../caddy/conf.d-pub:/homelab/caddy/conf.d-pub:ro
+      - ../caddy/conf.d-cf:/homelab/caddy/conf.d-cf:ro
       - ../services:/homelab/services:ro
       # Persistent ACME certs and Caddy state — never delete this volume!
       - caddy-data:/data
@@ -144,7 +144,7 @@ services:
     # service depends on cloudflared being healthy.
 
   # ── Tor onion service proxy (optional) ──────────────────────────────
-  # Activated when TOR_ENABLED=true. Uses gnzsnz/torproxy.
+  # Profile-activated. Enable with: homelab ext enable tor
   # Each service gets a HiddenServicePort .onion address.
   # Reload config via: docker exec tor sh -c 'kill -HUP $(pidof tor)'
   tor:
@@ -152,8 +152,6 @@ services:
     container_name: tor
     profiles: ["tor"]
     restart: unless-stopped
-    environment:
-      TOR_ENABLED: ${TOR_ENABLED}
     volumes:
       - ../tor/torrc:/etc/tor/torrc:ro
       - ../tor/torrc.d:/etc/tor/torrc.d:ro
@@ -165,24 +163,26 @@ services:
         condition: service_healthy
 
   # ── I2P router + eepsite proxy (optional) ───────────────────────────
-  # Activated when I2P_ENABLED=true.
-  # Hosts eepsites (I2P websites) that proxy to Caddy.
-  # Router Console at port 7657, eepsite on port 7658.
+  # Profile-activated. Enable with: homelab ext enable i2p
+  # Uses i2pd (C++ implementation) — lighter than Java I2P.
+  # Eepsite tunnels configured via tunnels.conf.
+  # Manage tunnels: homelab i2p enable <service>
+  # Web Console: http://i2p:7070
   i2p:
-    image: geti2p/i2p:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.i2p
     container_name: i2p
     profiles: ["i2p"]
     restart: unless-stopped
-    environment:
-      JVM_XMX: ${I2P_JVM_XMX:-512m}
-      EXT_PORT: ${I2P_EXT_PORT:-45678}
     volumes:
-      - i2p-config:/i2p/.i2p
+      - ../i2p:/config-host:ro
+      - i2p-config:/home/i2pd/data
     networks:
       - home-services
     ports:
-      - "${I2P_EXT_PORT:-45678}:${I2P_EXT_PORT:-45678}"
-      - "${I2P_EXT_PORT:-45678}:${I2P_EXT_PORT:-45678}/udp"
+      - "${I2P_EXT_PORT:-45678}:45678"
+      - "${I2P_EXT_PORT:-45678}:45678/udp"
     depends_on:
       tailscale:
         condition: service_healthy

@@ -8,3 +8,6 @@ vars:
   P2POOL_HOST:
     value: "p2pool"
     required: false
+ports:
+  p2p:
+    port: 18080

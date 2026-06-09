@@ -40,7 +40,7 @@ type Model struct {
 	containerInput textinput.Model
 	portInput      textinput.Model
 
-	errMsg string         // current validation / render error
+	errMsg string          // current validation / render error
 	files  []scaffold.File // rendered files shown in preview step
 
 	// Scaffolded is true when the wizard successfully wrote the service files.
@@ -351,14 +351,14 @@ func (m Model) renderDone() string {
 	b.WriteString("  " + styles.Muted.Render("├──") + " caddy.conf\n")
 	b.WriteString("  " + styles.Muted.Render("└──") + " .env.example\n\n")
 	b.WriteString("  " + styles.Text.Render("Next steps:") + "\n")
-	b.WriteString(fmt.Sprintf("    1. Edit %s\n",
-		styles.Primary.Render(fmt.Sprintf("services/%s/docker-compose.yml", name))))
-	b.WriteString(fmt.Sprintf("    2. %s\n",
-		styles.Muted.Render(fmt.Sprintf("cp services/%s/.env.example services/%s/.env", name, name))))
-	b.WriteString(fmt.Sprintf("    3. %s\n",
-		styles.Primary.Render(fmt.Sprintf("homelab service up %s", name))))
-	b.WriteString(fmt.Sprintf("    4. %s\n\n",
-		styles.Primary.Render(fmt.Sprintf("homelab service enable %s", name))))
+	fmt.Fprintf(&b, "    1. Edit %s\n",
+		styles.Primary.Render(fmt.Sprintf("services/%s/docker-compose.yml", name)))
+	fmt.Fprintf(&b, "    2. %s\n",
+		styles.Muted.Render(fmt.Sprintf("cp services/%s/.env.example services/%s/.env", name, name)))
+	fmt.Fprintf(&b, "    3. %s\n",
+		styles.Primary.Render(fmt.Sprintf("homelab up %s", name)))
+	fmt.Fprintf(&b, "    4. %s\n\n",
+		styles.Primary.Render(fmt.Sprintf("homelab enable %s", name)))
 	b.WriteString("  " + styles.Muted.Render("[enter] dismiss") + "\n")
 	return b.String()
 }

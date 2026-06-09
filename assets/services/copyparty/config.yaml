@@ -7,3 +7,6 @@ vars:
     required: false
 
 secrets: {}
+ports:
+  web:
+    port: 3923

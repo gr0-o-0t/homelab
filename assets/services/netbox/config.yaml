@@ -28,3 +28,6 @@ databases:
       user: NB_DB_USER
       password: NB_DB_PASS
       database: NB_DB_NAME
+ports:
+  web:
+    port: 8080

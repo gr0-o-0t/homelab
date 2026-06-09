@@ -14,8 +14,8 @@ import (
 const yggContainer = "yggdrasil"
 
 var yggCmd = &cobra.Command{
-	Use:     "yggdrasil",
-	Aliases: []string{"ygg"},
+	Use:     "ygg",
+	Aliases: []string{yggContainer},
 	Short:   "Manage Yggdrasil IPv6 mesh node",
 	Long:    "Inspect the Yggdrasil mesh node and manage per-service socat port forwarders.",
 }
@@ -38,11 +38,11 @@ var yggStatusCmd = &cobra.Command{
 		}
 
 		state := containerStatus(yggContainer)
-		if state == "running" {
+		if state == containerStateRunning {
 			fmt.Printf("  %s  yggdrasil  %s\n", styles.Success.Render("✓"), styles.StateTag(state))
 		} else {
 			fmt.Printf("  %s  yggdrasil  %s\n", styles.Err.Render("✗"), styles.StateTag(state))
-			fmt.Printf("\n  Start with: %s\n\n", styles.Primary.Render("homelab core start"))
+			fmt.Printf("\n  Start with: %s\n\n", styles.Primary.Render("homelab start"))
 			return nil
 		}
 
@@ -127,18 +127,18 @@ Use --port to override the port detected from caddy.conf.`,
 
 		// Write socat forwarder config
 		socatDir := filepath.Join(root, "yggdrasil", "socat.d")
-		if err := os.MkdirAll(socatDir, 0o755); err != nil {
+		if err := os.MkdirAll(socatDir, 0o750); err != nil {
 			return fmt.Errorf("creating socat.d: %w", err)
 		}
 		fwdPath := filepath.Join(socatDir, name+".forward")
 		content := fmt.Sprintf("PORT=%s\nTARGET=%s:%s\n", port, name, port)
-		if err := os.WriteFile(fwdPath, []byte(content), 0o644); err != nil {
+		if err := os.WriteFile(fwdPath, []byte(content), 0o600); err != nil {
 			return fmt.Errorf("writing %s: %w", fwdPath, err)
 		}
 		fmt.Printf("  %s  %s written\n", styles.Success.Render("✓"), fwdPath)
 
 		// Restart yggdrasil container to pick up new forwarders
-		if err := restartYgg(); err != nil {
+		if err := RestartYgg(); err != nil {
 			return fmt.Errorf("restarting yggdrasil: %w", err)
 		}
 		fmt.Printf("  %s  Yggdrasil restarted — forwarder active\n\n", styles.Success.Render("✓"))
@@ -166,7 +166,7 @@ var yggDisableCmd = &cobra.Command{
 		}
 		fmt.Printf("  %s  %s removed\n", styles.Warning.Render("→"), fwdPath)
 
-		if err := restartYgg(); err != nil {
+		if err := RestartYgg(); err != nil {
 			return fmt.Errorf("restarting yggdrasil: %w", err)
 		}
 		fmt.Printf("  %s  Yggdrasil restarted — forwarder removed\n\n", styles.Success.Render("✓"))
@@ -216,7 +216,31 @@ var yggListCmd = &cobra.Command{
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-func restartYgg() error {
+// AppendYggForwarder writes a socat forwarder config for a service and restarts yggdrasil.
+func AppendYggForwarder(root, name, port string) error {
+	socatDir := filepath.Join(root, "yggdrasil", "socat.d")
+	if err := os.MkdirAll(socatDir, 0o750); err != nil {
+		return fmt.Errorf("creating socat.d: %w", err)
+	}
+	fwdPath := filepath.Join(socatDir, name+".forward")
+	content := fmt.Sprintf("PORT=%s\nTARGET=%s:%s\n", port, name, port)
+	if err := os.WriteFile(fwdPath, []byte(content), 0o600); err != nil {
+		return fmt.Errorf("writing %s: %w", fwdPath, err)
+	}
+	return nil
+}
+
+// RemoveYggForwarder removes a socat forwarder config and restarts yggdrasil.
+func RemoveYggForwarder(root, name string) error {
+	fwdPath := filepath.Join(root, "yggdrasil", "socat.d", name+".forward")
+	if _, err := os.Stat(fwdPath); os.IsNotExist(err) {
+		return nil
+	}
+	return os.Remove(fwdPath)
+}
+
+// RestartYgg restarts the yggdrasil container to reload forwarder configs.
+func RestartYgg() error {
 	root := configDir()
 	env := buildEnv(root, "")
 	return run.Default().DockerComposeEnv(
@@ -240,6 +264,4 @@ func extractVar(data, key string) string {
 
 func init() {
 	yggEnableCmd.Flags().StringVar(&yggEnablePort, "port", "", "Override service port")
-	yggCmd.AddCommand(yggStatusCmd, yggLogsCmd, yggEnableCmd, yggDisableCmd, yggListCmd)
-	rootCmd.AddCommand(yggCmd)
 }

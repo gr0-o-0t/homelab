@@ -65,12 +65,19 @@ func init() {
 	rootCmd.PersistentFlags().BoolVar(&rootFlags.json, "json", false,
 		"output as JSON (on commands that support it)")
 
+	rootCmd.AddCommand(serviceAddCmd)
 	rootCmd.AddCommand(serviceCmd)
-	rootCmd.AddCommand(coreCmd)
-	rootCmd.AddCommand(caddyCmd)
-	rootCmd.AddCommand(tsCmd)
+	rootCmd.AddCommand(serviceNewCmd)
+	rootCmd.AddCommand(serviceUpdateCmd)
+	rootCmd.AddCommand(startCmd)
+	rootCmd.AddCommand(stopCmd)
+	rootCmd.AddCommand(restartCmd)
+	rootCmd.AddCommand(logsCmd)
+	rootCmd.AddCommand(statusCmd)
 	rootCmd.AddCommand(setupCmd)
 	rootCmd.AddCommand(doctorCmd)
+	rootCmd.AddCommand(reloadCmd)
+	rootCmd.AddCommand(validateCmd)
 }
 
 // configDir returns the effective homelab config directory.
