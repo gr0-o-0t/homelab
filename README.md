@@ -126,6 +126,13 @@ homelab logs [service]          Tail logs (TTY → interactive TUI log viewer)
 homelab start --all                  # all services
 homelab start --group media          # by group (defined in config.yaml)
 homelab start --group media --all    # error: mutually exclusive
+homelab start --build                # rebuild images before starting
+```
+
+`restart` also supports `--build`:
+
+```
+homelab restart --build              # rebuild and recreate
 ```
 
 Aliases: `start` ↔ `up`, `stop` ↔ `down`
@@ -153,6 +160,12 @@ homelab doctor                     Environment health check
 homelab doctor <service>           Per-service health check
 homelab doctor --all               Check all installed services
 homelab validate                   Validate Caddyfile syntax only
+```
+
+### Shell completion
+
+```
+homelab completion bash|zsh|fish|powershell   Generate shell completion scripts
 ```
 
 ### Network extensions
@@ -322,7 +335,7 @@ All runtime state lives under `${XDG_CONFIG_HOME:-$HOME/.config}/homelab/`:
 ├── caddy/               # installed by homelab setup
 │   ├── Caddyfile
 │   └── conf.d/
-└── services/            # populated by homelab service add
+└── services/            # populated by homelab add
     └── uptime-kuma/
         ├── docker-compose.yml
         ├── caddy.conf

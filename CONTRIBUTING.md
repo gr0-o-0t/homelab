@@ -63,13 +63,13 @@ assets/services/<name>/
 
 ### Manual testing checklist
 
-- [ ] Service installs from catalog: `homelab service add <name>`
-- [ ] Configuration works: `homelab service setup <name>`
-- [ ] Containers start: `homelab service up <name>`
-- [ ] Private access works: `homelab service enable <name> --private`
-- [ ] Public access works (if applicable): `homelab service enable <name> --public`
+- [ ] Service installs from catalog: `homelab add <name>`
+- [ ] Configuration works: `homelab setup <name>`
+- [ ] Containers start: `homelab up <name>`
+- [ ] Private access works: `homelab enable <name>`
+- [ ] Public access works (if applicable): `homelab enable <name> --cf`
 - [ ] Service is accessible via browser
-- [ ] Logs show no errors: `homelab service logs <name>`
+- [ ] Logs show no errors: `homelab logs <name>`
 
 ### Automated tests
 
@@ -88,7 +88,7 @@ When reporting bugs, please include:
 1. **Steps to reproduce**: Detailed steps to reproduce the issue
 2. **Expected behavior**: What you expected to happen
 3. **Actual behavior**: What actually happened
-4. **Logs**: Relevant logs from `homelab service logs <name>` or `homelab core logs`
+4. **Logs**: Relevant logs from `homelab logs <name>`
 5. **Environment**: OS, Docker version, Go version
 6. **Configuration**: Sanitized config (remove secrets)
 

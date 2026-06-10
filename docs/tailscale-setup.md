@@ -77,7 +77,7 @@ command = mkdir -p /dev/net && mknod -m 0666 /dev/net/tun c 10 200 || true
 ## 5. Verify the node is registered
 
 ```bash
-homelab ts status
+homelab status
 ```
 
 You should see your `TS_HOSTNAME` node (e.g. `caddy-home`) listed with a `100.x.x.x` Tailscale IP. That IP is what you'll use as the value for the Cloudflare A record.

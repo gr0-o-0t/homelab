@@ -6,10 +6,10 @@ This guide walks through adding a new self-hosted app (e.g. Paperless-ngx) to th
 
 ```bash
 # Interactive wizard (recommended)
-homelab service new
+homelab new
 
 # Non-interactive with flags
-homelab service new paperless --container paperless-ngx --port 8000
+homelab new paperless --container paperless-ngx --port 8000
 ```
 
 This creates `~/.config/homelab/services/paperless/` with boilerplate files. Edit the generated files, then follow the steps below to test and optionally contribute to the catalog.
@@ -23,7 +23,7 @@ This creates `~/.config/homelab/services/paperless/` with boilerplate files. Edi
 Run the wizard to generate boilerplate:
 
 ```bash
-homelab service new paperless
+homelab new paperless
 ```
 
 This creates:
@@ -136,20 +136,20 @@ secrets:
 Run the interactive setup wizard to configure values:
 
 ```bash
-homelab service setup paperless
+homelab setup paperless
 ```
 
 ### 6. Start the service stack
 
 ```bash
-homelab service up paperless
+homelab up paperless
 ```
 
 Verify containers are healthy:
 
 ```bash
-homelab service ps paperless
-homelab service logs paperless
+homelab status paperless
+homelab logs paperless
 ```
 
 ### 7. Expose the service via Caddy
@@ -157,10 +157,10 @@ homelab service logs paperless
 For private (tailnet) access:
 
 ```bash
-homelab service enable paperless --private
+homelab enable paperless
 ```
 
-This symlinks `caddy.conf` into `caddy/conf.d/` and reloads Caddy. It will:
+This generates Caddy config and reloads Caddy. It will:
 - Validate the Caddyfile syntax
 - Obtain a TLS certificate (or reuse the wildcard if already issued)
 - Start routing `paperless.<HOME_SUBDOMAIN>.<DOMAIN>` → the container
@@ -168,9 +168,9 @@ This symlinks `caddy.conf` into `caddy/conf.d/` and reloads Caddy. It will:
 For public internet access (optional):
 
 ```bash
-# First configure Cloudflare Tunnel
-homelab tunnel route add paperless
-homelab service enable paperless --public
+# First configure Cloudflare Tunnel DNS route
+homelab ext cf route add paperless
+homelab enable paperless --cf
 ```
 
 ### 8. Test from a tailnet-connected device
@@ -203,13 +203,13 @@ This exports `assets/services/` → `services/` for local browsing verification.
 
 ```bash
 # Remove the local copy
-rm -rf ~/.config/homelab/services/paperless
+homelab delete paperless
 
 # Install from catalog
-homelab service add paperless
-homelab service setup paperless
-homelab service up paperless
-homelab service enable paperless --private
+homelab add paperless
+homelab setup paperless
+homelab up paperless
+homelab enable paperless
 ```
 
 4. **Submit a PR** with your changes to `assets/services/paperless/`
@@ -221,20 +221,20 @@ homelab service enable paperless --private
 ### Remove from Caddy routing (without stopping containers)
 
 ```bash
-homelab service disable paperless
+homelab disable paperless
 ```
 
 ### Stop the service completely
 
 ```bash
-homelab service disable paperless
-homelab service down paperless
+homelab disable paperless
+homelab down paperless
 ```
 
 ### Remove the service from your config directory
 
 ```bash
-rm -rf ~/.config/homelab/services/paperless
+homelab delete paperless
 ```
 
 ---
@@ -247,9 +247,9 @@ For a working service:
 - [ ] Primary container is on `home-services` network
 - [ ] Databases / workers are on a separate `internal: true` network
 - [ ] `config.yaml` has sensible defaults and clear descriptions
-- [ ] `homelab service setup <name>` — configure vars and secrets
-- [ ] `homelab service up <name>` — containers healthy
-- [ ] `homelab service enable <name> --private` — Caddy reloaded without errors
+- [ ] `homelab setup <name>` — configure vars and secrets
+- [ ] `homelab up <name>` — containers healthy
+- [ ] `homelab enable <name>` — Caddy reloaded without errors
 - [ ] Accessible at `https://<service>.<HOME_SUBDOMAIN>.<DOMAIN>` from a tailnet device
 
 For contributing to the catalog:

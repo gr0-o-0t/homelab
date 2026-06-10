@@ -25,26 +25,81 @@ go test ./internal/scaffold/...
 
 ## CLI Commands
 
+### Service lifecycle
+
+```bash
+homelab add [name]                                 # install a bundled service from the catalog (no name → list catalog)
+homelab new [name]                                 # scaffold wizard (TUI) or --container/--port flags
+homelab setup [service]                            # configure vars and secrets interactively (no arg → root wizard)
+homelab start [service]     (alias: up)            # start core stack or service(s) (--all, --group, --build)
+homelab stop [service]      (alias: down)          # stop core stack or service(s) (--all, --group)
+homelab restart [service]                          # restart containers (--all, --group, --build)
+homelab reload [service]                           # reload Caddy config or a service's routing
+homelab update [service]                           # pull latest images + restart (--all)
+homelab delete <service>    (alias: rm)            # remove service entirely
+```
+
+### Observation and diagnostics
+
 ```bash
 homelab                                            # interactive TUI (service browser)
-homelab service list                               # list services (--json for machine-readable)
-homelab service add [name]                         # install a bundled service from the catalog
-homelab service setup <name>                       # configure vars and secrets interactively
-homelab service up/down/restart [name|--all|--group <g>]  # lifecycle (batch-capable)
-homelab service update [name|--all]               # pull latest images + restart
-homelab service logs <name> [-f] [--tail N] [--since T]   # logs (TUI on TTY, plain otherwise)
-homelab service ps <name>                          # container status
-homelab service enable/disable [name|--all|--group <g>] --private/--public
-homelab service doctor [name|--all] [--fix]        # health check with optional auto-repair
-homelab service new [name]                         # scaffold wizard (TUI) or --container/--port flags
-homelab core start/stop/restart/logs/status        # core stack (Tailscale + Caddy)
-homelab caddy reload/validate
-homelab ts status
-homelab tunnel status/logs                         # Cloudflare Tunnel management
-homelab tunnel route add/rm <service>              # manage DNS routes for public exposure
-homelab setup                                      # interactive config wizard (config.yaml + keyring)
-homelab doctor [--fix]                             # health check with optional auto-repair
-homelab completion [bash|zsh|fish|powershell]      # generate shell completion scripts
+homelab status [service]                           # show status overview or per-service detail
+homelab logs [service]                             # logs (TUI on TTY, plain otherwise)
+homelab doctor [service] [--fix] [--all]           # health check with optional auto-repair
+homelab validate                                   # validate Caddyfile syntax
+homelab service list                               # list services + exposure status (legacy, hidden)
+homelab service ps <name>                          # container status (legacy, hidden)
+```
+
+### Network exposure
+
+```bash
+homelab enable <service>                           # private tailnet only (default)
+homelab enable <service> --cf                      # + Cloudflare Tunnel (public)
+homelab enable <service> --i2p                     # + I2P eepsite
+homelab enable <service> --tor                     # + Tor .onion service
+homelab enable <service> --ygg                     # + Yggdrasil mesh
+homelab enable <service> --all                     # all available extensions
+homelab enable <service> --name=<custom>           # custom display name/subdomain
+homelab enable <service> --ports=web,ssh           # expose specific named ports only
+
+homelab disable <service>                          # remove private tailnet route
+homelab disable <service> --cf                     # remove Cloudflare Tunnel
+homelab disable <service> --i2p                    # remove I2P eepsite
+homelab disable <service> --tor                    # remove Tor .onion
+homelab disable <service> --ygg                    # remove Yggdrasil mesh
+homelab disable <service> -a                       # remove all layers + stop container
+```
+
+### Configuration
+
+```bash
+homelab setup                                      # interactive root config wizard (config.yaml + keyring)
+homelab setup <service>                            # per-service config wizard
+```
+
+### Shell completion
+
+```bash
+homelab completion bash|zsh|fish|powershell        # generate shell completion scripts
+```
+
+### Network extensions (`homelab ext`)
+
+```bash
+homelab ext list                                   # list extensions and their enabled/disabled status
+homelab ext status [ext]                           # show container status for all or one extension
+homelab ext logs [ext]                             # stream logs for all or one extension
+homelab ext start [ext]                            # start extension container(s)
+homelab ext stop [ext]                             # stop extension container(s)
+
+homelab ext cf route add <service>                 # add Cloudflare DNS route
+homelab ext cf route rm <service>                  # remove Cloudflare DNS route
+homelab ext ipfs gateway enable                    # enable IPFS Gateway Caddy route
+homelab ext ipfs gateway disable                   # disable IPFS Gateway Caddy route
+homelab ext i2p <status|logs|list>                 # i2pd router management
+homelab ext tor <status|logs|list>                 # Tor onion service management
+homelab ext ygg <status|logs|list>                 # Yggdrasil mesh management
 ```
 
 ## Architecture
@@ -59,7 +114,7 @@ Override with `--config-dir <path>` or `--config <file>` (file takes priority).
 ├── config.yaml          # root vars (DOMAIN, HOME_SUBDOMAIN, …)
 ├── core/                # installed by homelab setup (from assets/core/)
 ├── caddy/               # installed by homelab setup (from assets/caddy/)
-└── services/            # populated by homelab service add (from assets/services/)
+└── services/            # populated by homelab add (from assets/services/)
 ```
 
 Secrets (API tokens, passwords) are **never** written to disk — they are stored in the system keyring and injected into docker compose at runtime via `cmd.Env`.
@@ -105,13 +160,13 @@ Tailscale and Caddy run as a pair. Caddy uses `network_mode: service:tailscale`,
 - `caddy/Caddyfile` — global config: ACME settings, Cloudflare DNS-01, wildcard TLS snippet, imports `conf.d/*.conf`
 - `caddy/conf.d/` — per-service site blocks, populated by symlinking from `services/<name>/caddy.conf`
 
-`homelab service enable` creates a relative symlink `caddy/conf.d/<name>.conf → ../../services/<name>/caddy.conf` and reloads Caddy gracefully. Disable removes it.
+`homelab enable <name>` generates Caddy config into `caddy/conf.d/` and reloads Caddy gracefully. `homelab disable` removes it.
 
 ### Embedded Catalog (`assets/`)
 
 `assets/assets.go` embeds two filesystems:
 - `CoreFS` — `core/` + `caddy/` trees; `homelab setup` installs these to the config dir
-- `CatalogFS` — `services/` tree; `homelab service add <name>` copies one entry to the config dir
+- `CatalogFS` — `services/` tree; `homelab add <name>` copies one entry to the config dir
 
 **The canonical service catalog is `assets/services/`.** This is the only copy — edit
 files directly in `assets/services/<name>/`. The root `services/` directory is a
@@ -139,9 +194,13 @@ groups:
 Groups are used with `--group <name>` on lifecycle commands:
 
 ```bash
-homelab service up --group media
-homelab service enable --group media --private
+homelab up --group media              # start all media services
+homelab down --group media            # stop all media services
 ```
+
+Note: `--group` is only supported on `start`/`up`, `stop`/`down`, and `restart`.
+`enable` and `disable` operate on single services only — use `--all` to affect
+every layer at once.
 
 ### Go package layout
 
@@ -156,7 +215,7 @@ homelab service enable --group media --private
 | `internal/run` | `Commander` — shells out to `docker compose`; injects env via `cmd.Env` |
 | `internal/caddy` | Symlink management + Caddy validate/reload via docker exec |
 | `internal/scaffold` | `//go:embed templates/*`; `Render()` + `Write()` for new-service boilerplate |
-| `internal/tui/list` | Bubble Tea fullscreen service browser |
+| `internal/tui/dashboard` | Bubble Tea fullscreen service browser |
 | `internal/tui/logs` | Bubble Tea streaming log viewer |
 | `internal/tui/wizard` | Multi-step new-service scaffold wizard |
 | `internal/tui/spinner` | Goroutine spinner (TTY-aware) |
@@ -165,17 +224,17 @@ homelab service enable --group media --private
 ### Key design decisions
 
 - **Docker SDK for status, shell-out for lifecycle**: SDK used only for read-only inspection (ContainerList, ContainerInspect). `docker compose` CLI is shelled out for lifecycle ops to preserve Compose's reconciliation logic.
-- **No secrets on disk**: `run.Commander.DockerComposeEnv` injects via `cmd.Env = mergeEnv(os.Environ(), overrides)` — no temp `.env` files.
+- **No secrets on disk**: Commander injects via `cmd.Env` — no temp `.env` files.
 - **TTY detection**: `isatty.IsTerminal(os.Stdout.Fd()) && !noColor()` — TUI when interactive, plain table when piped/CI.
 - **Spinner + captured output**: Caddy reload output is captured in a `bytes.Buffer` Commander while the spinner runs; buffer is printed only on error.
 
 ## Adding a New Service
 
 ```bash
-homelab service new          # interactive scaffold wizard
-homelab service setup myapp  # configure vars and secrets
-homelab service up myapp
-homelab service enable myapp --private
+homelab new myapp             # interactive scaffold wizard
+homelab setup myapp           # configure vars and secrets
+homelab up myapp              # start containers
+homelab enable myapp          # expose on private tailnet
 ```
 
 Then add the service to the embedded catalog by creating `assets/services/myapp/`.

@@ -21,8 +21,8 @@ Copy the token and paste it as `CLOUDFLARE_API_TOKEN` in your `.env`.
 Start the core stack and find Caddy's Tailscale IP:
 
 ```bash
-homelab core start
-homelab ts status
+homelab start
+homelab status
 ```
 
 Look for the node named after your `TS_HOSTNAME` (e.g. `caddy-home`) and note its `100.x.x.x` address. Tailscale IPs are stable — they only change if the node is removed and re-added to the tailnet.
