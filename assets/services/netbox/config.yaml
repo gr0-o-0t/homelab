@@ -19,15 +19,27 @@ secrets:
     required: true
 
 databases:
-  postgres:
-    database: netbox
-    user: netbox
-    env:
-      host: NB_DB_HOST
-      port: NB_DB_PORT
-      user: NB_DB_USER
-      password: NB_DB_PASS
-      database: NB_DB_NAME
+  - postgres:
+      database: netbox
+      user: netbox
+      env:
+        host: NB_DB_HOST
+        port: NB_DB_PORT
+        user: NB_DB_USER
+        password: NB_DB_PASS
+        database: NB_DB_NAME
+  - redis:
+      host: netbox-redis
+      port: 6379
+      env:
+        host: NB_REDIS_HOST
+        port: NB_REDIS_PORT
+  - redis:
+      host: netbox-redis-cache
+      port: 6380
+      env:
+        host: NB_REDIS_CACHE_HOST
+        port: NB_REDIS_CACHE_PORT
 ports:
   web:
     port: 8080

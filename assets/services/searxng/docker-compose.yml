@@ -1,71 +1,34 @@
-# ─────────────────────────────────────────────────────────────────────────────
 # Service: SearXNG (privacy-respecting metasearch engine)
 # https://docs.searxng.org/admin/installation-docker.html
-# ─────────────────────────────────────────────────────────────────────────────
-
+# db: uses shared Redis (homelab-redis). REDIS_URL is auto-generated
+# from config.yaml `databases:` section at runtime.
 networks:
-  # Shared network — Caddy (via Tailscale namespace) reaches every service here
   home-services:
     name: home-services
     external: true
-  # Internal-only network for SearXNG ↔ Valkey traffic.
-  # Never expose this outside the stack.
-  searxng-internal:
-    internal: true
 
 services:
   searxng:
     image: searxng/searxng:latest
     container_name: searxng
-    user: "${PUID:-1000}:${PGID:-1000}"
     restart: unless-stopped
-    depends_on:
-      searxng-valkey:
-        condition: service_healthy
     environment:
       SEARXNG_BASE_URL: https://searxng.${HOME_SUBDOMAIN}.${DOMAIN}
       SEARXNG_SECRET_KEY: ${SECRET_KEY}
-      REDIS_URL: redis://searxng-valkey:6379/0
+      REDIS_URL: ${SEARXNG_REDIS_URL}
     volumes:
       - searxng-config:/etc/searxng
     networks:
-      - home-services # reachable by Caddy
-      - searxng-internal # internal comms
-    cap_drop:
-      - ALL
-    cap_add:
-      - CHOWN
-      - SETGID
-      - SETUID
+      - home-services
     healthcheck:
       test:
-        [
-          "CMD-SHELL",
-          "wget -q --spider http://localhost:8080 2>/dev/null || exit 1",
-        ]
+        - "CMD-SHELL"
+        - "wget -q --spider http://localhost:8080 2>/dev/null || exit 1"
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 30s
 
-  searxng-valkey:
-    image: docker.io/valkey/valkey:9-alpine
-    container_name: searxng-valkey
-    user: "${PUID:-1000}:${PGID:-1000}"
-    restart: unless-stopped
-    command: valkey-server --save 30 1 --loglevel warning
-    volumes:
-      - searxng-valkey:/data
-    networks:
-      - searxng-internal
-    healthcheck:
-      test: ["CMD-SHELL", "valkey-cli ping || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
 volumes:
   searxng-config:
     name: searxng_config
-  searxng-valkey:
-    name: searxng_valkey

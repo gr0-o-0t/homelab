@@ -1,6 +1,6 @@
 vars:
   REDIS_VERSION:
-    value: "7-alpine"
+    value: "8-alpine"
     required: false
     description: "Redis image tag"
 

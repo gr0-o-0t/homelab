@@ -9,15 +9,15 @@ vars:
 secrets: {}
 
 databases:
-  postgres:
-    database: gitea
-    user: gitea
-    env:
-      host: GI_DB_HOST
-      port: GI_DB_PORT
-      user: GI_DB_USER
-      password: GI_DB_PASS
-      database: GI_DB_NAME
+  - postgres:
+      database: gitea
+      user: gitea
+      env:
+        host: GI_DB_HOST
+        port: GI_DB_PORT
+        user: GI_DB_USER
+        password: GI_DB_PASS
+        database: GI_DB_NAME
 ports:
   web:
     port: 3000

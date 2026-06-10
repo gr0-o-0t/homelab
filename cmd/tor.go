@@ -24,8 +24,9 @@ var torCmd = &cobra.Command{
 // ── status ────────────────────────────────────────────────────────────────────
 
 var torStatusCmd = &cobra.Command{
-	Use:   "status",
-	Short: "Show Tor container and onion service status",
+	Use:     "status",
+	Aliases: []string{"ps"},
+	Short:   "Show Tor container and onion service status",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		root := configDir()
 

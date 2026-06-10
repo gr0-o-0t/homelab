@@ -8,15 +8,15 @@ secrets:
     required: true
 
 databases:
-  postgres:
-    database: tandoor
-    user: tandoor
-    env:
-      host: TA_DB_HOST
-      port: TA_DB_PORT
-      user: TA_DB_USER
-      password: TA_DB_PASS
-      database: TA_DB_NAME
+  - postgres:
+      database: tandoor
+      user: tandoor
+      env:
+        host: TA_DB_HOST
+        port: TA_DB_PORT
+        user: TA_DB_USER
+        password: TA_DB_PASS
+        database: TA_DB_NAME
 ports:
   web:
     port: 9001

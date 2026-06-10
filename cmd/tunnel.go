@@ -20,8 +20,9 @@ var cfCmd = &cobra.Command{
 // ── status ────────────────────────────────────────────────────────────────────
 
 var tunnelStatusCmd = &cobra.Command{
-	Use:   "status",
-	Short: "Show Cloudflare Tunnel status and connections",
+	Use:     "status",
+	Aliases: []string{"ps"},
+	Short:   "Show Cloudflare Tunnel status and connections",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		root := configDir()
 		env := buildEnv(root, "")

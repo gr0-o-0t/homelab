@@ -1,6 +1,10 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Service: Immich (self-hosted photo & video backup)
 # https://immich.app/docs/install/docker-compose
+# db: uses shared Redis (homelab-redis). REDIS_HOSTNAME/REDIS_PORT
+# injected from config.yaml `databases:` section at runtime.
+# Postgres stays local (immich-postgres) — Immich's fork bundles
+# pgvector/pgvecto.rs extensions not in shared homelab-postgres.
 # ─────────────────────────────────────────────────────────────────────────────
 
 networks:
@@ -21,16 +25,16 @@ services:
     user: "${PUID:-1000}:${PGID:-1000}"
     restart: unless-stopped
     depends_on:
-      immich-redis:
-        condition: service_healthy
       immich-postgres:
         condition: service_healthy
     environment:
-      DB_HOSTNAME: immich-postgres
+      DB_HOSTNAME: ${DB_HOSTNAME}
+      DB_PORT: ${DB_PORT}
       DB_USERNAME: ${DB_USERNAME:-immich}
       DB_PASSWORD: ${DB_PASSWORD}
       DB_DATABASE_NAME: ${DB_DATABASE_NAME:-immich}
-      REDIS_HOSTNAME: immich-redis
+      REDIS_HOSTNAME: ${REDIS_HOSTNAME}
+      REDIS_PORT: ${REDIS_PORT}
       UPLOAD_LOCATION: /usr/src/app/upload
       IMMICH_VERSION: ${IMMICH_VERSION:-release}
     volumes:
@@ -69,19 +73,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 120s # model loading takes time
-
-  immich-redis:
-    image: docker.io/valkey/valkey:9-alpine
-    container_name: immich-redis
-    user: "${PUID:-1000}:${PGID:-1000}"
-    restart: unless-stopped
-    networks:
-      - immich-internal
-    healthcheck:
-      test: ["CMD", "valkey-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
 
   immich-postgres:
     image: ghcr.io/immich-app/postgres:14-vectorchord0.4.3-pgvectors0.2.0

@@ -90,6 +90,7 @@ services:
       CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN}
       DOMAIN: ${DOMAIN}
       HOME_SUBDOMAIN: ${HOME_SUBDOMAIN:-home}
+      PUB_SUBDOMAIN: ${PUB_SUBDOMAIN:-pub}
       ACME_EMAIL: ${ACME_EMAIL}
     healthcheck:
       test:

@@ -9,15 +9,15 @@ vars:
 secrets: {}
 
 databases:
-  postgres:
-    database: forgejo
-    user: forgejo
-    env:
-      host: F_DB_HOST
-      port: F_DB_PORT
-      user: F_DB_USER
-      password: F_DB_PASS
-      database: F_DB_NAME
+  - postgres:
+      database: forgejo
+      user: forgejo
+      env:
+        host: F_DB_HOST
+        port: F_DB_PORT
+        user: F_DB_USER
+        password: F_DB_PASS
+        database: F_DB_NAME
 ports:
   web:
     port: 3000

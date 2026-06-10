@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/groot/homelab/assets"
+	"github.com/groot/homelab/internal/config"
 	"github.com/groot/homelab/internal/tui/styles"
 	"github.com/spf13/cobra"
 )
@@ -82,6 +83,11 @@ func runServiceAdd(_ *cobra.Command, args []string) error {
 		styles.Bold.Render(name),
 		destDir,
 	)
+
+	// Auto-configure root databases section for shared DB services.
+	if err := config.EnsureRootDBConfig(rootConfigFile(), name); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: auto-configuring databases: %v\n", err)
+	}
 
 	// On a TTY, offer to run setup immediately rather than making the user
 	// remember the next step.

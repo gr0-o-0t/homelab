@@ -180,16 +180,15 @@ func buildHTTPBlock(displayName, ext, svcName string, port PortSelection) string
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s {\n", domain)
-	if ext == "private" || ext == "cf" {
+	// TLS is terminated at Cloudflare's edge for CF public traffic.
+	// Only private tailnet domains need the wildcard TLS import.
+	if ext == "private" {
 		b.WriteString("    import wildcard_tls\n")
 	}
 	fmt.Fprintf(&b, "    reverse_proxy %s:%d\n", svcName, port.Port)
 
-	// WebSocket headers for common HTTP ports
-	if port.Port == 3000 || port.Port == 8080 || port.Port == 8096 || port.Port == 9000 {
-		b.WriteString("    header_up conn {http.req.header.conn}\n")
-		b.WriteString("    header_up Upgrade {http.req.header.Upgrade}\n")
-	}
+	// WebSocket headers are handled automatically by Caddy v2 reverse_proxy.
+	// No need to forward Connection/Upgrade manually.
 
 	b.WriteString("}\n")
 	return b.String()
@@ -256,7 +255,11 @@ func ExtensionLabel(ext string) string {
 // ── File writing ───────────────────────────────────────────────────────────────
 
 // ConfigDir returns the extension-specific Caddy config directory.
+// Private tailnet configs use "conf.d" (no suffix) for Caddyfile import compat.
 func ConfigDir(configRoot, ext string) string {
+	if ext == "private" {
+		return filepath.Join(configRoot, "caddy", "conf.d")
+	}
 	return filepath.Join(configRoot, "caddy", "conf.d-"+ext)
 }
 

@@ -202,8 +202,9 @@ func RemoveI2PTunnel(root, name string) error {
 // ── status ────────────────────────────────────────────────────────────────────
 
 var i2pStatusCmd = &cobra.Command{
-	Use:   "status",
-	Short: "Show i2pd router status",
+	Use:     "status",
+	Aliases: []string{"ps"},
+	Short:   "Show i2pd router status",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		root := configDir()
 

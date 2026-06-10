@@ -23,8 +23,9 @@ var yggCmd = &cobra.Command{
 // ── status ────────────────────────────────────────────────────────────────────
 
 var yggStatusCmd = &cobra.Command{
-	Use:   "status",
-	Short: "Show Yggdrasil node and forwarding status",
+	Use:     "status",
+	Aliases: []string{"ps"},
+	Short:   "Show Yggdrasil node and forwarding status",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		root := configDir()
 

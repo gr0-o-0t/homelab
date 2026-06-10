@@ -54,16 +54,99 @@ type DatabaseConfig struct {
 }
 
 // ServiceDBDecl describes a single service's database dependency.
+// Host/Port: when set, override root-level shared DB host/port
+// (e.g. for local DB containers defined in the service's compose file).
+// DSNTemplate: custom DSN template; use {host}/{port}/{user}/{password}/{database}
+// placeholders. Omit to use the per-type default template.
 type ServiceDBDecl struct {
-	Database   string            `yaml:"database"`
-	User       string            `yaml:"user"`
-	Extensions []string          `yaml:"extensions,omitempty"`
-	DB         int               `yaml:"db,omitempty"` // Redis DB index
-	Env        map[string]string `yaml:"env"`
+	Database    string            `yaml:"database,omitempty"`
+	User        string            `yaml:"user,omitempty"`
+	Host        string            `yaml:"host,omitempty"`
+	Port        int               `yaml:"port,omitempty"`
+	DSNTemplate string            `yaml:"dsn_template,omitempty"`
+	Extensions  []string          `yaml:"extensions,omitempty"`
+	Env         map[string]string `yaml:"env"`
 }
 
-// ServiceDatabases maps DB type → per-service DB declaration.
-type ServiceDatabases map[DBType]ServiceDBDecl
+// TypedDBDecl pairs a database type with its declaration.
+// This flat structure allows multiple instances of the same DB type.
+type TypedDBDecl struct {
+	Type DBType
+	ServiceDBDecl
+}
+
+// ServiceDatabases is a flat list of database declarations.
+// Supports multiple instances of the same DB type.
+// YAML accepts both a sequence (new format) and a mapping (legacy format).
+type ServiceDatabases []TypedDBDecl
+
+// DBTypeSet returns the set of unique DB types in this declaration list.
+func (d ServiceDatabases) DBTypeSet() map[DBType]bool {
+	set := make(map[DBType]bool, len(d))
+	for _, entry := range d {
+		set[entry.Type] = true
+	}
+	return set
+}
+
+// UnmarshalYAML accepts both the new sequence format and the legacy mapping format.
+//
+// New format (recommended):
+//
+//	databases:
+//	  - postgres:
+//	      database: forgejo
+//	      env: { ... }
+//	  - redis:
+//	      env: { ... }
+//
+// Legacy format (backward compatible):
+//
+//	databases:
+//	  postgres:
+//	    database: forgejo
+//	    env: { ... }
+func (d *ServiceDatabases) UnmarshalYAML(value *yaml.Node) error {
+	switch value.Kind {
+	case yaml.SequenceNode:
+		return d.decodeSequence(value)
+	case yaml.MappingNode:
+		return d.decodeLegacy(value)
+	default:
+		return fmt.Errorf("databases: expected sequence or mapping, got kind %d", value.Kind)
+	}
+}
+
+func (d *ServiceDatabases) decodeSequence(value *yaml.Node) error {
+	for _, item := range value.Content {
+		// Each item: { postgres: { database: ..., env: ... } }
+		// item is a mapping node with one key-value pair
+		if item.Kind != yaml.MappingNode || len(item.Content) < 2 {
+			continue
+		}
+		var dbType DBType
+		if err := item.Content[0].Decode(&dbType); err != nil {
+			return fmt.Errorf("decoding database type: %w", err)
+		}
+		var decl ServiceDBDecl
+		if err := item.Content[1].Decode(&decl); err != nil {
+			return fmt.Errorf("decoding declaration for %q: %w", dbType, err)
+		}
+		*d = append(*d, TypedDBDecl{Type: dbType, ServiceDBDecl: decl})
+	}
+	return nil
+}
+
+func (d *ServiceDatabases) decodeLegacy(value *yaml.Node) error {
+	var old map[DBType]ServiceDBDecl
+	if err := value.Decode(&old); err != nil {
+		return fmt.Errorf("decoding legacy database format: %w", err)
+	}
+	for dbType, decl := range old {
+		*d = append(*d, TypedDBDecl{Type: dbType, ServiceDBDecl: decl})
+	}
+	return nil
+}
 
 // Config is the schema for config.yaml, used both at the root level and
 // per-service. Vars hold non-secret plain-text values; Secrets declare which
@@ -215,6 +298,112 @@ func DBPasswordKey(svcName string) string {
 	return "DB_PASSWORD_" + strings.ToUpper(strings.ReplaceAll(svcName, "-", "_"))
 }
 
+// SharedDBName returns the service name for a shared DB type.
+func SharedDBName(t DBType) string {
+	switch t {
+	case DBPostgres:
+		return "postgres"
+	case DBMariaDB:
+		return "mariadb"
+	case DBRedis:
+		return "redis"
+	default:
+		return ""
+	}
+}
+
+// SharedDBContainer returns the container hostname for a shared DB service.
+func SharedDBContainer(t DBType) string {
+	switch t {
+	case DBPostgres:
+		return "homelab-postgres"
+	case DBMariaDB:
+		return "homelab-mariadb"
+	case DBRedis:
+		return "homelab-redis"
+	default:
+		return ""
+	}
+}
+
+// IsSharedDBService reports whether a service name is one of the shared
+// database services (postgres, mariadb, redis).
+func IsSharedDBService(name string) (DBType, bool) {
+	switch name {
+	case "postgres":
+		return DBPostgres, true
+	case "mariadb":
+		return DBMariaDB, true
+	case "redis":
+		return DBRedis, true
+	default:
+		return "", false
+	}
+}
+
+// EnsureRootDBConfig adds the databases section to the root config if a shared
+// DB service is being added or started. Idempotent — safe to call repeatedly.
+// Returns nil when svcName is not a shared DB service or config is already set.
+func EnsureRootDBConfig(rootCfgFile, svcName string) error {
+	dbType, ok := IsSharedDBService(svcName)
+	if !ok {
+		return nil // not a shared DB service
+	}
+
+	cfg, err := Load(rootCfgFile)
+	if err != nil {
+		return fmt.Errorf("loading root config: %w", err)
+	}
+	if cfg == nil {
+		return nil
+	}
+
+	// Already configured?
+	rootDB, err := cfg.RootDatabases()
+	if err != nil {
+		return err
+	}
+	if rootDB != nil && rootDB.DBHost(dbType) != "" {
+		return nil // already set
+	}
+
+	// Build the new host config
+	if rootDB == nil {
+		rootDB = &DatabaseConfig{}
+	}
+	hc := &DBHostConfig{
+		Host: SharedDBContainer(dbType),
+		Port: rootDB.DBPort(dbType),
+	}
+	switch dbType {
+	case DBPostgres:
+		rootDB.Postgres = hc
+	case DBMariaDB:
+		rootDB.MariaDB = hc
+	case DBRedis:
+		rootDB.Redis = hc
+	}
+
+	// Encode DatabaseConfig back into cfg.Databases yaml.Node.
+	// yaml.Unmarshal into a yaml.Node wraps the content in a DocumentNode,
+	// but embedding a DocumentNode inside another YAML document fails.
+	// Strip the wrapper by taking the first content child.
+	data, err := yaml.Marshal(rootDB)
+	if err != nil {
+		return fmt.Errorf("marshaling database config: %w", err)
+	}
+	var docNode yaml.Node
+	if err := yaml.Unmarshal(data, &docNode); err != nil {
+		return fmt.Errorf("unmarshaling database config: %w", err)
+	}
+	if len(docNode.Content) == 0 {
+		return fmt.Errorf("empty database config node")
+	}
+	cfg.Databases = *docNode.Content[0]
+
+	return Save(rootCfgFile, cfg)
+}
+
 // configFileName is the canonical name for all config files.
 const configFileName = "config.yaml"
 
@@ -340,23 +529,45 @@ func BuildEnv(rootConfigFile, configDir, svcName string, sm *secrets.Manager) (m
 	return env, nil
 }
 
+// defaultDSNTemplate returns the default DSN template for a DB type.
+func defaultDSNTemplate(t DBType) string {
+	switch t {
+	case DBPostgres:
+		return "postgres://{user}:{password}@{host}:{port}/{database}"
+	case DBMariaDB:
+		return "mysql://{user}:{password}@{host}:{port}/{database}"
+	case DBRedis:
+		return "redis://{host}:{port}/0"
+	default:
+		return ""
+	}
+}
+
 // injectDBEnv appends database connection variables into env.
 func injectDBEnv(env map[string]string, rootDB *DatabaseConfig, svcDB ServiceDatabases, svcName string, sm *secrets.Manager) {
-	for dbType, decl := range svcDB {
-		host := rootDB.DBHost(dbType)
+	rootPassword := ""
+	if sm != nil {
+		rootPassword, _ = sm.Get("", DBPasswordKey(svcName))
+	}
+
+	for _, entry := range svcDB {
+		// Resolve host: explicit host overrides root config
+		host := entry.Host
+		if host == "" {
+			host = rootDB.DBHost(entry.Type)
+		}
 		if host == "" {
 			continue
 		}
-		port := rootDB.DBPort(dbType)
 
-		password := ""
-		if sm != nil {
-			password, _ = sm.Get("", DBPasswordKey(svcName))
+		// Resolve port: explicit port overrides root config
+		port := entry.Port
+		if port == 0 {
+			port = rootDB.DBPort(entry.Type)
 		}
-
 		portStr := fmt.Sprintf("%d", port)
 
-		for logical, target := range decl.Env {
+		for logical, target := range entry.Env {
 			if target == "" {
 				continue
 			}
@@ -366,20 +577,35 @@ func injectDBEnv(env map[string]string, rootDB *DatabaseConfig, svcDB ServiceDat
 			case "port":
 				env[target] = portStr
 			case "user":
-				env[target] = decl.User
+				env[target] = entry.User
 			case "password":
-				env[target] = password
+				env[target] = rootPassword
 			case "database":
-				env[target] = decl.Database
+				env[target] = entry.Database
+			case "dsn":
+				// Build DSN from template (custom or per-type default)
+				tmpl := entry.DSNTemplate
+				if tmpl == "" {
+					tmpl = defaultDSNTemplate(entry.Type)
+				}
+				if tmpl != "" {
+					dsn := tmpl
+					dsn = strings.ReplaceAll(dsn, "{host}", host)
+					dsn = strings.ReplaceAll(dsn, "{port}", portStr)
+					dsn = strings.ReplaceAll(dsn, "{user}", entry.User)
+					dsn = strings.ReplaceAll(dsn, "{password}", rootPassword)
+					dsn = strings.ReplaceAll(dsn, "{database}", entry.Database)
+					env[target] = dsn
+				}
 			default:
-				// DSN template: target is the env var name, logical is the template
+				// Legacy DSN template: logical is the template, target is the env var name
 				if strings.Contains(logical, "://") || strings.Contains(logical, "{user}") {
 					dsn := logical
 					dsn = strings.ReplaceAll(dsn, "{host}", host)
 					dsn = strings.ReplaceAll(dsn, "{port}", portStr)
-					dsn = strings.ReplaceAll(dsn, "{user}", decl.User)
-					dsn = strings.ReplaceAll(dsn, "{password}", password)
-					dsn = strings.ReplaceAll(dsn, "{database}", decl.Database)
+					dsn = strings.ReplaceAll(dsn, "{user}", entry.User)
+					dsn = strings.ReplaceAll(dsn, "{password}", rootPassword)
+					dsn = strings.ReplaceAll(dsn, "{database}", entry.Database)
 					env[target] = dsn
 				}
 			}

@@ -1,8 +1,11 @@
 vars: {}
-
 secrets:
   SECRET_KEY:
     required: true
+databases:
+  - redis:
+      env:
+        dsn: SEARXNG_REDIS_URL
 ports:
   web:
     port: 8080

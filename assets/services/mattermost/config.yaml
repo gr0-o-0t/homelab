@@ -6,11 +6,12 @@ vars:
 secrets: {}
 
 databases:
-  postgres:
-    database: mattermost
-    user: mattermost
-    env:
-      "postgres://{user}:{password}@{host}:{port}/{database}?sslmode=disable&connect_timeout=10": MM_DATASOURCE
+  - postgres:
+      database: mattermost
+      user: mattermost
+      dsn_template: "postgres://{user}:{password}@{host}:{port}/{database}?sslmode=disable&connect_timeout=10"
+      env:
+        dsn: MM_DATASOURCE
 ports:
   web:
     port: 8065

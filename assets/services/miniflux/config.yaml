@@ -8,11 +8,12 @@ secrets:
     required: true
 
 databases:
-  postgres:
-    database: miniflux
-    user: miniflux
-    env:
-      "postgres://{user}:{password}@{host}:{port}/{database}?sslmode=disable": DATABASE_URL
+  - postgres:
+      database: miniflux
+      user: miniflux
+      dsn_template: "postgres://{user}:{password}@{host}:{port}/{database}?sslmode=disable"
+      env:
+        dsn: DATABASE_URL
 ports:
   web:
     port: 8080

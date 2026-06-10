@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/groot/homelab/internal/configgen"
 	"github.com/groot/homelab/internal/run"
 )
 
@@ -92,10 +93,16 @@ func (m *Manager) IsPublicEnabled(name string) (bool, error) {
 
 // ── Combined ──────────────────────────────────────────────────────────────────
 
-// DisableBoth removes both the private and public symlinks for name and
-// performs a single Caddy reload. Errors from removing a non-existent symlink
+// DisableBoth removes both the private and public routes for name and
+// performs a single Caddy reload. Handles both generated config files
+// (written by configgen.WriteFile) and legacy symlinks. NotFound errors
 // are silently ignored — the operation is idempotent.
 func (m *Manager) DisableBoth(name string) error {
+	// Remove generated config files (modern path).
+	_ = configgen.RemoveFile(m.RepoRoot, "private", name, "")
+	_ = configgen.RemoveFile(m.RepoRoot, "cf", name, "")
+
+	// Also try legacy symlink removal (backward compat).
 	privateLink := filepath.Join(m.RepoRoot, "caddy", "conf.d", name+".conf")
 	publicLink := filepath.Join(m.RepoRoot, "caddy", "conf.d-cf", name+".conf")
 
@@ -183,10 +190,13 @@ func (m *Manager) Reload() error {
 	if err := m.Validate(); err != nil {
 		return fmt.Errorf("caddy validate failed: %w", err)
 	}
+	// Use --force to ensure the admin API fully replaces the active config
+	// rather than skipping if the new config is structurally identical.
 	return m.runner.DockerExec(caddyContainer,
 		"caddy", "reload",
 		"--config", caddyFile,
 		"--adapter", caddyAdapter,
+		"--force",
 	)
 }
 

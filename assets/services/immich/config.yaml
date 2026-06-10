@@ -12,6 +12,21 @@ vars:
 secrets:
   DB_PASSWORD:
     required: true
+
+databases:
+  - postgres:
+      host: immich-postgres
+      port: 5432
+      database: immich
+      user: immich
+      env:
+        host: DB_HOSTNAME
+        port: DB_PORT
+  - redis:
+      env:
+        host: REDIS_HOSTNAME
+        port: REDIS_PORT
+
 ports:
   web:
     port: 2283

@@ -57,7 +57,7 @@ func runSetup(_ *cobra.Command, _ []string) error {
 				"ACME_EMAIL":     {Required: true},
 				"TS_HOSTNAME":    {Value: "caddy-home", Required: true},
 				"PUB_SUBDOMAIN":  {Value: "pub", Required: false},
-				"CF_TUNNEL_NAME": {Value: "", Required: false},
+				"CF_TUNNEL_NAME": {Value: "pub", Required: false},
 				"I2P_EXT_PORT":   {Value: "45678", Required: false},
 			},
 			Secrets: map[string]config.SecretEntry{
@@ -155,7 +155,7 @@ func runSetup(_ *cobra.Command, _ []string) error {
 		cfg.Vars["PUB_SUBDOMAIN"] = pubEntry
 
 		tunnelNameEntry := cfg.Vars["CF_TUNNEL_NAME"]
-		tunnelNameEntry.Value = promptStr(sc, "Cloudflare Tunnel name (from dash.cloudflare.com, or press Enter to skip)", tunnelNameEntry.Value)
+		tunnelNameEntry.Value = promptStr(sc, "Cloudflare Tunnel name (from dash.cloudflare.com)", tunnelNameEntry.Value)
 		cfg.Vars["CF_TUNNEL_NAME"] = tunnelNameEntry
 
 		if val := promptSecret("CF_TUNNEL_TOKEN", sm.IsSet("", "CF_TUNNEL_TOKEN")); val != "" {
@@ -325,17 +325,17 @@ func runServiceSetup(_ *cobra.Command, args []string) error {
 		}
 		if len(svcDB) > 0 {
 			fmt.Printf("\n  %s\n\n", styles.Accent.Render("─── Database Setup ──────────────────────────────────"))
-			for dbType, decl := range svcDB {
-				if err := p.EnsureRunning(ctx, dbType); err != nil {
-					step(styles.Warning.Render("!"), fmt.Sprintf("%s container not running — install and start first:", dbType))
-					fmt.Printf("    homelab add %s && homelab up %s\n", dbType, dbType)
+			for _, entry := range svcDB {
+				if err := p.EnsureRunning(ctx, entry.Type); err != nil {
+					step(styles.Warning.Render("!"), fmt.Sprintf("%s container not running — install and start first:", entry.Type))
+					fmt.Printf("    homelab add %s && homelab up %s\n", entry.Type, entry.Type)
 					continue
 				}
-				if err := p.Provision(ctx, dbType, name, decl); err != nil {
-					step(styles.Err.Render("✗"), fmt.Sprintf("Failed to provision %s: %v", dbType, err))
+				if err := p.Provision(ctx, entry.Type, name, entry.ServiceDBDecl); err != nil {
+					step(styles.Err.Render("✗"), fmt.Sprintf("Failed to provision %s: %v", entry.Type, err))
 				} else {
 					step(styles.Success.Render("✓"), fmt.Sprintf("%s database '%s' created with user '%s'",
-						dbType, decl.Database, decl.User))
+						entry.Type, entry.Database, entry.User))
 				}
 			}
 		}
@@ -357,6 +357,12 @@ func step(icon, msg string) {
 // into configDir. Existing files are overwritten so that `homelab setup` can
 // be re-run to update them.
 func installAssets(configDir string) error {
+	// Pre-create services/ so Docker (running as root) doesn't create it
+	// via the Caddy volume mount, which would make it root-owned and break
+	// `homelab add <service>`.
+	if err := os.MkdirAll(filepath.Join(configDir, "services"), 0o750); err != nil {
+		return fmt.Errorf("creating services dir: %w", err)
+	}
 	return fs.WalkDir(assets.CoreFS, ".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err

@@ -2,8 +2,15 @@
 # Service: NetBox (network source of truth & IPAM/DCIM)
 # https://docs.linuxserver.io/images/docker-netbox/
 # ─────────────────────────────────────────────────────────────────────────────
-# Database: uses shared PostgreSQL (homelab-postgres). Redis/valkey remains
-# local (two instances needed for main+cache separation).
+# Database: uses shared PostgreSQL (homelab-postgres) via config.yaml
+# `databases:` section — NB_DB_HOST/NB_DB_PORT/NB_DB_NAME/etc.
+#
+# Redis/valkey: 2 instances via multi-instance databases spec.
+# Instance 1: netbox-redis (port 6379, main).
+# Instance 2: netbox-redis-cache (port 6380, cache).
+# Both stay local since shared homelab-redis can't split ports.
+# Env vars (NB_REDIS_HOST/NB_REDIS_PORT/NB_REDIS_CACHE_*) injected
+# from config.yaml at runtime.
 # ─────────────────────────────────────────────────────────────────────────────
 
 networks:
@@ -34,11 +41,11 @@ services:
       DB_NAME: ${NB_DB_NAME}
       DB_USER: ${NB_DB_USER}
       DB_PASSWORD: ${NB_DB_PASS}
-      REDIS_HOST: netbox-redis
-      REDIS_PORT: 6379
+      REDIS_HOST: ${NB_REDIS_HOST}
+      REDIS_PORT: ${NB_REDIS_PORT}
       REDIS_PASSWORD: ""
-      REDIS_CACHE_HOST: netbox-redis-cache
-      REDIS_CACHE_PORT: 6380
+      REDIS_CACHE_HOST: ${NB_REDIS_CACHE_HOST}
+      REDIS_CACHE_PORT: ${NB_REDIS_CACHE_PORT}
       REDIS_CACHE_PASSWORD: ""
       SECRET_KEY: ${SECRET_KEY}
     volumes:

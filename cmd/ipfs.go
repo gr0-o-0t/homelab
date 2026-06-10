@@ -24,8 +24,9 @@ var ipfsCmd = &cobra.Command{
 // ── status ────────────────────────────────────────────────────────────────────
 
 var ipfsStatusCmd = &cobra.Command{
-	Use:   "status",
-	Short: "Show IPFS node status and peer count",
+	Use:     "status",
+	Aliases: []string{"ps"},
+	Short:   "Show IPFS node status and peer count",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		root := configDir()
 		env := buildEnv(root, "")

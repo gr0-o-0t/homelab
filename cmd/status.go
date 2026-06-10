@@ -14,8 +14,9 @@ import (
 )
 
 var statusCmd = &cobra.Command{
-	Use:   "status [service]",
-	Short: "Show homelab status overview",
+	Use:     "status [service]",
+	Aliases: []string{"ps"},
+	Short:   "Show homelab status overview",
 	Long: `Display the status of the core stack (Tailscale, Caddy, network extensions)
 and every installed service.
 

@@ -47,7 +47,7 @@ func TestBuildEnv_ConfigError_LogsWarning(t *testing.T) {
 	assert.Contains(t, stderr, "warning: config error", "buildEnv should log config error to stderr")
 }
 
-func TestBuildEnv_ConfigError_NilGuardReturnsEmptyMap(t *testing.T) {
+func TestBuildEnv_ConfigError_NilGuardReturnsDefaults(t *testing.T) {
 	root := t.TempDir()
 	setConfigDir(t, root)
 
@@ -60,7 +60,11 @@ func TestBuildEnv_ConfigError_NilGuardReturnsEmptyMap(t *testing.T) {
 	env := buildEnv(root, "test-svc")
 
 	assert.NotNil(t, env, "returned map must not be nil")
-	assert.Empty(t, env, "returned map should be empty on config error")
+	// buildEnv injects HOME_SUBDOMAIN=home as a fallback even when
+	// config loading fails, preventing the fragile case where
+	// Caddy's {@literal $HOME_SUBDOMAIN} resolves to "" and produces an
+	// invalid double-dot domain.
+	assert.Equal(t, "home", env["HOME_SUBDOMAIN"], "should default HOME_SUBDOMAIN on config error")
 }
 
 func TestBuildEnv_ValidConfig_Success(t *testing.T) {

@@ -313,13 +313,17 @@ func TestDisableBoth_PartialState_OnlyPrivateEnabled(t *testing.T) {
 	assert.True(t, os.IsNotExist(err))
 }
 
-func TestDisableBoth_RefusesRegularFile(t *testing.T) {
+func TestDisableBoth_RemovesRegularFile(t *testing.T) {
 	repo := newRepo(t)
-	// Simulate a regular file where the symlink should be.
+	// Simulate a generated config file (regular file) where the symlink should be.
 	dest := filepath.Join(repo, "caddy", "conf.d", "myapp.conf")
-	require.NoError(t, os.WriteFile(dest, []byte("# not a symlink"), 0o644))
+	require.NoError(t, os.WriteFile(dest, []byte("# generated config"), 0o644))
 
+	// Should succeed — generated files are removed by configgen.RemoveFile path.
 	err := mgr(t, repo).DisableBoth("myapp")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "not a symlink")
+	require.NoError(t, err)
+
+	// Verify the file was removed.
+	_, err = os.Lstat(dest)
+	assert.True(t, os.IsNotExist(err))
 }

@@ -231,6 +231,10 @@ func runServiceUp(_ *cobra.Command, args []string) error {
 		if err := validateService(root, name); err != nil {
 			return err
 		}
+		// Auto-configure root databases section for shared DB services.
+		if err := config.EnsureRootDBConfig(rootConfigFile(), name); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: auto-configuring databases: %v\n", err)
+		}
 		if err := ensureDBDependencies(context.Background(), root, name); err != nil {
 			return err
 		}
@@ -795,7 +799,7 @@ func ensureDBDependencies(ctx context.Context, root, name string) error {
 	}
 
 	p := db.New(root, nil) // nil SM — EnsureRunning doesn't need secrets
-	for dbType := range svcDB {
+	for dbType := range svcDB.DBTypeSet() {
 		if err := p.EnsureRunning(ctx, dbType); err != nil {
 			return fmt.Errorf("%w\n  Install: homelab add %s && homelab up %s",
 				err, dbType, dbType)
