@@ -42,11 +42,7 @@ var restartCmd = &cobra.Command{
 	},
 }
 
-var restartFlags struct {
-	all   bool
-	group string
-	build bool
-}
+var restartFlags = batchFlags{}
 
 func init() {
 	restartCmd.Flags().BoolVar(&restartFlags.all, "all", false, "Restart all installed services")

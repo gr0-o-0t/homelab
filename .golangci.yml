@@ -47,6 +47,10 @@ linters:
         text: G204
       - path: cmd/doctor.go
         text: G204
+      - path: cmd/health.go
+        text: G204
+      - path: cmd/helpers.go
+        text: G304
       - path: cmd/tor.go
         text: G204|G304
       - path: cmd/i2p.go

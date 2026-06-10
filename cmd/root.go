@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/groot/homelab/internal/config"
 	"github.com/groot/homelab/internal/secrets"
@@ -16,6 +17,11 @@ var rootFlags struct {
 	noColor    bool
 	json       bool
 }
+
+var (
+	rootCfg *config.Config
+	cfgMu   sync.Mutex
+)
 
 var rootCmd = &cobra.Command{
 	Use:   "homelab",
@@ -104,9 +110,19 @@ func noColor() bool {
 }
 
 // extEnabled checks whether a named extension is enabled in the root config.
+// Cache loaded config to avoid re-parsing config.yaml on every call.
+// Retries on failure (mutex, not sync.Once).
 func extEnabled(cfgDir, name string) bool {
-	cfg, err := config.Load(config.RootConfigFile(cfgDir, rootFlags.configFile))
-	if err != nil || cfg == nil {
+	cfgMu.Lock()
+	if rootCfg == nil {
+		cfg, err := config.Load(config.RootConfigFile(cfgDir, rootFlags.configFile))
+		if err == nil {
+			rootCfg = cfg
+		}
+	}
+	cfg := rootCfg
+	cfgMu.Unlock()
+	if cfg == nil {
 		return false
 	}
 	return cfg.HasExtension(name)

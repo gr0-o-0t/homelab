@@ -38,10 +38,7 @@ Aliased as: down (homelab down jellyfin)`,
 	},
 }
 
-var stopFlags struct {
-	all   bool
-	group string
-}
+var stopFlags = batchFlags{}
 
 func init() {
 	stopCmd.Flags().BoolVar(&stopFlags.all, "all", false, "Stop all installed services")

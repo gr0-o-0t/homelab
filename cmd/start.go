@@ -54,11 +54,7 @@ Aliased as: up (homelab up jellyfin)`,
 	},
 }
 
-var startFlags struct {
-	all   bool
-	group string
-	build bool
-}
+var startFlags = batchFlags{}
 
 func init() {
 	startCmd.Flags().BoolVar(&startFlags.all, "all", false, "Start all installed services")
