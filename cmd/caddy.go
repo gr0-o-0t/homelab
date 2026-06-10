@@ -3,6 +3,8 @@ package cmd
 import (
 	"bytes"
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/groot/homelab/internal/caddy"
 	"github.com/groot/homelab/internal/run"
@@ -40,8 +42,13 @@ var validateCmd = &cobra.Command{
 	Use:   "validate",
 	Short: "Validate Caddyfile syntax without reloading",
 	RunE: func(cmd *cobra.Command, args []string) error {
+		dir := configDir()
+		caddyfilePath := filepath.Join(dir, "caddy", "Caddyfile")
+		if _, err := os.Stat(caddyfilePath); os.IsNotExist(err) {
+			return fmt.Errorf("caddyfile not found at %s: run 'homelab setup' first", caddyfilePath)
+		}
 		if err := runWithSpinner("Validating Caddyfile…", func(r *run.Commander) error {
-			return caddy.NewWithRunner(configDir(), r).Validate()
+			return caddy.NewWithRunner(dir, r).Validate()
 		}); err != nil {
 			return err
 		}
