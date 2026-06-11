@@ -15,7 +15,14 @@ func withProfiles(cfgDir string, args ...string) []string {
 	var profiles []string
 	if cfg != nil {
 		for _, ext := range cfg.Extensions {
-			profiles = append(profiles, "--profile", config.ExtensionProfile(ext))
+			resolved := config.ResolveExtension(ext)
+			if layer, ok := extRegistry.Get(resolved); ok {
+				profile := layer.Profile()
+				if profile == "" {
+					continue // skip layers with no compose profile (e.g., tailscale)
+				}
+				profiles = append(profiles, "--profile", profile)
+			}
 		}
 	}
 	if len(profiles) == 0 {

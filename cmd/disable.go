@@ -78,7 +78,7 @@ func runDisable(cmd *cobra.Command, args []string) error {
 		fmt.Printf("  %s  Private: removed\n", styles.Warning.Render("→"))
 	}
 
-	// Extension layers
+	// Extension layers (via registry for extension-specific tunnel config)
 	if disableCf {
 		if err := configgen.RemoveFile(root, "cf", svcName, ""); err != nil {
 			return fmt.Errorf("cf: %w", err)
@@ -89,8 +89,8 @@ func runDisable(cmd *cobra.Command, args []string) error {
 		if err := configgen.RemoveFile(root, "i2p", svcName, ""); err != nil {
 			return fmt.Errorf("i2p: %w", err)
 		}
-		if err := removeI2PTunnel(root, svcName); err != nil {
-			return err
+		if layer, ok := extRegistry.Get("i2p"); ok {
+			_ = layer.Disable(svcName)
 		}
 		fmt.Printf("  %s  I2P: removed\n", styles.Warning.Render("→"))
 	}
@@ -98,8 +98,8 @@ func runDisable(cmd *cobra.Command, args []string) error {
 		if err := configgen.RemoveFile(root, "tor", svcName, ""); err != nil {
 			return fmt.Errorf("tor: %w", err)
 		}
-		if err := removeTorService(root, svcName); err != nil {
-			return err
+		if layer, ok := extRegistry.Get("tor"); ok {
+			_ = layer.Disable(svcName)
 		}
 		fmt.Printf("  %s  Tor: removed\n", styles.Warning.Render("→"))
 	}
@@ -107,8 +107,8 @@ func runDisable(cmd *cobra.Command, args []string) error {
 		if err := configgen.RemoveFile(root, "ygg", svcName, ""); err != nil {
 			return fmt.Errorf("ygg: %w", err)
 		}
-		if err := removeYggForwarder(root, svcName); err != nil {
-			return err
+		if layer, ok := extRegistry.Get("ygg"); ok {
+			_ = layer.Disable(svcName)
 		}
 		fmt.Printf("  %s  Yggdrasil: removed\n", styles.Warning.Render("→"))
 	}
@@ -118,13 +118,7 @@ func runDisable(cmd *cobra.Command, args []string) error {
 		fmt.Printf("  %s  Caddy reload: %v\n", styles.Warning.Render("!"), err)
 	}
 
-	// Reload network extensions
-	if disableI2P && containerStatus(i2pContainer) == containerStateRunning {
-		_ = ReloadI2pd()
-	}
-	if disableTor && containerStatus(torContainer) == containerStateRunning {
-		_ = ReloadTor()
-	}
+	// Network extensions handle their own reload via layer.Disable()
 
 	if disableStop {
 		fmt.Printf("  %s  Stopping container…\n", styles.Muted.Render("→"))
@@ -142,26 +136,6 @@ func disablePrivate(root, svcName string) error {
 		if err := configgen.RemoveFile(root, "private", svcName, ""); err != nil {
 			return fmt.Errorf("service %q has no active private route", svcName)
 		}
-	}
-	return nil
-}
-
-// ── Tunnel config removal ────────────────────────────────────────────────
-
-func removeI2PTunnel(root, name string) error {
-	return RemoveI2PTunnel(root, name)
-}
-
-func removeTorService(root, name string) error {
-	return RemoveTorService(root, name)
-}
-
-func removeYggForwarder(root, name string) error {
-	if err := RemoveYggForwarder(root, name); err != nil {
-		return err
-	}
-	if containerStatus(yggContainer) == containerStateRunning {
-		return RestartYgg()
 	}
 	return nil
 }

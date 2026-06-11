@@ -185,5 +185,7 @@ func publicHostname(svcName string, env map[string]string) string {
 
 func init() {
 	tunnelRouteCmd.AddCommand(tunnelRouteAddCmd, tunnelRouteRmCmd)
+	cfCmd.AddCommand(tunnelStatusCmd)
+	cfCmd.AddCommand(tunnelLogsCmd)
 	cfCmd.AddCommand(tunnelRouteCmd)
 }

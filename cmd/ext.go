@@ -307,5 +307,12 @@ func init() {
 		extStopCmd,
 		i2pCmd, torCmd, cfCmd, yggCmd, ipfsCmd,
 	)
-	rootCmd.AddCommand(extCmd)
+
+	// Register full per-layer commands at root level (replaces ext hub).
+	// extCmd is kept for source backward compat but not registered on root.
+	rootCmd.AddCommand(cfCmd)
+	rootCmd.AddCommand(torCmd)
+	rootCmd.AddCommand(i2pCmd)
+	rootCmd.AddCommand(yggCmd)
+	rootCmd.AddCommand(ipfsCmd)
 }

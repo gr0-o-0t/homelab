@@ -84,6 +84,13 @@ func init() {
 	rootCmd.AddCommand(doctorCmd)
 	rootCmd.AddCommand(reloadCmd)
 	rootCmd.AddCommand(validateCmd)
+
+	initExtensions()
+	// Register root-level commands for layers without full cmd trees.
+	// cf/tor/i2p/ygg/ipfs register their own full commands via ext.go init().
+	if cmd := extCommandFor("ts"); cmd != nil {
+		rootCmd.AddCommand(cmd)
+	}
 }
 
 // configDir returns the effective homelab config directory.

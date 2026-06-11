@@ -17,6 +17,7 @@ import (
 	"github.com/groot/homelab/internal/config"
 	"github.com/groot/homelab/internal/db"
 	"github.com/groot/homelab/internal/docker"
+	"github.com/groot/homelab/internal/network"
 	"github.com/groot/homelab/internal/run"
 	"github.com/groot/homelab/internal/scaffold"
 	"github.com/groot/homelab/internal/service"
@@ -667,12 +668,17 @@ func runDashboardTUI(root string) error {
 
 	catalog := catalogNames()
 
-	// Load root config to get enabled extensions for header pills.
+	// Build network layer list from registry + config for header pills.
 	cfgFile := config.RootConfigFile(root, rootFlags.configFile)
 	cfg, _ := config.Load(cfgFile)
-	var extensions []string
-	if cfg != nil {
-		extensions = cfg.Extensions
+	layers := make([]network.NetworkLayer, 0, len(extRegistry.Names()))
+	for _, name := range extRegistry.Names() {
+		if layer, ok := extRegistry.Get(name); ok {
+			// Only include layers enabled in config (or always-on like ts)
+			if cfg != nil && (name == "ts" || hasResolvedExtension(cfg, name)) {
+				layers = append(layers, layer)
+			}
+		}
 	}
 
 	for {
@@ -687,7 +693,7 @@ func runDashboardTUI(root string) error {
 			return err
 		}
 
-		model := tuiDashboard.New(root, dc, svcs, catalog, extensions, func(name string) map[string]string {
+		model := tuiDashboard.New(root, dc, svcs, catalog, layers, func(name string) map[string]string {
 			return buildEnv(root, name)
 		})
 		p := tea.NewProgram(model, tea.WithAltScreen())

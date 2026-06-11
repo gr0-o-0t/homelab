@@ -4,10 +4,13 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/groot/homelab/internal/caddy"
+	"github.com/groot/homelab/internal/config"
 	"github.com/groot/homelab/internal/configgen"
+	"github.com/groot/homelab/internal/network"
 	"github.com/groot/homelab/internal/tui/styles"
 	"github.com/spf13/cobra"
 )
@@ -169,14 +172,28 @@ func enableExtension(root, svcName, displayName, ext string) error {
 		}
 	}
 
-	// Network extension-specific tunnel config
-	switch ext {
-	case i2pContainer:
-		return enableI2PLayer(root, displayName, blocks)
-	case torContainer:
-		return enableTorLayer(root, displayName, blocks)
-	case "ygg":
-		return enableYggLayer(root, displayName, blocks)
+	// Network extension-specific config via registry
+	resolved := config.ResolveExtension(ext)
+	if layer, ok := extRegistry.Get(resolved); ok {
+		ports := make([]network.PortSelection, len(blocks))
+		for i, b := range blocks {
+			portNum, _ := strconv.Atoi(extractPortFromBlock(b.Content, displayName))
+			ports[i] = network.PortSelection{
+				Name:     b.PortName,
+				Port:     portNum,
+				Protocol: "tcp",
+			}
+		}
+		cfgInfo, _ := configgen.LoadServiceInfo(root, svcName)
+		layersvcInfo := network.ServiceInfo{
+			Name:    svcName,
+			Ports:   make(map[string]int, len(cfgInfo.Ports)),
+			HasVars: cfgInfo.HasVars,
+		}
+		for k, v := range cfgInfo.Ports {
+			layersvcInfo.Ports[k] = v.Port
+		}
+		return layer.Enable(svcName, displayName, layersvcInfo, ports)
 	}
 	return nil
 }
@@ -208,54 +225,6 @@ func caddyReload() error {
 }
 
 // ── Extension-specific enable helpers ───────────────────────────────────────
-
-func enableI2PLayer(root, displayName string, blocks []configgen.CaddyBlock) error {
-	for _, b := range blocks {
-		port := extractPortFromBlock(b.Content, displayName)
-		if port == "" {
-			continue
-		}
-		if err := AppendI2PTunnel(root, displayName, port); err != nil {
-			return err
-		}
-	}
-	if containerStatus(i2pContainer) == containerStateRunning {
-		return ReloadI2pd()
-	}
-	return nil
-}
-
-func enableTorLayer(root, displayName string, blocks []configgen.CaddyBlock) error {
-	for _, b := range blocks {
-		port := extractPortFromBlock(b.Content, displayName)
-		if port == "" {
-			continue
-		}
-		if err := AppendTorService(root, displayName, port); err != nil {
-			return err
-		}
-	}
-	if containerStatus(torContainer) == containerStateRunning {
-		return ReloadTor()
-	}
-	return nil
-}
-
-func enableYggLayer(root, displayName string, blocks []configgen.CaddyBlock) error {
-	for _, b := range blocks {
-		port := extractPortFromBlock(b.Content, displayName)
-		if port == "" {
-			continue
-		}
-		if err := AppendYggForwarder(root, displayName, port); err != nil {
-			return err
-		}
-	}
-	if containerStatus(yggContainer) == containerStateRunning {
-		return RestartYgg()
-	}
-	return nil
-}
 
 // extractPortFromBlock parses a generated Caddy config to find the target port.
 // Looks for the first "reverse_proxy <name>:<N>" pattern in the block content.

@@ -42,19 +42,35 @@ func runStatus(_ *cobra.Command, args []string) error {
 	// ── Core Stack ────────────────────────────────────────────────────────────
 	fmt.Printf("  %s\n", styles.Bold.Render("Core Stack"))
 
-	coreContainers := []struct {
+	// Core services to display: always-on (caddy) + registry layers.
+	// Build a combined list from the registry, then prepend caddy.
+	type coreEntry struct {
 		Name string
 		Ext  string // extension ID; empty for always-on core
 		show func(env map[string]string) bool
-	}{
-		{Name: "tailscale", Ext: ""},
-		{Name: "caddy", Ext: ""},
-		{Name: "cloudflared", Ext: "cf",
-			show: func(e map[string]string) bool { return e["CF_TUNNEL_TOKEN"] != "" }},
-		{Name: torContainer, Ext: torContainer},
-		{Name: i2pContainer, Ext: i2pContainer},
-		{Name: yggContainer, Ext: yggContainer},
-		{Name: ipfsContainer, Ext: ipfsContainer},
+	}
+
+	var entries []coreEntry
+
+	// Caddy is the sole core — always show.
+	entries = append(entries, coreEntry{Name: "caddy", Ext: ""})
+
+	// Layers from registry (tailscale, cf, tor, i2p, ygg, ipfs)
+	for _, layer := range extRegistry.All() {
+		ename := layer.Name()
+		// Special: CF shows also when CF_TUNNEL_TOKEN is set even if not enabled
+		if ename == "cf" {
+			entries = append(entries, coreEntry{
+				Name: layer.ContainerName(),
+				Ext:  ename,
+				show: func(e map[string]string) bool { return e["CF_TUNNEL_TOKEN"] != "" },
+			})
+		} else {
+			entries = append(entries, coreEntry{
+				Name: layer.ContainerName(),
+				Ext:  ename,
+			})
+		}
 	}
 
 	var (
@@ -62,7 +78,7 @@ func runStatus(_ *cobra.Command, args []string) error {
 		coreRunning  bool
 	)
 
-	for _, c := range coreContainers {
+	for _, c := range entries {
 		state := containerStatus(c.Name)
 
 		// Core services (ext=="") always show. Extensions only show when
@@ -78,7 +94,7 @@ func runStatus(_ *cobra.Command, args []string) error {
 		switch state {
 		case containerStateRunning:
 			icon = styles.Success.Render("✓")
-			if c.Ext == "" {
+			if !isExt {
 				coreRunning = true
 			}
 		case "not found":

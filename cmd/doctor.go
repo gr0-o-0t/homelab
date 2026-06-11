@@ -200,20 +200,13 @@ func runDoctor(_ *cobra.Command, args []string) error {
 	// ── Network Extensions ────────────────────────────────────────────────────
 	fmt.Printf("\n  %s\n", styles.Bold.Render("Network Extensions"))
 
-	extNames := []string{"cf", torContainer, i2pContainer, yggContainer, ipfsContainer}
-	extContainers := map[string]string{
-		"cf":        "cloudflared",
-		"tor":       "tor",
-		"i2p":       "i2p",
-		"yggdrasil": "yggdrasil",
-		"ipfs":      "ipfs",
-	}
-	for _, ext := range extNames {
-		if cfg != nil && cfg.HasExtension(ext) {
-			cName := extContainers[ext]
+	for _, layer := range extRegistry.All() {
+		name := layer.Name()
+		if cfg != nil && hasResolvedExtension(cfg, name) {
+			cName := layer.ContainerName()
 			cState := containerStatus(cName)
 			check(cState == containerStateRunning, fmt.Sprintf("%s (%s) container %s",
-				config.ExtensionLabel(ext), cName, stateLabel(cState)))
+				config.ExtensionLabel(name), cName, stateLabel(cState)))
 		}
 	}
 
@@ -383,6 +376,20 @@ func runServiceDoctorFor(dir, name string, fix bool) bool {
 		}
 	}
 	return pass
+}
+
+// hasResolvedExtension reports whether cfg has an extension that resolves
+// to the given canonical name (handles name aliasing like yggdrasil → ygg).
+func hasResolvedExtension(cfg *config.Config, canonicalName string) bool {
+	if cfg == nil {
+		return false
+	}
+	for _, ext := range cfg.Extensions {
+		if config.ResolveExtension(ext) == canonicalName {
+			return true
+		}
+	}
+	return false
 }
 
 func init() {

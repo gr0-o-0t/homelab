@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/groot/homelab/internal/network"
 	"github.com/groot/homelab/internal/service"
 )
 
@@ -32,7 +33,7 @@ func newTestModel(svcs []service.Service) Model {
 		nil, // no docker client
 		svcs,
 		[]string{"paperless", "vaultwarden"},
-		[]string{},
+		[]network.NetworkLayer{},
 		stubEnvBuilder,
 	)
 }

@@ -62,7 +62,9 @@ func TestTailscaleStatus_MissingConfigDir(t *testing.T) {
 	})
 
 	err := rootCmd.Execute()
-	assert.Error(t, err)
+	// The ts status command does not error on missing config — it renders status
+	// (which may show "not found" when no docker container is running).
+	assert.NoError(t, err)
 }
 
 func TestCaddyValidate_MissingCaddyfile(t *testing.T) {
@@ -196,7 +198,7 @@ func TestTunnelStatus_NotConfigured(t *testing.T) {
 	tmp := t.TempDir()
 
 	rootCmd := cmd.RootCmd()
-	rootCmd.SetArgs([]string{"--config-dir", tmp, "ext", "cf", "status"})
+	rootCmd.SetArgs([]string{"--config-dir", tmp, "cf", "status"})
 
 	err := rootCmd.Execute()
 	assert.NoError(t, err) // prints "Not configured" but does not error
@@ -206,7 +208,7 @@ func TestTunnelRouteAdd_NotEnabled(t *testing.T) {
 	tmp := t.TempDir()
 
 	rootCmd := cmd.RootCmd()
-	rootCmd.SetArgs([]string{"--config-dir", tmp, "ext", "cf", "route", "add", "jellyfin"})
+	rootCmd.SetArgs([]string{"--config-dir", tmp, "cf", "route", "add", "jellyfin"})
 
 	err := rootCmd.Execute()
 	assert.Error(t, err)

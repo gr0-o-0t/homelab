@@ -15,6 +15,7 @@ import (
 
 	"github.com/groot/homelab/internal/caddy"
 	"github.com/groot/homelab/internal/docker"
+	"github.com/groot/homelab/internal/network"
 	"github.com/groot/homelab/internal/run"
 	"github.com/groot/homelab/internal/service"
 	"github.com/groot/homelab/internal/tui/styles"
@@ -90,6 +91,27 @@ type coreStatus struct {
 	ipfs        string
 }
 
+func (cs coreStatus) get(containerName string) string {
+	switch containerName {
+	case "tailscale":
+		return cs.tailscale
+	case "caddy":
+		return cs.caddy
+	case "cloudflared":
+		return cs.cloudflared
+	case "tor":
+		return cs.tor
+	case "i2p":
+		return cs.i2p
+	case "yggdrasil":
+		return cs.yggdrasil
+	case "ipfs":
+		return cs.ipfs
+	default:
+		return ""
+	}
+}
+
 // ── EnvBuilderFn ──────────────────────────────────────────────────────────────
 
 // EnvBuilderFn returns the docker compose environment map for a service name.
@@ -115,7 +137,7 @@ type Model struct {
 	dc           *docker.Client
 	services     []service.Service
 	catalogNames []string
-	extensions   []string
+	layers       []network.NetworkLayer
 	cursor       int
 	filter       string
 	buildEnv     EnvBuilderFn
@@ -139,8 +161,8 @@ type Model struct {
 // New constructs the dashboard Model.
 // catalogNames lists all names from the embedded service catalog; services not
 // yet installed appear in the list as available-to-install stubs.
-// extensions lists enabled optional network extensions for header pills.
-func New(repoRoot string, dc *docker.Client, services []service.Service, catalogNames []string, extensions []string, buildEnv EnvBuilderFn) Model {
+// layers lists registered network layers for header status pills.
+func New(repoRoot string, dc *docker.Client, services []service.Service, catalogNames []string, layers []network.NetworkLayer, buildEnv EnvBuilderFn) Model {
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
 	sp.Style = styles.Primary
@@ -150,7 +172,7 @@ func New(repoRoot string, dc *docker.Client, services []service.Service, catalog
 		dc:           dc,
 		services:     services,
 		catalogNames: catalogNames,
-		extensions:   extensions,
+		layers:       layers,
 		buildEnv:     buildEnv,
 		spin:         sp,
 	}
@@ -479,20 +501,10 @@ func (m Model) renderHeader() string {
 	if m.core.cloudflared != "" || m.isTunnelConfigured() {
 		pills = append(pills, m.corePill("tunnel", m.core.cloudflared))
 	}
-	// Optional network extension pills (show when extension is enabled)
-	extPills := map[string]struct {
-		state string
-		label string
-	}{
-		"tor":       {m.core.tor, "tor"},
-		"i2p":       {m.core.i2p, "i2p"},
-		"yggdrasil": {m.core.yggdrasil, "ygg"},
-		"ipfs":      {m.core.ipfs, "ipfs"},
-	}
-	for _, ext := range m.extensions {
-		if p, ok := extPills[ext]; ok {
-			pills = append(pills, m.corePill(p.label, p.state))
-		}
+	// Network layer pills from the registry
+	for _, l := range m.layers {
+		state := m.core.get(l.ContainerName())
+		pills = append(pills, m.corePill(l.Label(), state))
 	}
 	right := strings.Join(pills, "  ")
 

@@ -164,9 +164,26 @@ type Config struct {
 	Ports      map[string]PortEntry   `yaml:"ports,omitempty"`
 }
 
-// AllExtensions returns all valid extension identifiers.
+// extensionAliases maps config.yaml extension names to registry (canonical) names.
+var extensionAliases = map[string]string{
+	"yggdrasil": "ygg",
+	"i2pd":      "i2p",
+	"ts":        "ts",
+}
+
+// ResolveExtension resolves a config.yaml extension name to the canonical
+// registry name. Unknown names are returned unchanged so they can produce
+// a useful "not found" error from the registry.
+func ResolveExtension(name string) string {
+	if resolved, ok := extensionAliases[name]; ok {
+		return resolved
+	}
+	return name
+}
+
+// AllExtensions returns all valid extension identifiers (canonical names).
 func AllExtensions() []string {
-	return []string{"cf", "tor", "i2p", "yggdrasil", "ipfs"}
+	return []string{"ts", "cf", "tor", "i2p", "ygg", "ipfs"}
 }
 
 // ExtensionProfile returns the Docker Compose profile name for an extension.
