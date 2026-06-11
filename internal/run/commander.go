@@ -73,6 +73,17 @@ func (c *Commander) DockerNetworkCreate(name string) error {
 	return c.run("docker", "network", "create", name)
 }
 
+// ContainerStatus returns the Docker container state for the given container
+// name. Returns "not found" when the container does not exist, and the state
+// string ("running", "exited", "paused", etc.) otherwise.
+func (c *Commander) ContainerStatus(name string) string {
+	out, err := c.Output("docker", "inspect", "--format={{.State.Status}}", name)
+	if err != nil {
+		return "not found"
+	}
+	return strings.TrimSpace(string(out))
+}
+
 func (c *Commander) run(name string, args ...string) error {
 	cmd := exec.Command(name, args...)
 	cmd.Stdout = c.Stdout
