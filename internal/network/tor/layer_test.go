@@ -60,6 +60,13 @@ func TestLayer_Enable_WritesTorrcConfig(t *testing.T) {
 	require.NoError(t, err, "Torrc config should exist")
 	assert.Contains(t, string(data), "HiddenServiceDir /var/lib/tor/hidden_service/gitea")
 	assert.Contains(t, string(data), "HiddenServicePort 80 gitea:3000")
+
+	// Verify hidden service directory was pre-created so Docker doesn't
+	// auto-create it as root:root (tor runs non-root inside container).
+	hsDir := filepath.Join(root, "tor", "hidden_service", "gitea")
+	fi, err := os.Stat(hsDir)
+	require.NoError(t, err, "Hidden service dir should exist")
+	assert.True(t, fi.IsDir(), "Should be a directory")
 }
 
 func TestLayer_Disable_RemovesConfigs(t *testing.T) {

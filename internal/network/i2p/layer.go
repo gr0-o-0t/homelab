@@ -164,7 +164,7 @@ func (l *Layer) appendTunnel(name string, port int) error {
 	if err != nil {
 		return fmt.Errorf("opening tunnels.conf: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	section := fmt.Sprintf("\n[%s]\ntype = http\nhost = caddy\nport = 80\nhostoverride = %s.i2p\nkeys = %s.dat\n",
 		name, name, name)

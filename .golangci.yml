@@ -63,6 +63,10 @@ linters:
         text: G304
       - path: cmd/yggdrasil.go
         text: G304
+      - path: internal/network/i2p/layer.go
+        text: G304|G703
+      - path: internal/network/tor/layer.go
+        text: G301
       - path: _test\.go
         linters:
           - gosec

@@ -143,6 +143,13 @@ func (l *Layer) appendTorService(name string, port int) error {
 	if err := os.MkdirAll(confDir, 0o750); err != nil {
 		return fmt.Errorf("creating torrc.d: %w", err)
 	}
+	// Pre-create hidden service directory so Docker doesn't create it as
+	// root:root, which would prevent the non-root tor user inside the
+	// container from writing onion keys.
+	hsDir := filepath.Join(l.repoRoot, "tor", "hidden_service", name)
+	if err := os.MkdirAll(hsDir, 0777); err != nil {
+		return fmt.Errorf("creating hidden service dir: %w", err)
+	}
 	confPath := l.torServicePath(name)
 	content := fmt.Sprintf("HiddenServiceDir %s/%s\nHiddenServicePort 80 %s:%d\n",
 		torHiddenServiceDir, name, name, port)
