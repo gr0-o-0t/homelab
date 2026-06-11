@@ -152,8 +152,5 @@ func buildEnv(cfgDir, svcName string) map[string]string {
 	if env["HOME_SUBDOMAIN"] == "" {
 		env["HOME_SUBDOMAIN"] = "home"
 	}
-	if env["PUB_SUBDOMAIN"] == "" {
-		env["PUB_SUBDOMAIN"] = "pub"
-	}
 	return env
 }

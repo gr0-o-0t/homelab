@@ -65,10 +65,9 @@ func TestRender_PublicCaddyConf(t *testing.T) {
 	require.NoError(t, err)
 
 	conf := findFile(t, files, "services/myapp/caddy.cf.conf")
-	assert.Contains(t, conf, "myapp.{$PUB_SUBDOMAIN}.{$DOMAIN}",
-		"public caddy.cf.conf should use PUB_SUBDOMAIN")
+	assert.Contains(t, conf, "http://myapp.{$DOMAIN}",
+		"public caddy.cf.conf should use DOMAIN directly with http://")
 	assert.Contains(t, conf, "reverse_proxy myapp-server:3000")
-	assert.Contains(t, conf, "import wildcard_tls")
 }
 
 func TestRender_ConfigYAML_ContainsScaffoldComments(t *testing.T) {
@@ -97,7 +96,8 @@ func TestRender_PrivateAndPublicDiffer(t *testing.T) {
 	public := findFile(t, files, "services/myapp/caddy.cf.conf")
 	assert.NotEqual(t, private, public,
 		"private and public Caddy configs should use different subdomain variables")
-	assert.True(t, strings.Contains(private, "HOME_SUBDOMAIN") && strings.Contains(public, "PUB_SUBDOMAIN"))
+	assert.True(t, strings.Contains(private, "HOME_SUBDOMAIN") && strings.Contains(public, "http://"),
+		"private uses HOME_SUBDOMAIN, public has http:// prefix")
 }
 
 // ── Write ─────────────────────────────────────────────────────────────────────

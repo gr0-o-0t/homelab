@@ -136,10 +136,14 @@ func runDisable(cmd *cobra.Command, args []string) error {
 }
 
 func disablePrivate(root, svcName string) error {
-	// Remove any auto-generated config (may not exist → old symlink fallback)
-	_ = configgen.RemoveFile(root, "private", svcName, "")
-	// Also try old symlink removal
-	return caddy.New(root).Disable(svcName)
+	// Try old symlink removal first (may not exist → generated config fallback)
+	if err := caddy.New(root).Disable(svcName); err != nil {
+		// No symlink — try removing any auto-generated config
+		if err := configgen.RemoveFile(root, "private", svcName, ""); err != nil {
+			return fmt.Errorf("service %q has no active private route", svcName)
+		}
+	}
+	return nil
 }
 
 // ── Tunnel config removal ────────────────────────────────────────────────

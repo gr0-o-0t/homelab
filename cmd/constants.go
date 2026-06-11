@@ -16,9 +16,8 @@ const (
 
 // Environment variable names.
 const (
-	envDomain       = "DOMAIN"
-	envHomeSub      = "HOME_SUBDOMAIN"
-	envACMEEMail    = "ACME_EMAIL"
-	envTSHostname   = "TS_HOSTNAME"
-	envPubSubdomain = "PUB_SUBDOMAIN"
+	envDomain     = "DOMAIN"
+	envHomeSub    = "HOME_SUBDOMAIN"
+	envACMEEMail  = "ACME_EMAIL"
+	envTSHostname = "TS_HOSTNAME"
 )

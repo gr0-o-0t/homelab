@@ -797,10 +797,6 @@ func (m Model) renderInstalledDetail(svc *service.Service, height, width int) st
 	env := m.rootEnv()
 	domain := env["DOMAIN"]
 	homeSub := env["HOME_SUBDOMAIN"]
-	pubSub := env["PUB_SUBDOMAIN"]
-	if pubSub == "" {
-		pubSub = "pub"
-	}
 
 	// Access
 	b.WriteString("\n " + styles.PaneTitle.Render("Access") + "\n")
@@ -816,7 +812,7 @@ func (m Model) renderInstalledDetail(svc *service.Service, height, width int) st
 	}
 	if svc.HasPublicCaddyConf {
 		if svc.PublicEnabled {
-			url := fmt.Sprintf("https://%s.%s.%s", svc.Name, pubSub, domain)
+			url := fmt.Sprintf("https://%s.%s", svc.Name, domain)
 			fmt.Fprintf(&b, "  %s public    %s\n",
 				styles.Success.Render("●"), styles.Primary.Render(url))
 		} else {

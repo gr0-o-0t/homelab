@@ -56,7 +56,6 @@ func runSetup(_ *cobra.Command, _ []string) error {
 				"HOME_SUBDOMAIN": {Value: "home", Required: true},
 				"ACME_EMAIL":     {Required: true},
 				"TS_HOSTNAME":    {Value: "caddy-home", Required: true},
-				"PUB_SUBDOMAIN":  {Value: "pub", Required: false},
 				"CF_TUNNEL_NAME": {Value: "pub", Required: false},
 				"I2P_EXT_PORT":   {Value: "45678", Required: false},
 			},
@@ -149,10 +148,6 @@ func runSetup(_ *cobra.Command, _ []string) error {
 	// ── Cloudflare configuration (only when cf extension enabled) ────────────
 	if cfg.HasExtension("cf") {
 		fmt.Printf("\n  %s\n\n", styles.Accent.Render("─── Cloudflare Tunnel configuration ─────────────────"))
-
-		pubEntry := cfg.Vars["PUB_SUBDOMAIN"]
-		pubEntry.Value = promptStr(sc, "Public subdomain prefix", pubEntry.Value)
-		cfg.Vars["PUB_SUBDOMAIN"] = pubEntry
 
 		tunnelNameEntry := cfg.Vars["CF_TUNNEL_NAME"]
 		tunnelNameEntry.Value = promptStr(sc, "Cloudflare Tunnel name (from dash.cloudflare.com)", tunnelNameEntry.Value)

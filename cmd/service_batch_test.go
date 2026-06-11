@@ -251,26 +251,16 @@ func TestRemoveBrokenSymlinks_MixedLinks(t *testing.T) {
 
 // ── publicHostname ────────────────────────────────────────────────────────────
 
-func TestPublicHostname_WithPubSubdomain(t *testing.T) {
-	env := map[string]string{
-		"PUB_SUBDOMAIN": "pub",
-		"DOMAIN":        "example.com",
-	}
-	assert.Equal(t, "jellyfin.pub.example.com", publicHostname("jellyfin", env))
-}
-
-func TestPublicHostname_DefaultPubSubdomain(t *testing.T) {
+func TestPublicHostname_Basic(t *testing.T) {
 	env := map[string]string{
 		"DOMAIN": "example.com",
-		// PUB_SUBDOMAIN not set — should default to "pub"
 	}
-	assert.Equal(t, "myapp.pub.example.com", publicHostname("myapp", env))
+	assert.Equal(t, "jellyfin.example.com", publicHostname("jellyfin", env))
 }
 
-func TestPublicHostname_CustomPubSubdomain(t *testing.T) {
+func TestPublicHostname_NoSubdomainPrefix(t *testing.T) {
 	env := map[string]string{
-		"PUB_SUBDOMAIN": "open",
-		"DOMAIN":        "myhomelab.io",
+		"DOMAIN": "myhomelab.io",
 	}
-	assert.Equal(t, "gitea.open.myhomelab.io", publicHostname("gitea", env))
+	assert.Equal(t, "gitea.myhomelab.io", publicHostname("gitea", env))
 }

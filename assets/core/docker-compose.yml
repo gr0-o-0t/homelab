@@ -103,7 +103,6 @@ services:
       CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN}
       DOMAIN: ${DOMAIN}
       HOME_SUBDOMAIN: ${HOME_SUBDOMAIN:-home}
-      PUB_SUBDOMAIN: ${PUB_SUBDOMAIN:-pub}
       ACME_EMAIL: ${ACME_EMAIL}
     healthcheck:
       test: ["CMD", "pgrep", "-f", "caddy"] # Check if ${SERVICE} process is running
@@ -156,7 +155,7 @@ services:
     volumes:
       - ../tor/torrc:/etc/tor/torrc:ro
       - ../tor/torrc.d:/etc/tor/torrc.d:ro
-      - tor-data:/var/lib/tor/hidden_service
+      - ../tor/hidden_service:/var/lib/tor/hidden_service
     networks:
       - home-services
     depends_on:
@@ -241,8 +240,7 @@ volumes:
     name: core_caddy-data
   caddy-config:
     name: core_caddy-config
-  tor-data:
-    name: core_tor-data
+  # tor-data removed — replaced with bind mount
   i2p-config:
     name: core_i2p-config
   ipfs-data:

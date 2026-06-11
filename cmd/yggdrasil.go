@@ -265,4 +265,9 @@ func extractVar(data, key string) string {
 
 func init() {
 	yggEnableCmd.Flags().StringVar(&yggEnablePort, "port", "", "Override service port")
+	yggCmd.AddCommand(yggStatusCmd)
+	yggCmd.AddCommand(yggLogsCmd)
+	yggCmd.AddCommand(yggListCmd)
+	yggCmd.AddCommand(yggEnableCmd)
+	yggCmd.AddCommand(yggDisableCmd)
 }

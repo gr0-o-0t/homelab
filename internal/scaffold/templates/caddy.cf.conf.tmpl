@@ -1,5 +1,4 @@
-{{.Name}}.{$PUB_SUBDOMAIN}.{$DOMAIN} {
-    import wildcard_tls
+http://{{.Name}}.{$DOMAIN} {
 
     reverse_proxy {{.Container}}:{{.Port}}
 }

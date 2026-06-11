@@ -178,13 +178,9 @@ func requireTunnelConfig(env map[string]string) error {
 	return nil
 }
 
-// publicHostname returns the public FQDN for a service (e.g. jellyfin.pub.example.com).
+// publicHostname returns the public FQDN for a service (e.g. jellyfin.example.com).
 func publicHostname(svcName string, env map[string]string) string {
-	pubSub := env["PUB_SUBDOMAIN"]
-	if pubSub == "" {
-		pubSub = "pub"
-	}
-	return fmt.Sprintf("%s.%s.%s", svcName, pubSub, env["DOMAIN"])
+	return fmt.Sprintf("%s.%s", svcName, env["DOMAIN"])
 }
 
 func init() {

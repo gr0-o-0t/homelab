@@ -165,7 +165,7 @@ func domainForExt(displayName, ext string) string {
 	case "private":
 		return fmt.Sprintf("%s.{$HOME_SUBDOMAIN}.{$DOMAIN}", displayName)
 	case "cf":
-		return fmt.Sprintf("%s.{$PUB_SUBDOMAIN}.{$DOMAIN}", displayName)
+		return fmt.Sprintf("%s.{$DOMAIN}", displayName)
 	default:
 		return displayName
 	}
@@ -179,9 +179,13 @@ func buildHTTPBlock(displayName, ext, svcName string, port PortSelection) string
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s {\n", domain)
-	// TLS is terminated at Cloudflare's edge for CF public traffic.
-	// Only private tailnet domains need the wildcard TLS import.
+	// CF routes: TLS terminated at Cloudflare edge, serve HTTP-only.
+	// Private routes: use wildcard TLS via tailnet.
+	if ext == "cf" {
+		fmt.Fprintf(&b, "http://%s {\n", domain)
+	} else {
+		fmt.Fprintf(&b, "%s {\n", domain)
+	}
 	if ext == "private" {
 		b.WriteString("    import wildcard_tls\n")
 	}

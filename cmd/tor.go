@@ -185,8 +185,8 @@ Use --port to override the port detected from caddy.conf.`,
 			return fmt.Errorf("creating torrc.d: %w", err)
 		}
 		confPath := filepath.Join(confDir, name+".conf")
-		content := fmt.Sprintf("HiddenServiceDir %s/%s\nHiddenServicePort %s %s:%s\n",
-			torHiddenServiceDir, name, port, name, port)
+		content := fmt.Sprintf("HiddenServiceDir %s/%s\nHiddenServicePort 80 %s:%s\n",
+			torHiddenServiceDir, name, name, port)
 
 		if err := os.WriteFile(confPath, []byte(content), 0o600); err != nil {
 			return fmt.Errorf("writing %s: %w", confPath, err)
@@ -267,14 +267,15 @@ func TorServicePath(root, name string) string {
 }
 
 // AppendTorService writes a torrc.d config for a service.
+// The virtual port is always 80 for HTTP — Tor remaps it to the actual backend port.
 func AppendTorService(root, name, port string) error {
 	confDir := filepath.Join(root, "tor", "torrc.d")
 	if err := os.MkdirAll(confDir, 0o750); err != nil {
 		return fmt.Errorf("creating torrc.d: %w", err)
 	}
 	confPath := TorServicePath(root, name)
-	content := fmt.Sprintf("HiddenServiceDir %s/%s\nHiddenServicePort %s %s:%s\n",
-		torHiddenServiceDir, name, port, name, port)
+	content := fmt.Sprintf("HiddenServiceDir %s/%s\nHiddenServicePort 80 %s:%s\n",
+		torHiddenServiceDir, name, name, port)
 	return os.WriteFile(confPath, []byte(content), 0o600)
 }
 
@@ -289,4 +290,9 @@ func RemoveTorService(root, name string) error {
 }
 
 func init() {
+	torCmd.AddCommand(torStatusCmd)
+	torCmd.AddCommand(torLogsCmd)
+	torCmd.AddCommand(torListCmd)
+	torCmd.AddCommand(torEnableCmd)
+	torCmd.AddCommand(torDisableCmd)
 }

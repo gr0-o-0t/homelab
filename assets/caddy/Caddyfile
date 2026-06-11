@@ -32,8 +32,8 @@
 # ── Wildcard TLS snippet ──────────────────────────────────────────────────────
 # Declare the wildcard cert once as a named snippet.  Every site block in
 # conf.d/ that matches *.{$HOME_SUBDOMAIN}.{$DOMAIN} will reuse this cert.
-# Public site blocks in conf.d-cf/ use the same DNS-01 mechanism for
-# *.{$PUB_SUBDOMAIN}.{$DOMAIN}.
+# Public site blocks in conf.d-cf/ use direct ACME for 
+# *.{$DOMAIN}.
 (wildcard_tls) {
     tls {
         dns cloudflare {$CLOUDFLARE_API_TOKEN}
@@ -47,8 +47,8 @@ import /homelab/caddy/conf.d/*.conf
 
 # ── Public site blocks (Cloudflare Tunnel) ───────────────────────────────────
 # Written by `homelab enable <name> --cf`.
-# Each file handles <service>.{$PUB_SUBDOMAIN}.{$DOMAIN}.
-# Traffic arrives via cloudflared → http://tailscale:80, TLS is terminated here.
+# Each file handles <service>.{$DOMAIN}.
+# Traffic arrives via cloudflared → http://tailscale:80, TLS is terminated at Cloudflare edge.
 import /homelab/caddy/conf.d-cf/*.conf
 
 # ── I2P eepsite blocks ────────────────────────────────────────────────────────
