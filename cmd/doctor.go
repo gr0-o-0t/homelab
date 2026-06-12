@@ -79,7 +79,7 @@ func runDoctor(_ *cobra.Command, args []string) error {
 	cfgFile := rootConfigFile()
 	fmt.Printf("\n%s\n\n", styles.Header.Render("Homelab Health Check"))
 
-	var pass bool = true
+	var pass = true
 
 	dc, dcErr := docker.New()
 	if dcErr != nil {

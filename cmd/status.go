@@ -234,7 +234,7 @@ func runStatus(_ *cobra.Command, args []string) error {
 		if dc != nil {
 			defer func() { _ = dc.Close() }()
 		}
-		var pass bool = true
+		var pass = true
 		fmt.Println()
 		groups := []diagnostics.CheckGroup{
 			diagnostics.RunConfigChecks(cfgFile),
