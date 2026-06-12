@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/network"
@@ -170,6 +171,11 @@ func (c *Client) ContainerState(ctx context.Context, name string) string {
 		return ""
 	}
 	return list[0].State
+}
+
+// Ping checks if the Docker daemon is reachable.
+func (c *Client) Ping(ctx context.Context) (types.Ping, error) {
+	return c.c.Ping(ctx)
 }
 
 // NetworkExists reports whether a Docker network with the given name exists.
