@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/groot/homelab/internal/docker"
 	"github.com/groot/homelab/internal/network"
 	"github.com/groot/homelab/internal/service"
 )
@@ -365,4 +366,53 @@ func Test_VimBindings_OnlyInListPane(t *testing.T) {
 	// G should not move cursor when detail pane is focused
 	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
 	assert.Equal(t, 2, m2.(Model).cursor, "vim bindings should only work in list pane")
+}
+
+// ── Container detail ──────────────────────────────────────────────────────────
+
+func Test_ContainerDetailMsg_UpdatesDetailPane(t *testing.T) {
+	m := newTestModel(stubServices())
+	m.width, m.height = 120, 40
+	m.cursor = 0 // caddy — installed
+
+	upd, _ := m.Update(containerDetailMsg{
+		svcName: "caddy",
+		details: []docker.ContainerDetail{
+			{ContainerSummary: docker.ContainerSummary{Name: "caddy", State: "running", Image: "caddy:latest"}},
+		},
+	})
+	m2 := upd.(Model)
+	assert.NotNil(t, m2.containerDetails)
+	assert.Len(t, m2.containerDetails, 1)
+}
+
+func Test_ContainerDetailMsg_StaleIgnored(t *testing.T) {
+	m := newTestModel(stubServices())
+	m.width, m.height = 120, 40
+	m.cursor = 0
+
+	upd, _ := m.Update(containerDetailMsg{
+		svcName: "jellyfin",
+		details: []docker.ContainerDetail{
+			{ContainerSummary: docker.ContainerSummary{Name: "jf", State: "running"}},
+		},
+	})
+	m2 := upd.(Model)
+	assert.Nil(t, m2.containerDetails, "detail for non-selected service should be ignored")
+}
+
+func Test_CoreStatusMsg_TorI2pYggIpfsPreserved(t *testing.T) {
+	m := newTestModel(stubServices())
+	m.width, m.height = 120, 40
+
+	upd, _ := m.Update(coreStatusMsg{
+		ts: "running", caddy: "running",
+		tor: "running", i2p: "exited",
+		yggdrasil: "running", ipfs: "",
+	})
+	m2 := upd.(Model)
+	assert.Equal(t, "running", m2.core.tor)
+	assert.Equal(t, "exited", m2.core.i2p)
+	assert.Equal(t, "running", m2.core.yggdrasil)
+	assert.Equal(t, "", m2.core.ipfs)
 }

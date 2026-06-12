@@ -1,13 +1,17 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/groot/homelab/internal/config"
+	"github.com/groot/homelab/internal/diagnostics"
+	"github.com/groot/homelab/internal/docker"
 	"github.com/groot/homelab/internal/service"
 	"github.com/groot/homelab/internal/tui/styles"
 	"github.com/spf13/cobra"
@@ -25,6 +29,8 @@ With a service argument, show status for that specific service.`,
 	ValidArgsFunction: completeServiceNames,
 	RunE:              runStatus,
 }
+
+var statusCheckFlag bool
 
 func runStatus(_ *cobra.Command, args []string) error {
 	dir := configDir()
@@ -222,10 +228,45 @@ func runStatus(_ *cobra.Command, args []string) error {
 		}
 	}
 
+	// ── Diagnostics (--check) ─────────────────────────────────────────────────────
+	if statusCheckFlag {
+		dc, _ := docker.New()
+		if dc != nil {
+			defer func() { _ = dc.Close() }()
+		}
+		var pass bool = true
+		fmt.Println()
+		groups := []diagnostics.CheckGroup{
+			diagnostics.RunConfigChecks(cfgFile),
+			diagnostics.RunInfraChecks(dc),
+		}
+		for _, g := range groups {
+			if len(g.Results) == 0 {
+				continue
+			}
+			fmt.Printf("\n  %s\n", styles.Bold.Render(g.Title))
+			for _, r := range g.Results {
+				switch r.Status {
+				case diagnostics.StatusPass:
+					fmt.Printf("  %s  %s\n", styles.Success.Render("✓"), r.Message)
+				case diagnostics.StatusFail:
+					fmt.Printf("  %s  %s\n", styles.Err.Render("✗"), r.Message)
+					pass = false
+				case diagnostics.StatusWarn:
+					fmt.Printf("  %s  %s\n", styles.Warning.Render("!"), r.Message)
+				}
+			}
+		}
+		fmt.Println()
+		if !pass {
+			fmt.Printf("  %s\n", styles.Err.Render("Some checks failed."))
+		}
+	}
+
 	return nil
 }
 
-// runServiceStatus shows status for a single service.
+// runServiceStatus shows status for a single service with container detail table.
 func runServiceStatus(dir, name string, env map[string]string) error {
 	svcs, err := discoverServices(dir)
 	if err != nil {
@@ -283,8 +324,66 @@ func runServiceStatus(dir, name string, env map[string]string) error {
 	if svc.Enabled && svc.HasCaddyConf {
 		fmt.Printf("  %s  Config:  %s\n", styles.Muted.Render("↳"), styles.Muted.Render(filepath.Join(svc.Dir, "caddy.conf")))
 	}
-	fmt.Println()
 
+	// Container-level detail table
+	dc, dcErr := docker.New()
+	if dcErr == nil {
+		defer func() { _ = dc.Close() }()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		summaries, err := dc.ServiceContainers(ctx, name)
+		if err == nil && len(summaries) > 0 {
+			details, _ := dc.InspectContainers(ctx, summaries)
+			fmt.Printf("\n  %s\n", styles.PaneTitle.Render("Containers"))
+			const (
+				wCName   = 22
+				wCState  = 12
+				wCHealth = 12
+				wCPorts  = 22
+				wCUp     = 14
+				wCImg    = 30
+			)
+			fmt.Printf("  %s  %s  %s  %s  %s  %s\n",
+				styles.Width(wCName).Render(""),
+				styles.TableHeader.Render(styles.Width(wCState).Render("STATE")),
+				styles.TableHeader.Render(styles.Width(wCHealth).Render("HEALTH")),
+				styles.TableHeader.Render(styles.Width(wCPorts).Render("PORTS")),
+				styles.TableHeader.Render(styles.Width(wCUp).Render("UPTIME")),
+				styles.TableHeader.Render("IMAGE"),
+			)
+			for i, s := range summaries {
+				nameCol := styles.Width(wCName).Render(truncate(s.Name, wCName-1))
+				stateCol := styles.Width(wCState).Render(styles.StateTag(s.State))
+				var healthCol, portsCol, uptimeCol, imageCol string
+				if details != nil && i < len(details) {
+					d := details[i]
+					healthCol = styles.Width(wCHealth).Render(styles.HealthTag(d.Health))
+					if len(d.Ports) > 0 {
+						portsCol = styles.Width(wCPorts).Render(truncate(strings.Join(d.Ports, ", "), wCPorts-1))
+					} else {
+						portsCol = styles.Width(wCPorts).Render(styles.Muted.Render("–"))
+					}
+					if d.State == containerStateRunning && !d.StartedAt.IsZero() {
+						uptimeCol = styles.Width(wCUp).Render(styles.Success.Render("↑ " + formatUptime(time.Since(d.StartedAt))))
+					} else if !d.FinishedAt.IsZero() && d.FinishedAt.Year() > 1 {
+						uptimeCol = styles.Width(wCUp).Render(styles.Muted.Render("↓ " + formatUptime(time.Since(d.FinishedAt))))
+					} else {
+						uptimeCol = styles.Width(wCUp).Render(styles.Muted.Render("–"))
+					}
+					imageCol = styles.Muted.Render(truncate(d.Image, 30))
+				} else {
+					healthCol = styles.Width(wCHealth).Render(styles.Muted.Render("–"))
+					portsCol = styles.Width(wCPorts).Render(styles.Muted.Render("–"))
+					uptimeCol = styles.Width(wCUp).Render(styles.Muted.Render(s.Status))
+					imageCol = styles.Muted.Render(truncate(s.Image, 30))
+				}
+				fmt.Printf("  %s  %s  %s  %s  %s  %s\n", nameCol, stateCol, healthCol, portsCol, uptimeCol, imageCol)
+			}
+		}
+	}
+
+	fmt.Println()
 	return nil
 }
 
@@ -302,4 +401,8 @@ func tailscaleFQDN() (string, bool) {
 		return "", false
 	}
 	return strings.TrimSuffix(self.DNSName, "."), true
+}
+
+func init() {
+	statusCmd.Flags().BoolVar(&statusCheckFlag, "check", false, "Run health checks inline")
 }

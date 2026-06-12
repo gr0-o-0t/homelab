@@ -10,9 +10,9 @@ import (
 
 	"github.com/groot/homelab/internal/caddy"
 	"github.com/groot/homelab/internal/config"
+	"github.com/groot/homelab/internal/diagnostics"
 	"github.com/groot/homelab/internal/docker"
 	"github.com/groot/homelab/internal/run"
-	"github.com/groot/homelab/internal/secrets"
 	"github.com/groot/homelab/internal/service"
 	"github.com/groot/homelab/internal/tui/spinner"
 	"github.com/groot/homelab/internal/tui/styles"
@@ -77,140 +77,76 @@ func runDoctor(_ *cobra.Command, args []string) error {
 	}
 
 	cfgFile := rootConfigFile()
-
 	fmt.Printf("\n%s\n\n", styles.Header.Render("Homelab Health Check"))
 
-	sm, err := secrets.Open()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: keyring unavailable (%v)\n", err)
+	var pass bool = true
+
+	dc, dcErr := docker.New()
+	if dcErr != nil {
+		fmt.Printf("  %s  Docker SDK unavailable: %v\n", styles.Warning.Render("!"), dcErr)
+	}
+	if dc != nil {
+		defer func() { _ = dc.Close() }()
 	}
 
-	pass := true
-	check := func(ok bool, msg string) {
-		if ok {
-			fmt.Printf("  %s  %s\n", styles.Success.Render("✓"), msg)
-		} else {
-			fmt.Printf("  %s  %s\n", styles.Err.Render("✗"), msg)
-			pass = false
-		}
-	}
-	warn := func(msg string) {
-		fmt.Printf("  %s  %s\n", styles.Warning.Render("!"), msg)
-	}
+	renderCheckGroup(diagnostics.RunConfigChecks(cfgFile), &pass)
+	renderCheckGroup(diagnostics.RunInfraChecks(dc), &pass)
 
-	// ── Configuration ─────────────────────────────────────────────────────────
-	fmt.Printf("\n  %s\n", styles.Bold.Render("Configuration"))
-
-	cfg, err := config.Load(cfgFile)
-	check(err == nil, "config.yaml readable")
-	if cfg != nil {
-		for k, e := range cfg.Vars {
-			if e.Required {
-				check(e.Value != "", k+" is set")
-			}
-		}
-		for k, e := range cfg.Secrets {
-			isSet := sm != nil && sm.IsSet("", k)
-			if e.Required {
-				check(isSet, k+" is set in keyring")
-			} else if !isSet {
-				warn(k + " is not set (optional)")
-			}
-		}
-	} else if err == nil {
-		check(false, "config.yaml not found — run 'homelab setup'")
-	}
-
-	// ── Infrastructure ────────────────────────────────────────────────────────
-	fmt.Printf("\n  %s\n", styles.Bold.Render("Infrastructure"))
-
-	check(dockerDaemonUp(), "Docker daemon is running")
-
-	netExists, _ := run.DockerNetworkExists("home-services")
-	check(netExists, "Network 'home-services' exists")
-	if !netExists && doctorFixFlag {
+	// --fix: create Docker network if missing
+	if !pass && doctorFixFlag && dc != nil {
 		if err := spinner.Run("Creating Docker network 'home-services'…", func() error {
 			return run.Default().DockerNetworkCreate("home-services")
 		}); err != nil {
-			warn(fmt.Sprintf("Could not create network: %v", err))
+			fmt.Printf("  %s  Could not create network: %v\n", styles.Warning.Render("!"), err)
 		} else {
 			fmt.Printf("  %s  Network 'home-services' created\n", styles.Success.Render("✓"))
 			pass = true
 		}
 	}
 
-	_, tunErr := os.Stat("/dev/net/tun")
-	check(tunErr == nil, "/dev/net/tun present")
+	renderCheckGroup(diagnostics.RunCoreStackChecks(dc, dir), &pass)
 
-	// ── Caddy routing dirs ────────────────────────────────────────────────────
-	fmt.Printf("\n  %s\n", styles.Bold.Render("Caddy routing"))
-
-	caddyConfD := filepath.Join(dir, "caddy", "conf.d")
-	caddyConfDPub := filepath.Join(dir, "caddy", "conf.d-cf")
-
-	for _, d := range []string{caddyConfD, caddyConfDPub} {
-		rel, _ := filepath.Rel(dir, d)
-		if _, err := os.Stat(d); os.IsNotExist(err) {
-			check(false, rel+" directory present")
-			if doctorFixFlag {
-				if mkErr := os.MkdirAll(d, 0o750); mkErr == nil {
-					fmt.Printf("  %s  %s created\n", styles.Success.Render("✓"), rel)
-				} else {
-					warn(fmt.Sprintf("Could not create %s: %v", rel, mkErr))
-				}
+	// Core stack extras — Caddy config validate + Tailscale connectivity
+	if dc != nil {
+		caddyState := dc.ContainerState(context.Background(), "caddy")
+		if caddyState == containerStateRunning {
+			var buf strings.Builder
+			r := &run.Commander{Stdout: &buf, Stderr: &buf}
+			if caddy.NewWithRunner(dir, r).Validate() == nil {
+				fmt.Printf("  %s  Caddy config valid\n", styles.Success.Render("✓"))
+			} else {
+				fmt.Printf("  %s  Caddy config valid\n", styles.Err.Render("✗"))
+				pass = false
 			}
-		} else {
-			check(true, rel+" directory present")
-			brokenCount := removeBrokenSymlinks(d, doctorFixFlag)
-			if brokenCount > 0 {
-				fmt.Printf("  %s  %s: removed %d broken symlink(s)\n",
-					styles.Success.Render("✓"), rel, brokenCount)
+		}
+		tsState := dc.ContainerState(context.Background(), "tailscale")
+		if tsState == containerStateRunning {
+			ip, ok := tailscaleIP()
+			if ok {
+				fmt.Printf("  %s  Tailscale connected (%s)\n", styles.Success.Render("✓"), styles.Primary.Render(ip))
+			} else {
+				fmt.Printf("  %s  Tailscale not connected\n", styles.Err.Render("✗"))
+				pass = false
 			}
 		}
 	}
 
-	// ── Core Stack ────────────────────────────────────────────────────────────
-	fmt.Printf("\n  %s\n", styles.Bold.Render("Core Stack"))
-
-	check(fileExistsAt(run.CoreComposeFile(dir)), "core/docker-compose.yml present")
-
-	tsState := containerStatus("tailscale")
-	check(tsState == containerStateRunning, fmt.Sprintf("tailscale container %s", stateLabel(tsState)))
-
-	caddyState := containerStatus("caddy")
-	caddyRunning := caddyState == containerStateRunning
-	check(caddyRunning, fmt.Sprintf("caddy container %s", stateLabel(caddyState)))
-
-	if caddyRunning {
-		var buf strings.Builder
-		r := &run.Commander{Stdout: &buf, Stderr: &buf}
-		valErr := caddy.NewWithRunner(dir, r).Validate()
-		check(valErr == nil, "Caddy config valid")
-	}
-
-	if tsState == containerStateRunning {
-		ip, connected := tailscaleIP()
-		if connected {
-			check(true, fmt.Sprintf("Tailscale connected (%s)", ip))
-		} else {
-			check(false, "Tailscale not connected")
+	routingResults := caddyRoutingCheck(dir, doctorFixFlag, &pass)
+	if len(routingResults) > 0 {
+		fmt.Printf("\n  %s\n", styles.Bold.Render("Caddy routing"))
+		for _, r := range routingResults {
+			switch r.Status {
+			case diagnostics.StatusPass:
+				fmt.Printf("  %s  %s\n", styles.Success.Render("✓"), r.Message)
+			case diagnostics.StatusFail:
+				fmt.Printf("  %s  %s\n", styles.Err.Render("✗"), r.Message)
+				pass = false
+			}
 		}
 	}
 
-	// ── Network Extensions ────────────────────────────────────────────────────
-	fmt.Printf("\n  %s\n", styles.Bold.Render("Network Extensions"))
+	renderExtensionChecks(cfgFile, dc, &pass)
 
-	for _, layer := range extRegistry.All() {
-		name := layer.Name()
-		if cfg != nil && hasResolvedExtension(cfg, name) {
-			cName := layer.ContainerName()
-			cState := containerStatus(cName)
-			check(cState == containerStateRunning, fmt.Sprintf("%s (%s) container %s",
-				config.ExtensionLabel(name), cName, stateLabel(cState)))
-		}
-	}
-
-	// ── Result ────────────────────────────────────────────────────────────────
 	fmt.Println()
 	if pass {
 		fmt.Printf("  %s\n\n", styles.Success.Render("All checks passed."))
@@ -223,6 +159,116 @@ func runDoctor(_ *cobra.Command, args []string) error {
 		}
 	}
 	return nil
+}
+
+// renderCheckGroup prints a CheckGroup with the same ✓/✗/! format as the original doctor.
+func renderCheckGroup(g diagnostics.CheckGroup, pass *bool) {
+	fmt.Printf("\n  %s\n", styles.Bold.Render(g.Title))
+	for _, r := range g.Results {
+		switch r.Status {
+		case diagnostics.StatusPass:
+			fmt.Printf("  %s  %s\n", styles.Success.Render("✓"), r.Message)
+		case diagnostics.StatusFail:
+			fmt.Printf("  %s  %s\n", styles.Err.Render("✗"), r.Message)
+			if pass != nil {
+				*pass = false
+			}
+		case diagnostics.StatusWarn:
+			fmt.Printf("  %s  %s\n", styles.Warning.Render("!"), r.Message)
+		}
+	}
+}
+
+// caddyRoutingCheck checks Caddy conf.d directories and broken symlinks.
+// Returns results and handles --fix repair.
+func caddyRoutingCheck(dir string, fix bool, pass *bool) []diagnostics.CheckResult {
+	var results []diagnostics.CheckResult
+	caddyConfD := filepath.Join(dir, "caddy", "conf.d")
+	caddyConfDPub := filepath.Join(dir, "caddy", "conf.d-cf")
+
+	for _, d := range []string{caddyConfD, caddyConfDPub} {
+		rel, _ := filepath.Rel(dir, d)
+		if _, err := os.Stat(d); os.IsNotExist(err) {
+			results = append(results, diagnostics.CheckResult{
+				Name: rel + " dir", Status: diagnostics.StatusFail, Message: rel + " dir present",
+			})
+			if pass != nil {
+				*pass = false
+			}
+			if fix {
+				if mkErr := os.MkdirAll(d, 0o750); mkErr == nil {
+					fmt.Printf("  %s  %s created\n", styles.Success.Render("✓"), rel)
+				} else {
+					fmt.Printf("  %s  Could not create %s: %v\n", styles.Warning.Render("!"), rel, mkErr)
+				}
+			}
+		} else {
+			results = append(results, diagnostics.CheckResult{
+				Name: rel + " dir", Status: diagnostics.StatusPass, Message: rel + " dir present",
+			})
+			brokenCount := removeBrokenSymlinks(d, fix)
+			if brokenCount > 0 {
+				fmt.Printf("  %s  %s: removed %d broken symlink(s)\n",
+					styles.Success.Render("✓"), rel, brokenCount)
+			}
+		}
+	}
+	return results
+}
+
+// renderExtensionChecks iterates the registry and renders extension container states.
+func renderExtensionChecks(cfgFile string, dc *docker.Client, pass *bool) {
+	cfg, _ := config.Load(cfgFile)
+	if cfg == nil {
+		return
+	}
+
+	var results []diagnostics.CheckResult
+	for _, layer := range extRegistry.All() {
+		name := layer.Name()
+		if !hasResolvedExtension(cfg, name) {
+			continue
+		}
+		cName := layer.ContainerName()
+		var cState string
+		if dc != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			cState = dc.ContainerState(ctx, cName)
+			cancel()
+		} else {
+			cState = ""
+		}
+		displayName := config.ExtensionLabel(name)
+		if cState == containerStateRunning {
+			results = append(results, diagnostics.CheckResult{
+				Name: displayName, Status: diagnostics.StatusPass,
+				Message: fmt.Sprintf("%s (%s) container running", displayName, cName),
+			})
+		} else {
+			results = append(results, diagnostics.CheckResult{
+				Name: displayName, Status: diagnostics.StatusWarn,
+				Message: fmt.Sprintf("%s (%s) container %s", displayName, cName, stateLabel(cState)),
+			})
+			if pass != nil {
+				*pass = false
+			}
+		}
+	}
+
+	if len(results) > 0 {
+		fmt.Printf("\n  %s\n", styles.Bold.Render("Network Extensions"))
+		for _, r := range results {
+			switch r.Status {
+			case diagnostics.StatusPass:
+				fmt.Printf("  %s  %s\n", styles.Success.Render("✓"), r.Message)
+			case diagnostics.StatusWarn:
+				fmt.Printf("  %s  %s\n", styles.Err.Render("✗"), r.Message)
+				if pass != nil {
+					*pass = false
+				}
+			}
+		}
+	}
 }
 
 // ── homelab service doctor ────────────────────────────────────────────────────
@@ -280,88 +326,31 @@ func runServiceDoctorFor(dir, name string, fix bool) bool {
 		styles.Header.Render("Service Health:"),
 		styles.Bold.Render(name))
 
-	sm, err := secrets.Open()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: keyring unavailable (%v)\n", err)
-	}
-
 	pass := true
-	check := func(ok bool, msg string) {
-		if ok {
-			fmt.Printf("  %s  %s\n", styles.Success.Render("✓"), msg)
-		} else {
-			fmt.Printf("  %s  %s\n", styles.Err.Render("✗"), msg)
-			pass = false
-		}
+
+	dc, dcErr := docker.New()
+	if dcErr != nil {
+		fmt.Printf("  %s  Docker SDK unavailable: %v\n", styles.Warning.Render("!"), dcErr)
 	}
-
-	// ── Configuration ─────────────────────────────────────────────────────────
-	fmt.Printf("\n  %s\n", styles.Bold.Render("Configuration"))
-
-	svcDir := config.ServiceConfigFile(dir, name)
-	check(fileExistsAt(strings.TrimSuffix(svcDir, "/config.yaml")),
-		fmt.Sprintf("services/%s/ exists", name))
-	check(fileExistsAt(run.ServiceComposeFile(dir, name)),
-		fmt.Sprintf("services/%s/docker-compose.yml exists", name))
-
-	svcCfg, _ := config.Load(config.ServiceConfigFile(dir, name))
-	if svcCfg != nil {
-		env, err := config.BuildEnv(rootConfigFile(), dir, name, sm)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: config error (%v)\n", err)
-		}
-		if env == nil {
-			env = make(map[string]string)
-		}
-		for k, e := range svcCfg.Vars {
-			if e.Required {
-				check(env[k] != "", k+" is set")
-			}
-		}
-		for k, e := range svcCfg.Secrets {
-			isSet := sm != nil && sm.IsSet(name, k)
-			if e.Required {
-				check(isSet, k+" is set in keyring")
-			}
-		}
-	}
-
-	// ── Containers ────────────────────────────────────────────────────────────
-	fmt.Printf("\n  %s\n", styles.Bold.Render("Containers"))
-
-	dc, err := docker.New()
-	if err != nil {
-		fmt.Printf("  %s  Docker SDK unavailable: %v\n", styles.Warning.Render("!"), err)
-	} else {
+	if dc != nil {
 		defer func() { _ = dc.Close() }()
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		summaries, _ := dc.ServiceContainers(ctx, name)
-		if len(summaries) == 0 {
-			check(false, "no containers found")
-		} else {
-			for _, s := range summaries {
-				check(s.State == containerStateRunning,
-					fmt.Sprintf("%s %s", s.Name, stateLabel(s.State)))
-			}
-		}
 	}
 
-	// ── Routing ───────────────────────────────────────────────────────────────
-	fmt.Printf("\n  %s\n", styles.Bold.Render("Routing"))
+	renderCheckGroup(diagnostics.RunServiceConfigChecks(dir, name), &pass)
+	renderCheckGroup(diagnostics.RunServiceContainerChecks(name, dc), &pass)
+	renderCheckGroup(diagnostics.RunServiceRoutingChecks(dir, name), &pass)
 
-	mgr := caddy.New(dir)
-	enabled, _ := mgr.IsEnabled(name)
-	pubEnabled, _ := mgr.IsPublicEnabled(name)
-	check(enabled || pubEnabled, "at least one Caddy route active")
-
-	if !enabled && !pubEnabled && fix {
-		// Check if caddy.conf exists so we can re-link it.
-		caddyConf := filepath.Join(dir, "services", name, "caddy.conf")
-		if fileExistsAt(caddyConf) {
-			if err := mgr.Enable(name); err == nil {
-				fmt.Printf("  %s  private route re-enabled\n", styles.Success.Render("✓"))
-				pass = true
+	// --fix auto-repair for Caddy routes (private only — matches original)
+	if !pass && fix {
+		mgr := caddy.New(dir)
+		enabled, _ := mgr.IsEnabled(name)
+		if !enabled {
+			caddyConf := filepath.Join(dir, "services", name, "caddy.conf")
+			if fileExistsAt(caddyConf) {
+				if err := mgr.Enable(name); err == nil {
+					fmt.Printf("  %s  private route re-enabled\n", styles.Success.Render("✓"))
+					pass = true
+				}
 			}
 		}
 	}

@@ -24,13 +24,14 @@ import (
 // ── constants ─────────────────────────────────────────────────────────────────
 
 const (
-	leftPaneWidth  = 40 // full left column width (including separator)
-	listInnerWidth = 38 // usable characters inside the left pane
-	headerLines    = 1
-	statusbarLines = 1
-	logTailLines   = 10
-	coreRefreshSec = 5
-	logRefreshSec  = 4
+	leftPaneWidth     = 40 // full left column width (including separator)
+	listInnerWidth    = 38 // usable characters inside the left pane
+	headerLines       = 1
+	statusbarLines    = 1
+	logTailLines      = 10
+	coreRefreshSec    = 5
+	logRefreshSec     = 4
+	inspectRefreshSec = 5
 
 	// Name column widths inside the list. Derived from listInnerWidth.
 	//   installed item: cursor(2) + dot(1) + space(1) + name + space(1) + badge(4) = 9 + name
@@ -75,8 +76,13 @@ type (
 		svcName string
 		lines   []string
 	}
-	coreTickMsg struct{}
-	logTickMsg  struct{}
+	coreTickMsg        struct{}
+	logTickMsg         struct{}
+	inspectTickMsg     struct{}
+	containerDetailMsg struct {
+		svcName string
+		details []docker.ContainerDetail
+	}
 )
 
 // ── core status ───────────────────────────────────────────────────────────────
@@ -146,8 +152,9 @@ type Model struct {
 	core coreStatus
 
 	// detail pane log tail
-	logLines   []string
-	logSvcName string
+	logLines         []string
+	logSvcName       string
+	containerDetails []docker.ContainerDetail
 
 	// key sequence tracking
 	lastKey string // for detecting multi-key sequences (gg)
@@ -185,6 +192,8 @@ func (m Model) Init() tea.Cmd {
 		m.spin.Tick,
 		coreTickCmd(),
 		logTickCmd(),
+		inspectCmd(m.repoRoot, m.dc, m.selectedName()),
+		inspectTickCmd(),
 	)
 }
 
@@ -233,6 +242,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			tailscale:   msg.ts,
 			caddy:       msg.caddy,
 			cloudflared: msg.cloudflared,
+			tor:         msg.tor,
+			i2p:         msg.i2p,
+			yggdrasil:   msg.yggdrasil,
+			ipfs:        msg.ipfs,
 		}
 
 	case logTailMsg:
@@ -241,11 +254,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.logSvcName = msg.svcName
 		}
 
+	case containerDetailMsg:
+		if msg.svcName == m.selectedName() {
+			m.containerDetails = msg.details
+		}
+
 	case coreTickMsg:
 		cmds = append(cmds, coreRefreshCmd(m.dc), coreTickCmd())
 
 	case logTickMsg:
 		cmds = append(cmds, m.fetchLogsCmd(), logTickCmd())
+
+	case inspectTickMsg:
+		cmds = append(cmds, m.fetchInspectCmd(), inspectTickCmd())
 
 	case spinner.TickMsg:
 		if m.state == stateBusy {
@@ -836,7 +857,8 @@ func (m Model) renderInstalledDetail(svc *service.Service, height, width int) st
 	// Containers
 	if len(svc.Containers) > 0 {
 		b.WriteString("\n " + styles.PaneTitle.Render("Containers") + "\n")
-		for _, c := range svc.Containers {
+		for i, c := range svc.Containers {
+			cName := clip(c.Name, 20)
 			stateStyle := styles.Muted
 			switch c.State {
 			case "running":
@@ -844,10 +866,22 @@ func (m Model) renderInstalledDetail(svc *service.Service, height, width int) st
 			case "restarting":
 				stateStyle = styles.Warning
 			}
-			cName := clip(c.Name, 22)
-			fmt.Fprintf(&b, "  %s  %s\n",
-				lipgloss.NewStyle().Width(22).Render(cName),
-				stateStyle.Render(c.State))
+			stateStr := stateStyle.Render(c.State)
+			var extra string
+			if m.containerDetails != nil && i < len(m.containerDetails) {
+				d := m.containerDetails[i]
+				health := "–"
+				if d.Health != "" {
+					health = styles.HealthTag(d.Health)
+				}
+				ports := ""
+				if len(d.Ports) > 0 {
+					ports = " " + styles.Muted.Render(clip(strings.Join(d.Ports, ", "), 28))
+				}
+				extra = fmt.Sprintf("  %s  %s", health, ports)
+			}
+			fmt.Fprintf(&b, "  %s  %s%s\n",
+				lipgloss.NewStyle().Width(20).Render(cName), stateStr, extra)
 		}
 	}
 
@@ -1116,6 +1150,36 @@ func logTickCmd() tea.Cmd {
 	return tea.Tick(logRefreshSec*time.Second, func(t time.Time) tea.Msg {
 		return logTickMsg{}
 	})
+}
+
+func inspectCmd(repoRoot string, dc *docker.Client, name string) tea.Cmd {
+	return func() tea.Msg {
+		if dc == nil || name == "" {
+			return containerDetailMsg{}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		summaries, err := dc.ServiceContainers(ctx, name)
+		if err != nil || len(summaries) == 0 {
+			return containerDetailMsg{svcName: name}
+		}
+		details, _ := dc.InspectContainers(ctx, summaries)
+		return containerDetailMsg{svcName: name, details: details}
+	}
+}
+
+func inspectTickCmd() tea.Cmd {
+	return tea.Tick(inspectRefreshSec*time.Second, func(t time.Time) tea.Msg {
+		return inspectTickMsg{}
+	})
+}
+
+func (m Model) fetchInspectCmd() tea.Cmd {
+	svc := m.selectedService()
+	if svc == nil || !svc.Installed {
+		return nil
+	}
+	return inspectCmd(m.repoRoot, m.dc, svc.Name)
 }
 
 func privateEnableCmd(repoRoot, name string) tea.Cmd {

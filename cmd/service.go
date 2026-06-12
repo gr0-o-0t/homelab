@@ -480,6 +480,7 @@ func discoverServices(root string) ([]service.Service, error) {
 }
 
 // printPsTable renders a rich container table for `service ps`.
+// Ports and Restart columns added alongside existing health/uptime/image columns.
 func printPsTable(name string, summaries []docker.ContainerSummary, details []docker.ContainerDetail) {
 	fmt.Printf("\n  %s %s\n\n",
 		styles.Header.Render("Service:"),
@@ -487,27 +488,31 @@ func printPsTable(name string, summaries []docker.ContainerSummary, details []do
 	)
 
 	const (
-		wName   = 28
-		wState  = 12
-		wHealth = 12
-		wUptime = 14
+		wName    = 24
+		wState   = 12
+		wHealth  = 12
+		wUptime  = 14
+		wPorts   = 22
+		wRestart = 8
 	)
 
-	fmt.Printf("  %s  %s  %s  %s  %s\n",
+	fmt.Printf("  %s  %s  %s  %s  %s  %s  %s\n",
 		styles.TableHeader.Render(styles.Width(wName).Render("CONTAINER")),
 		styles.TableHeader.Render(styles.Width(wState).Render("STATE")),
 		styles.TableHeader.Render(styles.Width(wHealth).Render("HEALTH")),
 		styles.TableHeader.Render(styles.Width(wUptime).Render("UPTIME")),
+		styles.TableHeader.Render(styles.Width(wPorts).Render("PORTS")),
+		styles.TableHeader.Render(styles.Width(wRestart).Render("RESTART")),
 		styles.TableHeader.Render("IMAGE"),
 	)
-	fmt.Println(styles.Divider.Render("  " + strings.Repeat("─", wName+wState+wHealth+wUptime+30)))
+	fmt.Println(styles.Divider.Render("  " + strings.Repeat("─", wName+wState+wHealth+wUptime+wPorts+wRestart+36)))
 
 	for i, s := range summaries {
 		cName := styles.Width(wName).Render(truncate(s.Name, wName-1))
 		cState := styles.Width(wState).Render(styles.StateTag(s.State))
-		cImage := styles.Muted.Render(truncate(s.Image, 40))
+		cImage := styles.Muted.Render(truncate(s.Image, 36))
 
-		var cHealth, cUptime string
+		var cHealth, cUptime, cPorts, cRestart string
 		if details != nil && i < len(details) {
 			d := details[i]
 			cHealth = styles.Width(wHealth).Render(styles.HealthTag(d.Health))
@@ -520,12 +525,20 @@ func printPsTable(name string, summaries []docker.ContainerSummary, details []do
 			} else {
 				cUptime = styles.Width(wUptime).Render(styles.Muted.Render("–"))
 			}
+			if len(d.Ports) > 0 {
+				cPorts = styles.Width(wPorts).Render(truncate(strings.Join(d.Ports, ", "), wPorts-1))
+			} else {
+				cPorts = styles.Width(wPorts).Render(styles.Muted.Render("–"))
+			}
+			cRestart = styles.Width(wRestart).Render(fmt.Sprintf("%d", d.RestartCount))
 		} else {
 			cHealth = styles.Width(wHealth).Render(styles.Muted.Render("–"))
 			cUptime = styles.Width(wUptime).Render(styles.Muted.Render(s.Status))
+			cPorts = styles.Width(wPorts).Render(styles.Muted.Render("–"))
+			cRestart = styles.Width(wRestart).Render(styles.Muted.Render("–"))
 		}
 
-		fmt.Printf("  %s  %s  %s  %s  %s\n", cName, cState, cHealth, cUptime, cImage)
+		fmt.Printf("  %s  %s  %s  %s  %s  %s  %s\n", cName, cState, cHealth, cUptime, cPorts, cRestart, cImage)
 	}
 	fmt.Println()
 }
