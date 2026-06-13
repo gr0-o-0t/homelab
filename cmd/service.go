@@ -224,7 +224,7 @@ func init() {
 
 func runServiceUp(_ *cobra.Command, args []string) error {
 	root := configDir()
-	names, err := resolveTargets(root, startFlags.all, startFlags.group, args)
+	names, err := resolveTargets(root, upFlags.all, upFlags.group, args)
 	if err != nil {
 		return err
 	}
@@ -241,7 +241,7 @@ func runServiceUp(_ *cobra.Command, args []string) error {
 		}
 		fmt.Printf("%s Starting %s…\n", styles.Primary.Render("→"), styles.Bold.Render(name))
 		upArgs := []string{"up", "-d"}
-		if startFlags.build {
+		if upFlags.build {
 			upArgs = append(upArgs, "--build")
 		}
 		if err := run.Default().DockerComposeEnv(
@@ -257,7 +257,7 @@ func runServiceUp(_ *cobra.Command, args []string) error {
 
 func runServiceDown(_ *cobra.Command, args []string) error {
 	root := configDir()
-	names, err := resolveTargets(root, stopFlags.all, stopFlags.group, args)
+	names, err := resolveTargets(root, downFlags.all, downFlags.group, args)
 	if err != nil {
 		return err
 	}

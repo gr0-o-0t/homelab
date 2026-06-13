@@ -64,3 +64,19 @@ func TestConfigFile_DerivesConfigDir(t *testing.T) {
 	err = rootCmd.Execute()
 	assert.NoError(t, err)
 }
+
+func TestConfigCommand_MissingService(t *testing.T) {
+	tmp := t.TempDir()
+	rootCmd := cmd.RootCmd()
+	rootCmd.SetArgs([]string{"--config-dir", tmp, "config", "nonexistent"})
+	err := rootCmd.Execute()
+	assert.Error(t, err)
+}
+
+func TestConfigCommand_NoArgRuns(t *testing.T) {
+	tmp := t.TempDir()
+	rootCmd := cmd.RootCmd()
+	rootCmd.SetArgs([]string{"--config-dir", tmp, "config"})
+	err := rootCmd.Execute()
+	assert.Error(t, err)
+}

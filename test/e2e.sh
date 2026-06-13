@@ -223,7 +223,8 @@ fi
 echo ""
 echo "─── 8. CLI completeness ───"
 
-for cmd in add status setup enable disable start stop restart reload validate logs doctor new delete; do
+for cmd in add status setup enable disable start stop restart reload \
+	validate logs doctor new delete pull exec config images port; do
 	check_output "CLI has command: $cmd" "help for $cmd" \
 		"$HOMELAB" "$cmd" --help
 done
@@ -240,9 +241,9 @@ check_output "service: ps works" "service" \
 	"$HOMELAB" service ps --help 2>&1 || true
 
 # up/down aliases
-check_output "alias up → start" "start" \
+check_output "up is primary command" "Create and start" \
 	"$HOMELAB" up --help 2>&1
-check_output "alias down → stop" "stop" \
+check_output "down is primary command" "Stop and remove" \
 	"$HOMELAB" down --help 2>&1
 check_output "alias rm → delete" "delete" \
 	"$HOMELAB" rm --help 2>&1

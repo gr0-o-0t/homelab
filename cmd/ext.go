@@ -305,7 +305,6 @@ func init() {
 		extLogsCmd,
 		extStartCmd,
 		extStopCmd,
-		i2pCmd, torCmd, cfCmd, yggCmd, ipfsCmd,
 	)
 
 	// Register full per-layer commands at root level (replaces ext hub).

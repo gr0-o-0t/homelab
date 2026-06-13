@@ -215,6 +215,43 @@ func TestTunnelRouteAdd_NotEnabled(t *testing.T) {
 	assert.Contains(t, err.Error(), "not enabled")
 }
 
+// ── start/stop new semantics ────────────────────────────────────────────────
+
+func TestStartCommand_MissingService(t *testing.T) {
+	tmp := t.TempDir()
+	rootCmd := cmd.RootCmd()
+	rootCmd.SetArgs([]string{"--config-dir", tmp, "start", "nonexistent"})
+	err := rootCmd.Execute()
+	assert.Error(t, err)
+}
+
+func TestStopCommand_MissingService(t *testing.T) {
+	tmp := t.TempDir()
+	rootCmd := cmd.RootCmd()
+	rootCmd.SetArgs([]string{"--config-dir", tmp, "stop", "nonexistent"})
+	err := rootCmd.Execute()
+	assert.Error(t, err)
+}
+
+// ── new commands ─────────────────────────────────────────────────────────────
+
+func TestPullCommand_MissingService(t *testing.T) {
+	tmp := t.TempDir()
+	rootCmd := cmd.RootCmd()
+	rootCmd.SetArgs([]string{"--config-dir", tmp, "pull", "nonexistent"})
+	err := rootCmd.Execute()
+	assert.Error(t, err)
+}
+
+func TestPullCommand_AllEmpty(t *testing.T) {
+	tmp := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmp, "services"), 0o755))
+	rootCmd := cmd.RootCmd()
+	rootCmd.SetArgs([]string{"--config-dir", tmp, "pull", "--all"})
+	err := rootCmd.Execute()
+	assert.NoError(t, err)
+}
+
 // ── completion ────────────────────────────────────────────────────────────────
 
 func TestCompletionCommand_Bash(t *testing.T) {
