@@ -4,7 +4,7 @@ SHELL := /bin/bash
 # Version in Go pseudo-version format: v{major}.{minor}.{patch} on tags,
 # or v0.0.0-YYYYMMDDHHMMSS-commithash on untagged commits.
 GIT_TAG := $(shell git tag --points-at HEAD 2>/dev/null | head -1)
-GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null)
+GIT_COMMIT := $(shell git rev-parse --short=12 HEAD 2>/dev/null)
 GIT_DATE := $(shell git log -1 --format=%cd --date=format:%Y%m%d%H%M%S 2>/dev/null)
 
 ifeq ($(GIT_TAG),)
