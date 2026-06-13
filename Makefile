@@ -3,7 +3,7 @@ SHELL := /bin/bash
 
 # Version from git tag or commit
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
-LDFLAGS := -ldflags="-X main.version=$(VERSION)"
+LDFLAGS := -ldflags="-X github.com/groot/homelab/cmd.Version=$(VERSION)"
 
 .PHONY: build build-linux-amd64 build-linux-arm64 release install tidy test test-race lint lint-full ci catalog version
 
