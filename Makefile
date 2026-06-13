@@ -1,8 +1,18 @@
 SHELL := /bin/bash
 .DEFAULT_GOAL := build
 
-# Version from git tag or commit
-VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+# Version in Go pseudo-version format: v{major}.{minor}.{patch} on tags,
+# or v0.0.0-YYYYMMDDHHMMSS-commithash on untagged commits.
+GIT_TAG := $(shell git tag --points-at HEAD 2>/dev/null | head -1)
+GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null)
+GIT_DATE := $(shell git log -1 --format=%cd --date=format:%Y%m%d%H%M%S 2>/dev/null)
+
+ifeq ($(GIT_TAG),)
+  VERSION := v0.0.0-$(GIT_DATE)-$(GIT_COMMIT)
+else
+  VERSION := $(GIT_TAG)
+endif
+
 LDFLAGS := -ldflags="-X github.com/groot/homelab/cmd.Version=$(VERSION)"
 
 .PHONY: build build-linux-amd64 build-linux-arm64 release install tidy test test-race lint lint-full ci catalog version
