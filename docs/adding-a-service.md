@@ -150,7 +150,7 @@ Run the interactive setup wizard to configure values:
 homelab setup paperless
 ```
 
-### 6. Start the service stack
+### 6. Bring up the service stack
 
 ```bash
 homelab up paperless
@@ -235,7 +235,7 @@ homelab enable paperless
 homelab disable paperless
 ```
 
-### Stop the service completely
+### Tear down the service completely
 
 ```bash
 homelab disable paperless

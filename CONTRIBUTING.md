@@ -65,7 +65,7 @@ assets/services/<name>/
 
 - [ ] Service installs from catalog: `homelab add <name>`
 - [ ] Configuration works: `homelab setup <name>`
-- [ ] Containers start: `homelab up <name>`
+- [ ] Container creation and startup: `homelab up <name>`
 - [ ] Private access works: `homelab enable <name>`
 - [ ] Public access works (if applicable): `homelab enable <name> --cf`
 - [ ] Service is accessible via browser

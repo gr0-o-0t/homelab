@@ -18,10 +18,10 @@ Copy the token and paste it as `CLOUDFLARE_API_TOKEN` in your `.env`.
 
 ## 2. Add the wildcard A record
 
-Start the core stack and find Caddy's Tailscale IP:
+Bring up the core stack and find Caddy's Tailscale IP:
 
 ```bash
-homelab start
+homelab up
 homelab status
 ```
 

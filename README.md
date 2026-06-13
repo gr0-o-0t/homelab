@@ -85,7 +85,7 @@ You will be prompted for:
 ### 4. Start the core stack
 
 ```bash
-homelab start                   # starts Tailscale + Caddy + enabled extensions
+homelab up                      # create and start Tailscale + Caddy + enabled extensions
 homelab status                  # check everything is running
 ```
 
@@ -96,7 +96,7 @@ Get the Tailscale IP from `homelab status` and set it as the A record value in C
 ```bash
 homelab add uptime-kuma        # copy from embedded catalog to ~/.config/homelab/services/
 homelab setup uptime-kuma      # configure vars and secrets interactively
-homelab start uptime-kuma      # start (or: homelab up uptime-kuma)
+homelab up uptime-kuma         # create and start
 homelab enable uptime-kuma     # expose on tailnet via Caddy
 ```
 
@@ -121,8 +121,10 @@ Visit `https://status.home.example.com` from any device on your tailnet.
 homelab add [name]              Install from catalog (no name → list catalog)
 homelab new [name]              Scaffold a new service directory (interactive wizard)
 homelab setup [service]         Configure vars and secrets (no arg → root setup wizard)
-homelab start [service]         Start core stack or service(s)
-homelab stop [service]          Stop core stack or service(s)
+homelab up [service]            Create and start containers (first use or after config changes)
+homelab down [service]          Stop and remove containers
+homelab start [service]         Resume existing stopped containers (no create)
+homelab stop [service]          Pause running containers without removing them
 homelab restart [service]       Restart containers
 homelab reload [service]        Reload Caddy config or a service's routing config
 homelab update [service]        Pull latest images and recreate containers
@@ -134,18 +136,18 @@ homelab logs [service]          Tail logs (TTY → interactive TUI log viewer)
 homelab doctor [service]        Environment health check
 ```
 
-`start`, `stop`, and `restart` accept batch flags:
+`up`, `down`, and `restart` accept batch flags:
 
 ```
-homelab start --all                  # all services
-homelab start --group media          # by group (defined in config.yaml)
-homelab start --group media --all    # error: mutually exclusive
-homelab start --build                # rebuild images before starting
+homelab up --all                     # create and start all installed services
+homelab up --group media             # create and start by group (defined in config.yaml)
+homelab up --group media --all       # error: mutually exclusive
+homelab up --build                   # rebuild images before creating and starting
+homelab down --all                   # stop and remove all installed services
+homelab down --group media           # stop and remove by group
 ```
 
-`restart` also supports `--build`.
-
-Aliases: `start` ↔ `up`, `stop` ↔ `down`
+`restart` also supports `--build` (`homelab restart --build` rebuilds and recreates).
 
 ### Network routing
 
@@ -300,9 +302,11 @@ homelab/
 │   ├── new.go                # homelab new
 │   ├── restart.go            # homelab restart
 │   ├── setup.go              # homelab setup
-│   ├── start.go              # homelab start (+ up alias)
+│   ├── start.go              # homelab start (resume stopped containers)
 │   ├── status.go             # homelab status
-│   ├── stop.go               # homelab stop (+ down alias)
+│   ├── stop.go               # homelab stop (pause containers)
+│   ├── up.go                 # homelab up (create and start)
+│   ├── down.go               # homelab down (stop and remove)
 │   ├── tor.go                # homelab ext tor
 │   ├── tunnel.go             # homelab ext cf
 │   ├── update.go             # homelab update

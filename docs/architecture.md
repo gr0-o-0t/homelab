@@ -93,7 +93,7 @@ Set proxy status to **DNS only**. If you proxy through Cloudflare the traffic wo
 For services that need to be publicly accessible on the internet, Cloudflare Tunnel (`cloudflared`) provides an encrypted tunnel from your home server to Cloudflare's edge network. This works alongside private Tailscale access:
 
 - Configure `CF_TUNNEL_TOKEN` and `CF_TUNNEL_NAME` via `homelab setup`
-- Cloudflare Tunnel starts with the core stack: `homelab start`
+- Cloudflare Tunnel starts with the core stack: `homelab up`
 - Add DNS routes: `homelab ext cf route add <service>`
 - Enable public Caddy config: `homelab enable <service> --cf`
 
