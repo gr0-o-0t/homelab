@@ -101,6 +101,12 @@ func TestInspectContainers_HappyPath(t *testing.T) {
 					"443/tcp": [{"HostPort": "8443"}]
 				}
 			},
+			"NetworkSettings": {
+				"Ports": {
+					"80/tcp": [{"HostPort": "8080"}],
+					"443/tcp": [{"HostPort": "8443"}]
+				}
+			},
 			"RestartCount": 3
 		}`))
 	})
@@ -145,6 +151,9 @@ func TestInspectContainers_NoHealthcheck(t *testing.T) {
 			"HostConfig": {
 				"PortBindings": null
 			},
+			"NetworkSettings": {
+				"Ports": null
+			},
 			"RestartCount": 0
 		}`))
 	})
@@ -183,6 +192,11 @@ func TestInspectContainers_PortWithoutHostPort(t *testing.T) {
 					"3000/tcp": [{"HostPort": ""}]
 				}
 			},
+			"NetworkSettings": {
+				"Ports": {
+					"3000/tcp": [{"HostPort": ""}]
+				}
+			},
 			"RestartCount": 0
 		}`))
 	})
@@ -211,6 +225,7 @@ func TestInspectContainers_MultipleContainers(t *testing.T) {
 				},
 				"Config": {"Image": "nginx:latest", "Labels": {}},
 				"HostConfig": {"PortBindings": {"80/tcp": [{"HostPort": "8080"}]}},
+				"NetworkSettings": {"Ports": {"80/tcp": [{"HostPort": "8080"}]}},
 				"RestartCount": 2
 			}`))
 		case containsPath(r.URL.Path, "/containers/xyz789deadbe/json"):
@@ -225,6 +240,7 @@ func TestInspectContainers_MultipleContainers(t *testing.T) {
 				},
 				"Config": {"Image": "alpine:latest", "Labels": {}},
 				"HostConfig": {"PortBindings": {}},
+				"NetworkSettings": {"Ports": {}},
 				"RestartCount": 0
 			}`))
 		default:

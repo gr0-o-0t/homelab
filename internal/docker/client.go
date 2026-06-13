@@ -133,10 +133,12 @@ func (c *Client) InspectContainers(ctx context.Context, summaries []ContainerSum
 		finishedAt := ParseTime(info.State.FinishedAt)
 
 		var ports []string
-		for containerPort, bindings := range info.HostConfig.PortBindings {
-			for _, b := range bindings {
-				if b.HostPort != "" {
-					ports = append(ports, b.HostPort+"→"+string(containerPort))
+		// Use NetworkSettings.Ports — covers both published and exposed ports,
+		// which is more reliable than HostConfig.PortBindings for Docker Compose.
+		if info.NetworkSettings != nil {
+			for containerPort, bindings := range info.NetworkSettings.Ports {
+				if len(bindings) > 0 && bindings[0].HostPort != "" {
+					ports = append(ports, bindings[0].HostPort+"→"+string(containerPort))
 				} else {
 					ports = append(ports, string(containerPort))
 				}

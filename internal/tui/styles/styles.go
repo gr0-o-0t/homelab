@@ -31,11 +31,12 @@ var (
 
 // Table — column widths used by both the plain table and the TUI list.
 const (
-	ColWidthName   = 20
-	ColWidthExpose = 10
-	ColWidthStatus = 16
-	ColWidthLayers = 16 // width of the LAYERS column in the rich status table
-	ColWidthPorts  = 22 // width of the PORTS column in the rich status table
+	ColWidthName    = 20
+	ColWidthStatus  = 16
+	ColWidthExpose  = 12 // width of the EXPOSURES column in the rich status table
+	ColWidthHealth  = 12 // width of the HEALTH column in the services table
+	ColWidthPorts   = 22 // width of the PORTS column in the rich status table
+	ColWidthNetwork = 8  // width of the NETWORK column in the sub-table status
 )
 
 // Header is the app-title bar style.

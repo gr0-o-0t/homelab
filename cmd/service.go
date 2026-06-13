@@ -57,7 +57,8 @@ func runServiceList(_ *cobra.Command, _ []string) error {
 	if rootFlags.json {
 		return printServiceJSON(svcs)
 	}
-	printServiceTable(svcs)
+	env := buildEnv(root, "")
+	printServiceTable(svcs, env, false)
 	return nil
 }
 
@@ -407,7 +408,7 @@ func firstOrEmpty(args []string) string {
 
 // ── output helpers ────────────────────────────────────────────────────────────
 
-func printServiceTable(svcs []service.Service) {
+func printServiceTable(svcs []service.Service, env map[string]string, wide bool) {
 	if len(svcs) == 0 {
 		fmt.Println(styles.Muted.Render("\n  No services found.\n"))
 		return
@@ -418,12 +419,19 @@ func printServiceTable(svcs []service.Service) {
 		styles.Muted.Render(fmt.Sprintf("%d services", len(svcs))),
 	)
 
-	fmt.Printf("  %s  %s  %s\n",
+	fmt.Printf("  %s  %s  %s",
 		styles.TableHeader.Render(styles.Width(styles.ColWidthName).Render("SERVICE")),
 		styles.TableHeader.Render(styles.Width(12).Render("STATE")),
-		styles.TableHeader.Render(styles.Width(styles.ColWidthLayers).Render("LAYERS")),
+		styles.TableHeader.Render(styles.Width(styles.ColWidthExpose).Render("EXPOSURES")),
 	)
-	fmt.Println(styles.Divider.Render("  " + strings.Repeat("─", styles.ColWidthName+12+styles.ColWidthLayers+6)))
+	if wide {
+		fmt.Printf("  %s  %s",
+			styles.TableHeader.Render(styles.Width(styles.ColWidthPorts).Render("PORTS")),
+			styles.TableHeader.Render("URL"),
+		)
+	}
+	fmt.Println()
+	fmt.Println(styles.Divider.Render("  " + strings.Repeat("─", styles.ColWidthName+12+styles.ColWidthExpose+6)))
 
 	for _, svc := range svcs {
 		name := styles.Width(styles.ColWidthName).Render(truncate(svc.Name, styles.ColWidthName-1))
@@ -464,11 +472,21 @@ func printServiceTable(svcs []service.Service) {
 			layerTags = strings.Join(parts, " ")
 		}
 
-		fmt.Printf("  %s  %s  %s\n",
-			name,
-			styles.Width(12).Render(stateCol),
-			layerTags,
-		)
+		fmt.Printf("  %s  %s  %s", name, styles.Width(12).Render(stateCol), layerTags)
+		if wide {
+			var portsStr string
+			if len(svc.HostPorts) > 0 {
+				portsStr = styles.Width(styles.ColWidthPorts).Render(truncate(strings.Join(svc.HostPorts, ", "), styles.ColWidthPorts-1))
+			} else {
+				portsStr = styles.Width(styles.ColWidthPorts).Render(styles.Muted.Render("–"))
+			}
+			var ustr string
+			if svc.Enabled && env["HOME_SUBDOMAIN"] != "" && env["DOMAIN"] != "" {
+				ustr = styles.Muted.Render(fmt.Sprintf("https://%s.%s.%s", svc.Name, env["HOME_SUBDOMAIN"], env["DOMAIN"]))
+			}
+			fmt.Printf("  %s  %s", portsStr, ustr)
+		}
+		fmt.Println()
 	}
 	fmt.Println()
 }

@@ -4,14 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
-
-	"golang.org/x/term"
 
 	"github.com/groot/homelab/internal/config"
 	"github.com/groot/homelab/internal/configgen"
@@ -85,11 +81,41 @@ func runStatus(_ *cobra.Command, args []string) error {
 	}
 
 	// ── Core table header ─────────────────────────────────────────────────────
-	fmt.Printf("  %s  %s\n",
+	// Gather health info for core containers
+	// Core containers all belong to compose project "core" (compose file at
+	// core/docker-compose.yml), so we query by project "core" and match back
+	// to core entries by container name.
+	healthByProject := make(map[string]string)
+	dc, dcErr := docker.New()
+	if dcErr == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		defer func() { _ = dc.Close() }()
+
+		summaries, err := dc.ServiceContainers(ctx, "core")
+		if err == nil && len(summaries) > 0 {
+			details, err := dc.InspectContainers(ctx, summaries)
+			if err == nil {
+				for i := range details {
+					// Match by container name (e.g. "caddy", "tailscale")
+					// to the core entry's Name (layer.ContainerName()).
+					healthByProject[details[i].Name] = details[i].Health
+				}
+			}
+		}
+	}
+
+	// Compute tailscale IP/FQDN once for the table
+	tsIP, _ := tailscaleIP()
+	tsFQDN, _ := tailscaleFQDN()
+
+	fmt.Printf("  %s  %s  %s  %s\n",
 		styles.TableHeader.Render(styles.Width(styles.ColWidthName).Render("SERVICE")),
 		styles.TableHeader.Render(styles.Width(12).Render("STATE")),
+		styles.TableHeader.Render(styles.Width(24).Render("IP/URL")),
+		styles.TableHeader.Render(styles.Width(10).Render("CONFIG")),
 	)
-	divLen := styles.ColWidthName + 12 + 4
+	divLen := styles.ColWidthName + 12 + 24 + 10 + 6
 	fmt.Println(styles.Divider.Render("  " + strings.Repeat("─", divLen)))
 
 	var (
@@ -121,25 +147,44 @@ func runStatus(_ *cobra.Command, args []string) error {
 		default:
 			icon = styles.Warning.Render("!")
 		}
-		fmt.Printf("  %s  %s\n",
+
+		// IP/URL column
+		var ipURL string
+		if c.Name == "tailscale" && state == containerStateRunning {
+			if tsFQDN != "" {
+				ipURL = styles.Primary.Render(tsFQDN)
+			} else if tsIP != "" {
+				ipURL = styles.Primary.Render(tsIP)
+			} else {
+				ipURL = styles.Muted.Render("–")
+			}
+		} else {
+			ipURL = styles.Muted.Render("–")
+		}
+
+		// CONFIG column
+		var configTag string
+		if c.Ext == "" {
+			configTag = styles.Muted.Render("always")
+		} else if extEnabled {
+			configTag = styles.Success.Render("enabled")
+		} else if extConfigured {
+			configTag = styles.Warning.Render("configured")
+		} else {
+			configTag = styles.Muted.Render("–")
+		}
+
+		merged := mergedCoreState(state, healthByProject[c.Name])
+		fmt.Printf("  %s  %s  %s  %s\n",
 			styles.Width(styles.ColWidthName).Render(icon+" "+styles.Bold.Render(truncate(c.Name, styles.ColWidthName-3))),
-			styles.Width(12).Render(styles.StateTag(state)))
+			styles.Width(12).Render(merged),
+			styles.Width(24).Render(ipURL),
+			styles.Width(10).Render(configTag),
+		)
 
 		// Track extensions that are configured (e.g. token set) but not enabled.
 		if isExt && state != containerStateRunning && extConfigured && !extEnabled {
 			inactiveExts = append(inactiveExts, c.Ext)
-		}
-	}
-
-	// Tailscale IP + FQDN
-	if state := containerStatus("tailscale"); state == containerStateRunning {
-		ip, _ := tailscaleIP()
-		if ip != "" {
-			fmt.Printf("  %s  Tailscale IP:  %s\n", styles.Muted.Render("↳"), styles.Primary.Render(ip))
-		}
-		fqdn, _ := tailscaleFQDN()
-		if fqdn != "" {
-			fmt.Printf("  %s  FQDN:          %s\n", styles.Muted.Render("↳"), styles.Primary.Render(fqdn))
 		}
 	}
 	fmt.Println()
@@ -183,18 +228,8 @@ func runStatus(_ *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// Terminal width — used to drop columns on narrow screens.
-	// Override with HOMELAB_TERM_WIDTH env var for testing.
-	termWidth, _, _ := term.GetSize(int(os.Stdout.Fd()))
-	if ew := os.Getenv("HOMELAB_TERM_WIDTH"); ew != "" {
-		if w, err := strconv.Atoi(ew); err == nil {
-			termWidth = w
-		}
-	}
-	wide := termWidth >= 90
-
 	privateCount, publicCount, runningCount := 0, 0, 0
-	var torCount, i2pCount, yggCount int
+	var torCount, i2pCount, yggCount, ipfsCount int
 	for _, s := range svcs {
 		if s.Enabled {
 			privateCount++
@@ -211,98 +246,134 @@ func runStatus(_ *cobra.Command, args []string) error {
 		if s.HasYgg {
 			yggCount++
 		}
+		if s.HasIPFS {
+			ipfsCount++
+		}
 		if s.Running > 0 {
 			runningCount++
 		}
 	}
 
 	summaryLine := fmt.Sprintf("%d installed / %d running", len(svcs), runningCount)
-	if torCount > 0 || i2pCount > 0 || yggCount > 0 {
-		summaryLine += fmt.Sprintf(" / ts:%d cf:%d tor:%d i2p:%d ygg:%d",
-			privateCount, publicCount, torCount, i2pCount, yggCount)
+	if torCount > 0 || i2pCount > 0 || yggCount > 0 || ipfsCount > 0 {
+		summaryLine += fmt.Sprintf(" / ts:%d cf:%d tor:%d i2p:%d ygg:%d ipfs:%d",
+			privateCount, publicCount, torCount, i2pCount, yggCount, ipfsCount)
 	} else {
 		summaryLine += fmt.Sprintf(" / %d private / %d public", privateCount, publicCount)
 	}
 	fmt.Printf("  %s  %s\n\n", styles.Bold.Render("Services"), styles.Muted.Render(summaryLine))
 
+	// Gather health for service containers
+	svcHealth := make(map[string]string)
+	sd, sdErr := docker.New()
+	if sdErr == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		for _, s := range svcs {
+			containers, err := sd.ServiceContainers(ctx, s.Name)
+			if err != nil || len(containers) == 0 {
+				continue
+			}
+			details, err := sd.InspectContainers(ctx, containers)
+			if err == nil && len(details) > 0 {
+				svcHealth[s.Name] = details[0].Health
+			}
+		}
+		_ = sd.Close()
+	}
+
 	// Table header
-	fmt.Printf("  %s  %s  %s",
+	fmt.Printf("  %s  %s  %s  %s  %s\n",
 		styles.TableHeader.Render(styles.Width(styles.ColWidthName).Render("SERVICE")),
 		styles.TableHeader.Render(styles.Width(12).Render("STATE")),
-		styles.TableHeader.Render(styles.Width(styles.ColWidthLayers).Render("LAYERS")),
+		styles.TableHeader.Render(styles.Width(styles.ColWidthPorts).Render("PORTS")),
+		styles.TableHeader.Render(styles.Width(styles.ColWidthNetwork).Render("NETWORK")),
+		styles.TableHeader.Render("URL"),
 	)
-	if wide {
-		fmt.Printf("  %s  %s",
-			styles.TableHeader.Render(styles.Width(styles.ColWidthPorts).Render("PORTS")),
-			styles.TableHeader.Render("URL"),
-		)
-	}
-	fmt.Println()
-	divLen = styles.ColWidthName + 12 + styles.ColWidthLayers + 6
-	if wide {
-		divLen += styles.ColWidthPorts + 2 + 30 + 2
-	}
+	divLen = styles.ColWidthName + 12 + styles.ColWidthPorts + styles.ColWidthNetwork + 50 + 8
 	fmt.Println(styles.Divider.Render("  " + strings.Repeat("─", divLen)))
 
 	for _, svc := range svcs {
 		name := styles.Width(styles.ColWidthName).Render(truncate(svc.Name, styles.ColWidthName-1))
 
-		// STATE column
-		var stateCol string
-		switch {
-		case svc.Total == 0:
-			stateCol = styles.Muted.Render("stopped")
-		case svc.Running == svc.Total:
-			stateCol = styles.Success.Render(fmt.Sprintf("%d/%d", svc.Running, svc.Total))
-		default:
-			stateCol = styles.Warning.Render(fmt.Sprintf("%d/%d", svc.Running, svc.Total))
-		}
+		// STATE column — merged state + health
+		stateCol := styles.Width(12).Render(mergedState(svc, svcHealth[svc.Name]))
 
-		// LAYERS column — colored text tags
-		var layerTags string
-		hasAnyLayer := svc.Enabled || svc.PublicEnabled || svc.HasTor || svc.HasI2P || svc.HasYgg || svc.HasIPFS
-		if hasAnyLayer {
-			var parts []string
-			if svc.Enabled {
-				parts = append(parts, styles.Success.Render("ts"))
-			}
-			if svc.PublicEnabled {
-				parts = append(parts, styles.Primary.Render("cf"))
-			}
-			if svc.HasTor {
-				parts = append(parts, styles.Accent.Render("tor"))
-			}
-			if svc.HasI2P {
-				parts = append(parts, styles.Warning.Render("i2p"))
-			}
-			if svc.HasYgg {
-				parts = append(parts, styles.Primary.Render("ygg"))
-			}
-			if svc.HasIPFS {
-				parts = append(parts, styles.Muted.Render("ipfs"))
-			}
-			layerTags = strings.Join(parts, " ")
-		}
-
-		// PORTS column
+		// PORTS column — always visible
 		var portsStr string
-		if wide && len(svc.HostPorts) > 0 {
+		if len(svc.HostPorts) > 0 {
 			portsStr = styles.Width(styles.ColWidthPorts).Render(truncate(strings.Join(svc.HostPorts, ", "), styles.ColWidthPorts-1))
-		} else if wide {
+		} else {
 			portsStr = styles.Width(styles.ColWidthPorts).Render(styles.Muted.Render("–"))
 		}
 
-		// URL column (primary — private tailnet URL)
-		var ustr string
-		if svc.Enabled && env["HOME_SUBDOMAIN"] != "" && env["DOMAIN"] != "" {
-			ustr = styles.Muted.Render(fmt.Sprintf("https://%s.%s.%s", svc.Name, env["HOME_SUBDOMAIN"], env["DOMAIN"]))
+		// Collect active exposures with URLs
+		type expRow struct {
+			tag string
+			url string
+		}
+		var rows []expRow
+
+		if svc.Enabled {
+			u := configgen.LayerDisplayURL("private", svc.Name, env)
+			rows = append(rows, expRow{styles.Success.Render("ts"), u})
+		}
+		if svc.PublicEnabled {
+			u := configgen.LayerDisplayURL("cf", svc.Name, env)
+			rows = append(rows, expRow{styles.Primary.Render("cf"), u})
+		}
+		if svc.HasTor {
+			u := torOnionAddress(svc.Name)
+			if u == "" {
+				u = configgen.LayerDisplayURL("tor", svc.Name, env)
+			} else {
+				u = "http://" + u
+			}
+			rows = append(rows, expRow{styles.Accent.Render("tor"), u})
+		}
+		if svc.HasI2P {
+			u := configgen.LayerDisplayURL("i2p", svc.Name, env)
+			rows = append(rows, expRow{styles.Warning.Render("i2p"), u})
+		}
+		if svc.HasYgg {
+			u := configgen.LayerDisplayURL("ygg", svc.Name, env)
+			rows = append(rows, expRow{styles.Primary.Render("ygg"), u})
+		}
+		if svc.HasIPFS {
+			u := configgen.LayerDisplayURL("ipfs", svc.Name, env)
+			rows = append(rows, expRow{styles.Muted.Render("ipfs"), u})
 		}
 
-		fmt.Printf("  %s  %s  %s", name, styles.Width(12).Render(stateCol), layerTags)
-		if wide {
-			fmt.Printf("  %s  %s", portsStr, ustr)
+		if len(rows) == 0 {
+			// No exposures — single row with dash in NETWORK column
+			fmt.Printf("  %s  %s  %s  %s  %s\n",
+				name,
+				stateCol,
+				portsStr,
+				styles.Width(styles.ColWidthNetwork).Render(styles.Muted.Render("–")),
+				"",
+			)
+		} else {
+			// First exposure on summary row
+			fmt.Printf("  %s  %s  %s  %s  %s\n",
+				name,
+				stateCol,
+				portsStr,
+				styles.Width(styles.ColWidthNetwork).Render(rows[0].tag),
+				styles.Muted.Render(rows[0].url),
+			)
+			// Remaining exposures as sub-rows (empty SERVICE/STATE/PORTS)
+			for _, r := range rows[1:] {
+				fmt.Printf("  %s  %s  %s  %s  %s\n",
+					styles.Width(styles.ColWidthName).Render(""),
+					styles.Width(12).Render(""),
+					styles.Width(styles.ColWidthPorts).Render(""),
+					styles.Width(styles.ColWidthNetwork).Render(r.tag),
+					styles.Muted.Render(r.url),
+				)
+			}
 		}
-		fmt.Println()
 	}
 
 	// ── Diagnostics (--check) ─────────────────────────────────────────────────────
@@ -412,7 +483,7 @@ func runServiceStatus(dir, name string, env map[string]string) error {
 	}{
 		{"private", "Tailnet", svc.Enabled},
 		{"cf", "Cloudflare", svc.PublicEnabled},
-		{"tor", "Tor", svc.HasTor},
+		{"tor", "Tor", svc.HasTor}, // URL resolved below — use torOnionAddress when running
 		{"i2p", "I2P", svc.HasI2P},
 		{"ygg", "Yggdrasil", svc.HasYgg},
 	}
@@ -426,7 +497,16 @@ func runServiceStatus(dir, name string, env map[string]string) error {
 
 		var url string
 		if entry.enabled {
-			url = configgen.LayerDisplayURL(entry.key, name, env)
+			if entry.key == "tor" {
+				u := torOnionAddress(name)
+				if u == "" {
+					url = configgen.LayerDisplayURL("tor", name, env)
+				} else {
+					url = "http://" + u
+				}
+			} else {
+				url = configgen.LayerDisplayURL(entry.key, name, env)
+			}
 		}
 
 		if url != "" {
@@ -456,21 +536,19 @@ func runServiceStatus(dir, name string, env map[string]string) error {
 				wCUp     = 14
 				wCImg    = 30
 			)
-			fmt.Printf("  %s  %s  %s  %s  %s  %s\n",
+			fmt.Printf("  %s  %s  %s  %s  %s\n",
 				styles.Width(wCName).Render(""),
 				styles.TableHeader.Render(styles.Width(wCState).Render("STATE")),
-				styles.TableHeader.Render(styles.Width(wCHealth).Render("HEALTH")),
 				styles.TableHeader.Render(styles.Width(wCPorts).Render("PORTS")),
 				styles.TableHeader.Render(styles.Width(wCUp).Render("UPTIME")),
 				styles.TableHeader.Render("IMAGE"),
 			)
 			for i, s := range summaries {
 				nameCol := styles.Width(wCName).Render(truncate(s.Name, wCName-1))
-				stateCol := styles.Width(wCState).Render(styles.StateTag(s.State))
-				var healthCol, portsCol, uptimeCol, imageCol string
+				var stateCol, portsCol, uptimeCol, imageCol string
 				if details != nil && i < len(details) {
 					d := details[i]
-					healthCol = styles.Width(wCHealth).Render(styles.HealthTag(d.Health))
+					stateCol = styles.Width(wCState).Render(mergedCoreState(s.State, d.Health))
 					if len(d.Ports) > 0 {
 						portsCol = styles.Width(wCPorts).Render(truncate(strings.Join(d.Ports, ", "), wCPorts-1))
 					} else {
@@ -485,12 +563,12 @@ func runServiceStatus(dir, name string, env map[string]string) error {
 					}
 					imageCol = styles.Muted.Render(truncate(d.Image, 30))
 				} else {
-					healthCol = styles.Width(wCHealth).Render(styles.Muted.Render("–"))
+					stateCol = styles.Width(wCState).Render(styles.StateTag(s.State))
 					portsCol = styles.Width(wCPorts).Render(styles.Muted.Render("–"))
 					uptimeCol = styles.Width(wCUp).Render(styles.Muted.Render(s.Status))
 					imageCol = styles.Muted.Render(truncate(s.Image, 30))
 				}
-				fmt.Printf("  %s  %s  %s  %s  %s  %s\n", nameCol, stateCol, healthCol, portsCol, uptimeCol, imageCol)
+				fmt.Printf("  %s  %s  %s  %s  %s\n", nameCol, stateCol, portsCol, uptimeCol, imageCol)
 			}
 		}
 	}
@@ -513,6 +591,54 @@ func tailscaleFQDN() (string, bool) {
 		return "", false
 	}
 	return strings.TrimSuffix(self.DNSName, "."), true
+}
+
+// mergedCoreState returns a styled state string that merges container state
+// with Docker healthcheck status for core table entries.
+func mergedCoreState(state, health string) string {
+	switch {
+	case state != "running":
+		return styles.StateTag(state)
+	case health == "healthy":
+		return styles.Success.Render("healthy")
+	case health == "starting":
+		return styles.Warning.Render("starting")
+	case health == "unhealthy":
+		return styles.Err.Render("unhealthy")
+	default:
+		return styles.Success.Render("running")
+	}
+}
+
+// mergedState returns a styled state string that merges container state
+// with Docker healthcheck status. Used by the services sub-table.
+//
+// Returns one of: healthy, running, starting, unhealthy, restarting,
+// stopped, partial (N/M).
+func mergedState(svc service.Service, health string) string {
+	// Check container-level states first for states that Running count can't distinguish.
+	for _, c := range svc.Containers {
+		if c.State == "restarting" {
+			return styles.Warning.Render("restarting")
+		}
+	}
+
+	switch {
+	case svc.Total == 0:
+		return styles.Muted.Render("stopped")
+	case svc.Running == 0:
+		return styles.Muted.Render("stopped")
+	case svc.Running < svc.Total:
+		return styles.Warning.Render(fmt.Sprintf("partial (%d/%d)", svc.Running, svc.Total))
+	case health == "healthy":
+		return styles.Success.Render("healthy")
+	case health == "starting":
+		return styles.Warning.Render("starting")
+	case health == "unhealthy":
+		return styles.Err.Render("unhealthy")
+	default:
+		return styles.Success.Render("running")
+	}
 }
 
 func init() {

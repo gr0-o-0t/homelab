@@ -43,7 +43,8 @@ Run without arguments to open the interactive service browser.`,
 		if rootFlags.json {
 			return printServiceJSON(svcs)
 		}
-		printServiceTable(svcs)
+		env := buildEnv(dir, "")
+		printServiceTable(svcs, env, false)
 		return nil
 	},
 }

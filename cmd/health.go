@@ -57,6 +57,19 @@ func tailscaleIP() (string, bool) {
 	return ip, ip != ""
 }
 
+// torOnionAddress returns the real .onion address for a Tor hidden service.
+// Falls back to empty string if Tor container not running or service not ready.
+func torOnionAddress(name string) string {
+	out, err := exec.Command( // nosec G204 -- binary is "docker", paths are programmatic
+		"docker", "exec", "tor",
+		"cat", "/var/lib/tor/hidden_service/"+name+"/hostname",
+	).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
 // removeBrokenSymlinks scans dir for symlinks whose targets no longer exist.
 // When fix is true it removes them and returns the count removed; otherwise it
 // just returns the count of broken links found.
