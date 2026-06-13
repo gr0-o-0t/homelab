@@ -4,12 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
+	"golang.org/x/term"
+
 	"github.com/groot/homelab/internal/config"
+	"github.com/groot/homelab/internal/configgen"
 	"github.com/groot/homelab/internal/diagnostics"
 	"github.com/groot/homelab/internal/docker"
 	"github.com/groot/homelab/internal/service"
@@ -79,6 +84,14 @@ func runStatus(_ *cobra.Command, args []string) error {
 		}
 	}
 
+	// ── Core table header ─────────────────────────────────────────────────────
+	fmt.Printf("  %s  %s\n",
+		styles.TableHeader.Render(styles.Width(styles.ColWidthName).Render("SERVICE")),
+		styles.TableHeader.Render(styles.Width(12).Render("STATE")),
+	)
+	divLen := styles.ColWidthName + 12 + 4
+	fmt.Println(styles.Divider.Render("  " + strings.Repeat("─", divLen)))
+
 	var (
 		inactiveExts []string
 		coreRunning  bool
@@ -108,10 +121,9 @@ func runStatus(_ *cobra.Command, args []string) error {
 		default:
 			icon = styles.Warning.Render("!")
 		}
-		fmt.Printf("  %s  %s  %s\n",
-			icon,
-			styles.Width(styles.ColWidthName).Render(styles.Bold.Render(c.Name)),
-			styles.StateTag(state))
+		fmt.Printf("  %s  %s\n",
+			styles.Width(styles.ColWidthName).Render(icon+" "+styles.Bold.Render(truncate(c.Name, styles.ColWidthName-3))),
+			styles.Width(12).Render(styles.StateTag(state)))
 
 		// Track extensions that are configured (e.g. token set) but not enabled.
 		if isExt && state != containerStateRunning && extConfigured && !extEnabled {
@@ -171,7 +183,18 @@ func runStatus(_ *cobra.Command, args []string) error {
 		return nil
 	}
 
+	// Terminal width — used to drop columns on narrow screens.
+	// Override with HOMELAB_TERM_WIDTH env var for testing.
+	termWidth, _, _ := term.GetSize(int(os.Stdout.Fd()))
+	if ew := os.Getenv("HOMELAB_TERM_WIDTH"); ew != "" {
+		if w, err := strconv.Atoi(ew); err == nil {
+			termWidth = w
+		}
+	}
+	wide := termWidth >= 90
+
 	privateCount, publicCount, runningCount := 0, 0, 0
+	var torCount, i2pCount, yggCount int
 	for _, s := range svcs {
 		if s.Enabled {
 			privateCount++
@@ -179,53 +202,107 @@ func runStatus(_ *cobra.Command, args []string) error {
 		if s.PublicEnabled {
 			publicCount++
 		}
+		if s.HasTor {
+			torCount++
+		}
+		if s.HasI2P {
+			i2pCount++
+		}
+		if s.HasYgg {
+			yggCount++
+		}
 		if s.Running > 0 {
 			runningCount++
 		}
 	}
 
-	fmt.Printf("  %s  %s\n\n",
-		styles.Bold.Render("Services"),
-		styles.Muted.Render(fmt.Sprintf(
-			"%d installed / %d running / %d private / %d public",
-			len(svcs), runningCount, privateCount, publicCount)),
+	summaryLine := fmt.Sprintf("%d installed / %d running", len(svcs), runningCount)
+	if torCount > 0 || i2pCount > 0 || yggCount > 0 {
+		summaryLine += fmt.Sprintf(" / ts:%d cf:%d tor:%d i2p:%d ygg:%d",
+			privateCount, publicCount, torCount, i2pCount, yggCount)
+	} else {
+		summaryLine += fmt.Sprintf(" / %d private / %d public", privateCount, publicCount)
+	}
+	fmt.Printf("  %s  %s\n\n", styles.Bold.Render("Services"), styles.Muted.Render(summaryLine))
+
+	// Table header
+	fmt.Printf("  %s  %s  %s",
+		styles.TableHeader.Render(styles.Width(styles.ColWidthName).Render("SERVICE")),
+		styles.TableHeader.Render(styles.Width(12).Render("STATE")),
+		styles.TableHeader.Render(styles.Width(styles.ColWidthLayers).Render("LAYERS")),
 	)
+	if wide {
+		fmt.Printf("  %s  %s",
+			styles.TableHeader.Render(styles.Width(styles.ColWidthPorts).Render("PORTS")),
+			styles.TableHeader.Render("URL"),
+		)
+	}
+	fmt.Println()
+	divLen = styles.ColWidthName + 12 + styles.ColWidthLayers + 6
+	if wide {
+		divLen += styles.ColWidthPorts + 2 + 30 + 2
+	}
+	fmt.Println(styles.Divider.Render("  " + strings.Repeat("─", divLen)))
 
 	for _, svc := range svcs {
-		running := svc.Running > 0
-		dot := styles.Dot(running, svc.Enabled || svc.PublicEnabled)
+		name := styles.Width(styles.ColWidthName).Render(truncate(svc.Name, styles.ColWidthName-1))
 
-		var access string
-		switch {
-		case svc.Enabled && svc.PublicEnabled:
-			access = styles.Success.Render("priv+pub")
-		case svc.Enabled:
-			access = styles.Primary.Render("private")
-		case svc.PublicEnabled:
-			access = styles.Warning.Render("public")
-		default:
-			access = styles.Muted.Render("hidden")
-		}
-
-		var containerStatus string
+		// STATE column
+		var stateCol string
 		switch {
 		case svc.Total == 0:
-			containerStatus = styles.Muted.Render("stopped")
+			stateCol = styles.Muted.Render("stopped")
 		case svc.Running == svc.Total:
-			containerStatus = styles.Success.Render(fmt.Sprintf("%d running", svc.Running))
+			stateCol = styles.Success.Render(fmt.Sprintf("%d/%d", svc.Running, svc.Total))
 		default:
-			containerStatus = styles.Warning.Render(fmt.Sprintf("%d/%d running", svc.Running, svc.Total))
+			stateCol = styles.Warning.Render(fmt.Sprintf("%d/%d", svc.Running, svc.Total))
 		}
 
-		var url string
+		// LAYERS column — colored text tags
+		var layerTags string
+		hasAnyLayer := svc.Enabled || svc.PublicEnabled || svc.HasTor || svc.HasI2P || svc.HasYgg || svc.HasIPFS
+		if hasAnyLayer {
+			var parts []string
+			if svc.Enabled {
+				parts = append(parts, styles.Success.Render("ts"))
+			}
+			if svc.PublicEnabled {
+				parts = append(parts, styles.Primary.Render("cf"))
+			}
+			if svc.HasTor {
+				parts = append(parts, styles.Accent.Render("tor"))
+			}
+			if svc.HasI2P {
+				parts = append(parts, styles.Warning.Render("i2p"))
+			}
+			if svc.HasYgg {
+				parts = append(parts, styles.Primary.Render("ygg"))
+			}
+			if svc.HasIPFS {
+				parts = append(parts, styles.Muted.Render("ipfs"))
+			}
+			layerTags = strings.Join(parts, " ")
+		}
+
+		// PORTS column
+		var portsStr string
+		if wide && len(svc.HostPorts) > 0 {
+			portsStr = styles.Width(styles.ColWidthPorts).Render(truncate(strings.Join(svc.HostPorts, ", "), styles.ColWidthPorts-1))
+		} else if wide {
+			portsStr = styles.Width(styles.ColWidthPorts).Render(styles.Muted.Render("–"))
+		}
+
+		// URL column (primary — private tailnet URL)
+		var ustr string
 		if svc.Enabled && env["HOME_SUBDOMAIN"] != "" && env["DOMAIN"] != "" {
-			url = fmt.Sprintf("https://%s.%s.%s", svc.Name, env["HOME_SUBDOMAIN"], env["DOMAIN"])
+			ustr = styles.Muted.Render(fmt.Sprintf("https://%s.%s.%s", svc.Name, env["HOME_SUBDOMAIN"], env["DOMAIN"]))
 		}
 
-		fmt.Printf("  %s  %s  %s  %s\n", dot, styles.Width(styles.ColWidthName).Render(styles.Bold.Render(svc.Name)), access, containerStatus)
-		if url != "" {
-			fmt.Printf("  %s  %s\n", styles.Muted.Render("   "), styles.Muted.Render(url))
+		fmt.Printf("  %s  %s  %s", name, styles.Width(12).Render(stateCol), layerTags)
+		if wide {
+			fmt.Printf("  %s  %s", portsStr, ustr)
 		}
+		fmt.Println()
 	}
 
 	// ── Diagnostics (--check) ─────────────────────────────────────────────────────
@@ -324,6 +401,41 @@ func runServiceStatus(dir, name string, env map[string]string) error {
 	if svc.Enabled && svc.HasCaddyConf {
 		fmt.Printf("  %s  Config:  %s\n", styles.Muted.Render("↳"), styles.Muted.Render(filepath.Join(svc.Dir, "caddy.conf")))
 	}
+
+	// ── Network Exposure section ──────────────────────────────────────────
+	fmt.Printf("\n  %s\n", styles.PaneTitle.Render("Network Exposure"))
+
+	layerEntries := []struct {
+		key     string // configgen layer key
+		label   string
+		enabled bool
+	}{
+		{"private", "Tailnet", svc.Enabled},
+		{"cf", "Cloudflare", svc.PublicEnabled},
+		{"tor", "Tor", svc.HasTor},
+		{"i2p", "I2P", svc.HasI2P},
+		{"ygg", "Yggdrasil", svc.HasYgg},
+	}
+
+	for _, entry := range layerEntries {
+		icon := styles.Muted.Render("✗")
+		if entry.enabled {
+			icon = styles.Success.Render("✓")
+		}
+		label := styles.Width(14).Render(styles.Bold.Render(entry.label))
+
+		var url string
+		if entry.enabled {
+			url = configgen.LayerDisplayURL(entry.key, name, env)
+		}
+
+		if url != "" {
+			fmt.Printf("  %s  %s  %s\n", icon, label, styles.Primary.Render(url))
+		} else {
+			fmt.Printf("  %s  %s  %s\n", icon, label, styles.Muted.Render("—"))
+		}
+	}
+	fmt.Println()
 
 	// Container-level detail table
 	dc, dcErr := docker.New()

@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/groot/homelab/internal/caddy"
+	"github.com/groot/homelab/internal/configgen"
 	"github.com/groot/homelab/internal/docker"
 	"github.com/groot/homelab/internal/network"
 	"github.com/groot/homelab/internal/run"
@@ -34,10 +35,10 @@ const (
 	inspectRefreshSec = 5
 
 	// Name column widths inside the list. Derived from listInnerWidth.
-	//   installed item: cursor(2) + dot(1) + space(1) + name + space(1) + badge(4) = 9 + name
-	//   catalog  item:  cursor(2) + plus(1) + space(1) + name                      = 4 + name
-	installedNameW = listInnerWidth - 9 // 29
-	catalogNameW   = listInnerWidth - 4 // 34
+	//   installed item: cursor(2) + dot(1) + space(1) + name + space(1) + badge(7) = 12 + name
+	//   catalog  item:  cursor(2) + plus(1) + space(1) + name                       = 4 + name
+	installedNameW = listInnerWidth - 12 // 26
+	catalogNameW   = listInnerWidth - 4  // 34
 )
 
 // ── state machine ─────────────────────────────────────────────────────────────
@@ -754,17 +755,33 @@ func (m Model) renderListItem(svc service.Service, selected bool) string {
 }
 
 func exposureBadge(svc service.Service) string {
-	w := lipgloss.NewStyle().Width(4)
-	switch {
-	case svc.Enabled && svc.PublicEnabled:
-		return w.Foreground(styles.ColSuccess).Render("both")
-	case svc.Enabled:
-		return w.Foreground(styles.ColPrimary).Render("priv")
-	case svc.PublicEnabled:
-		return w.Foreground(styles.ColAccent).Render("pub")
-	default:
-		return w.Foreground(styles.ColMuted).Render("    ")
+	w := lipgloss.NewStyle().Width(7)
+	var active []string
+	if svc.Enabled {
+		active = append(active, "ts")
 	}
+	if svc.PublicEnabled {
+		active = append(active, "cf")
+	}
+	if svc.HasTor {
+		active = append(active, "tor")
+	}
+	if svc.HasI2P {
+		active = append(active, "i2p")
+	}
+	if svc.HasYgg {
+		active = append(active, "ygg")
+	}
+	if svc.HasIPFS {
+		active = append(active, "ipfs")
+	}
+	if len(active) == 0 {
+		return w.Foreground(styles.ColMuted).Render("       ")
+	}
+	if len(active) <= 2 {
+		return w.Foreground(styles.ColSuccess).Render(strings.Join(active, "+"))
+	}
+	return w.Foreground(styles.ColSuccess).Render(fmt.Sprintf("%dlyrs", len(active)))
 }
 
 // ── Detail pane ───────────────────────────────────────────────────────────────
@@ -852,6 +869,23 @@ func (m Model) renderInstalledDetail(svc *service.Service, height, width int) st
 			fmt.Fprintf(&b, "  %s public    %s\n",
 				styles.Muted.Render("○"), styles.Muted.Render("not exposed"))
 		}
+	}
+
+	// Extension layer URLs (Tor, I2P, Yggdrasil)
+	if svc.HasTor {
+		url := configgen.LayerDisplayURL("tor", svc.Name, env)
+		fmt.Fprintf(&b, "  %s tor       %s\n",
+			styles.Success.Render("●"), styles.Primary.Render(url))
+	}
+	if svc.HasI2P {
+		url := configgen.LayerDisplayURL("i2p", svc.Name, env)
+		fmt.Fprintf(&b, "  %s i2p       %s\n",
+			styles.Accent.Render("●"), styles.Primary.Render(url))
+	}
+	if svc.HasYgg {
+		url := configgen.LayerDisplayURL("ygg", svc.Name, env)
+		fmt.Fprintf(&b, "  %s ygg       %s\n",
+			styles.Primary.Render("●"), styles.Primary.Render(url))
 	}
 
 	// Containers

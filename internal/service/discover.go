@@ -17,9 +17,21 @@ type Service struct {
 	Dir                string // absolute path to services/<name>/
 	HasCaddyConf       bool   // services/<name>/caddy.conf exists
 	HasPublicCaddyConf bool   // services/<name>/caddy.cf.conf exists
-	Enabled            bool   // caddy/conf.d/<name>.conf symlink is present (private)
-	PublicEnabled      bool   // caddy/conf.d-cf/<name>.conf symlink is present (cf)
-	Installed          bool   // true = exists on disk; false = catalog-only (not yet added)
+	Enabled            bool   // regular file in caddy/conf.d/<name>.conf (private)
+	PublicEnabled      bool   // regular file in caddy/conf.d-cf/<name>.conf (cf)
+
+	// Network extension layer exposure — detected from caddy/conf.d-<ext>/ file existence.
+	// These are always regular files (written by configgen.WriteFile), not symlinks.
+	HasTor  bool // caddy/conf.d-tor/<name>.conf exists
+	HasI2P  bool // caddy/conf.d-i2p/<name>.conf exists
+	HasYgg  bool // caddy/conf.d-ygg/<name>.conf exists
+	HasIPFS bool // caddy/conf.d-ipfs/<name>.conf exists
+
+	Installed bool // true = exists on disk; false = catalog-only (not yet added)
+
+	// Host port mappings from Docker inspect (e.g. "8080→8096/tcp").
+	// Populated by DiscoverWithDocker; empty when Docker is unavailable.
+	HostPorts []string
 
 	// Populated by DiscoverWithDocker; zero-value when Docker is unavailable.
 	Containers []docker.ContainerSummary
@@ -56,6 +68,13 @@ func DiscoverWithDocker(repoRoot string, dc *docker.Client) ([]Service, error) {
 		for _, c := range containers {
 			if c.State == "running" {
 				svcs[i].Running++
+			}
+		}
+		// Enrich with host port mappings from container detail.
+		details, err := dc.InspectContainers(ctx, containers)
+		if err == nil {
+			for di := range details {
+				svcs[i].HostPorts = append(svcs[i].HostPorts, details[di].Ports...)
 			}
 		}
 	}
@@ -120,6 +139,13 @@ func DiscoverAllWithDocker(repoRoot string, dc *docker.Client, catalogNames []st
 				svcs[i].Running++
 			}
 		}
+		// Enrich with host port mappings from container detail.
+		details, err := dc.InspectContainers(ctx, containers)
+		if err == nil {
+			for di := range details {
+				svcs[i].HostPorts = append(svcs[i].HostPorts, details[di].Ports...)
+			}
+		}
 	}
 	return svcs, nil
 }
@@ -149,8 +175,12 @@ func discover(repoRoot string) ([]Service, error) {
 			Dir:                dir,
 			HasCaddyConf:       fileExists(filepath.Join(dir, "caddy.conf")),
 			HasPublicCaddyConf: fileExists(filepath.Join(dir, "caddy.cf.conf")),
-			Enabled:            symlinkExists(filepath.Join(repoRoot, "caddy", "conf.d", name+".conf")),
-			PublicEnabled:      symlinkExists(filepath.Join(repoRoot, "caddy", "conf.d-cf", name+".conf")),
+			Enabled:            fileExists(filepath.Join(repoRoot, "caddy", "conf.d", name+".conf")),
+			PublicEnabled:      fileExists(filepath.Join(repoRoot, "caddy", "conf.d-cf", name+".conf")),
+			HasTor:             fileExists(filepath.Join(repoRoot, "caddy", "conf.d-tor", name+".conf")),
+			HasI2P:             fileExists(filepath.Join(repoRoot, "caddy", "conf.d-i2p", name+".conf")),
+			HasYgg:             fileExists(filepath.Join(repoRoot, "caddy", "conf.d-ygg", name+".conf")),
+			HasIPFS:            fileExists(filepath.Join(repoRoot, "caddy", "conf.d-ipfs", name+".conf")),
 			Installed:          true,
 		})
 	}
@@ -164,9 +194,4 @@ func discover(repoRoot string) ([]Service, error) {
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
-}
-
-func symlinkExists(path string) bool {
-	fi, err := os.Lstat(path)
-	return err == nil && fi.Mode()&os.ModeSymlink != 0
 }

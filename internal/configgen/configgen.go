@@ -240,6 +240,49 @@ func portSubdomain(displayName, portName string) string {
 	return portName
 }
 
+// LayerDisplayURL returns the human-readable access URL for a service on the
+// given network extension layer. The URL is cosmetic — it matches how Caddy
+// routes traffic for this service+layer combination, not the actual network
+// address (e.g. Tor .onion addresses are opaque hashes; the displayed URL is
+// the Caddy vhost pattern).
+//
+//   - private: https://<name>.{$HOME_SUBDOMAIN}.{$DOMAIN}
+//   - cf:      https://<name>.{$DOMAIN}
+//   - tor:     http://<name>.onion (via Caddy)
+//   - i2p:     http://<name>.i2p (via Caddy)
+//   - ygg:     http://<name>.ygg
+//   - ipfs:    ipfs://<name>
+//
+// ext is one of "private", "cf", "tor", "i2p", "ygg", "ipfs".
+// env provides HOME_SUBDOMAIN and DOMAIN for URL template substitution.
+// Returns empty string for unknown extensions.
+func LayerDisplayURL(ext, displayName string, env map[string]string) string {
+	switch ext {
+	case "private":
+		sub := env["HOME_SUBDOMAIN"]
+		dom := env["DOMAIN"]
+		if sub != "" && dom != "" {
+			return fmt.Sprintf("https://%s.%s.%s", displayName, sub, dom)
+		}
+		return fmt.Sprintf("https://%s.{HOME_SUBDOMAIN}.{DOMAIN}", displayName)
+	case "cf":
+		dom := env["DOMAIN"]
+		if dom != "" {
+			return fmt.Sprintf("https://%s.%s", displayName, dom)
+		}
+		return fmt.Sprintf("https://%s.{DOMAIN}", displayName)
+	case "tor":
+		return fmt.Sprintf("http://%s.onion (via Caddy)", displayName)
+	case "i2p":
+		return fmt.Sprintf("http://%s.i2p (via Caddy)", displayName)
+	case "ygg":
+		return fmt.Sprintf("http://%s.ygg", displayName)
+	case "ipfs":
+		return fmt.Sprintf("ipfs://%s", displayName)
+	}
+	return ""
+}
+
 // ExtensionLabel returns a human-readable label for an extension.
 func ExtensionLabel(ext string) string {
 	switch ext {

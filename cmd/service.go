@@ -413,57 +413,62 @@ func printServiceTable(svcs []service.Service) {
 		return
 	}
 
-	privateCount, publicCount := 0, 0
-	for _, s := range svcs {
-		if s.Enabled {
-			privateCount++
-		}
-		if s.PublicEnabled {
-			publicCount++
-		}
-	}
-
 	fmt.Printf("\n  %s  %s\n\n",
 		styles.Header.Render("Homelab Services"),
-		styles.Muted.Render(fmt.Sprintf("%d services / %d private / %d public", len(svcs), privateCount, publicCount)),
+		styles.Muted.Render(fmt.Sprintf("%d services", len(svcs))),
 	)
 
-	const colAccess = 16
 	fmt.Printf("  %s  %s  %s\n",
 		styles.TableHeader.Render(styles.Width(styles.ColWidthName).Render("SERVICE")),
-		styles.TableHeader.Render(styles.Width(colAccess).Render("ACCESS")),
-		styles.TableHeader.Render("CONTAINERS"),
+		styles.TableHeader.Render(styles.Width(12).Render("STATE")),
+		styles.TableHeader.Render(styles.Width(styles.ColWidthLayers).Render("LAYERS")),
 	)
-	fmt.Println(styles.Divider.Render("  " + strings.Repeat("─", styles.ColWidthName+colAccess+styles.ColWidthStatus+6)))
+	fmt.Println(styles.Divider.Render("  " + strings.Repeat("─", styles.ColWidthName+12+styles.ColWidthLayers+6)))
 
 	for _, svc := range svcs {
-		running := svc.Running > 0
-		name := styles.Text.Render(styles.Width(styles.ColWidthName).Render(svc.Name))
+		name := styles.Width(styles.ColWidthName).Render(truncate(svc.Name, styles.ColWidthName-1))
 
-		var accessCol string
-		switch {
-		case svc.Enabled && svc.PublicEnabled:
-			accessCol = styles.Success.Render(styles.Width(colAccess).Render("priv + pub"))
-		case svc.Enabled:
-			accessCol = styles.Primary.Render(styles.Width(colAccess).Render("private"))
-		case svc.PublicEnabled:
-			accessCol = styles.Warning.Render(styles.Width(colAccess).Render("public"))
-		default:
-			accessCol = styles.Muted.Render(styles.Width(colAccess).Render("hidden"))
-		}
-
-		var containerCol string
+		var stateCol string
 		switch {
 		case svc.Total == 0:
-			containerCol = styles.Muted.Render("stopped")
+			stateCol = styles.Muted.Render("stopped")
 		case svc.Running == svc.Total:
-			containerCol = styles.Success.Render(fmt.Sprintf("%d running", svc.Running))
+			stateCol = styles.Success.Render(fmt.Sprintf("%d/%d", svc.Running, svc.Total))
 		default:
-			containerCol = styles.Warning.Render(fmt.Sprintf("%d/%d running", svc.Running, svc.Total))
+			stateCol = styles.Warning.Render(fmt.Sprintf("%d/%d", svc.Running, svc.Total))
 		}
 
-		fmt.Printf("  %s %s  %s  %s\n",
-			styles.Dot(running, svc.Enabled || svc.PublicEnabled), name, accessCol, containerCol)
+		// LAYERS column
+		var layerTags string
+		hasAnyLayer := svc.Enabled || svc.PublicEnabled || svc.HasTor || svc.HasI2P || svc.HasYgg || svc.HasIPFS
+		if hasAnyLayer {
+			var parts []string
+			if svc.Enabled {
+				parts = append(parts, styles.Success.Render("ts"))
+			}
+			if svc.PublicEnabled {
+				parts = append(parts, styles.Primary.Render("cf"))
+			}
+			if svc.HasTor {
+				parts = append(parts, styles.Accent.Render("tor"))
+			}
+			if svc.HasI2P {
+				parts = append(parts, styles.Warning.Render("i2p"))
+			}
+			if svc.HasYgg {
+				parts = append(parts, styles.Primary.Render("ygg"))
+			}
+			if svc.HasIPFS {
+				parts = append(parts, styles.Muted.Render("ipfs"))
+			}
+			layerTags = strings.Join(parts, " ")
+		}
+
+		fmt.Printf("  %s  %s  %s\n",
+			name,
+			styles.Width(12).Render(stateCol),
+			layerTags,
+		)
 	}
 	fmt.Println()
 }
@@ -571,12 +576,17 @@ func truncate(s string, max int) string {
 
 // serviceJSON is the machine-readable shape of a service entry.
 type serviceJSON struct {
-	Name               string `json:"name"`
-	Enabled            bool   `json:"enabled"`
-	PublicEnabled      bool   `json:"publicEnabled"`
-	HasCaddyConf       bool   `json:"hasCaddyConf"`
-	HasPublicCaddyConf bool   `json:"hasPublicCaddyConf"`
-	Dir                string `json:"dir"`
+	Name               string   `json:"name"`
+	Enabled            bool     `json:"enabled"`
+	PublicEnabled      bool     `json:"publicEnabled"`
+	HasCaddyConf       bool     `json:"hasCaddyConf"`
+	HasPublicCaddyConf bool     `json:"hasPublicCaddyConf"`
+	TorEnabled         bool     `json:"torEnabled"`
+	I2PEnabled         bool     `json:"i2pEnabled"`
+	YggEnabled         bool     `json:"yggEnabled"`
+	IPFSEnabled        bool     `json:"ipfsEnabled"`
+	HostPorts          []string `json:"hostPorts,omitempty"`
+	Dir                string   `json:"dir"`
 }
 
 func printServiceJSON(svcs []service.Service) error {
@@ -588,6 +598,11 @@ func printServiceJSON(svcs []service.Service) error {
 			PublicEnabled:      s.PublicEnabled,
 			HasCaddyConf:       s.HasCaddyConf,
 			HasPublicCaddyConf: s.HasPublicCaddyConf,
+			TorEnabled:         s.HasTor,
+			I2PEnabled:         s.HasI2P,
+			YggEnabled:         s.HasYgg,
+			IPFSEnabled:        s.HasIPFS,
+			HostPorts:          s.HostPorts,
 			Dir:                s.Dir,
 		}
 	}

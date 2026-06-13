@@ -34,6 +34,8 @@ const (
 	ColWidthName   = 20
 	ColWidthExpose = 10
 	ColWidthStatus = 16
+	ColWidthLayers = 16 // width of the LAYERS column in the rich status table
+	ColWidthPorts  = 22 // width of the PORTS column in the rich status table
 )
 
 // Header is the app-title bar style.
