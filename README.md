@@ -2,7 +2,7 @@
 
 A modular, secure homelab stack exposing self-hosted services exclusively over a private [Tailscale](https://tailscale.com) network, fronted by [Caddy](https://caddyserver.com) reverse proxy with automatic wildcard TLS via [Cloudflare](https://cloudflare.com).
 
-No ports are opened on your home router. Every service gets a clean `https://<service>.home.<yourdomain>.com` URL, reachable only from devices on your tailnet.
+No ports are opened on your home router. Every service gets a clean `https://<service>.home.<yourdomain>.com` URL, reachable only from devices on your tailnet. Optionally expose services via Cloudflare Tunnel (public), Tor .onion, I2P eepsites, or Yggdrasil mesh.
 
 ---
 
@@ -16,6 +16,12 @@ Client (on tailnet)
                     └─► Caddy (TLS termination, wildcard cert via DNS-01)
                           └─► Docker home-services network
                                 └─► service container
+
+Optional layers:
+  Cloudflare Tunnel (public) ──► Caddy ──► service
+  Tor .onion ──► Caddy ──► service
+  I2P eepsite ──► I2P daemon ──► service
+  Yggdrasil ──► socat ──► service
 ```
 
 See [docs/architecture.md](docs/architecture.md) for the full design rationale.
@@ -27,7 +33,7 @@ See [docs/architecture.md](docs/architecture.md) for the full design rationale.
 | Requirement | Notes |
 |---|---|
 | Docker + Docker Compose v2 | `docker compose` (not `docker-compose`) |
-| Go 1.25.0 | To build the `homelab` CLI |
+| Go 1.25+ | To build the `homelab` CLI |
 | Linux host with `/dev/net/tun` | See [docs/tailscale-setup.md](docs/tailscale-setup.md) for WSL2 |
 | Tailscale account | Free tier supports 100 devices |
 | Cloudflare-managed domain | Any registrar; just delegate DNS to Cloudflare |
@@ -41,6 +47,7 @@ See [docs/architecture.md](docs/architecture.md) for the full design rationale.
 ```bash
 git clone https://github.com/you/homelab
 cd homelab
+make build        # builds homelab binary in current directory
 make install      # go install → puts 'homelab' on your PATH
 ```
 
@@ -48,7 +55,7 @@ make install      # go install → puts 'homelab' on your PATH
 
 Run the interactive wizard. Non-secret values are saved to
 `~/.config/homelab/config.yaml`; secrets go to the system keyring
-(SecretService on Linux, Keychain on macOS).
+(SecretService on Linux).
 
 ```bash
 homelab setup
@@ -65,6 +72,10 @@ You will be prompted for:
 | `TS_AUTHKEY` | Tailscale auth key (stored in keyring) |
 | `CLOUDFLARE_API_TOKEN` | API token with `Zone:DNS:Edit` (stored in keyring) |
 | `CF_TUNNEL_TOKEN` | Cloudflare Tunnel token — optional, for public exposure |
+| `TOR_ENABLED` | Enable Tor onion service proxy (`true`/`false`) |
+| `I2P_ENABLED` | Enable I2P router + eepsite proxy |
+| `YGGDRASIL_ENABLED` | Enable Yggdrasil mesh node |
+| `IPFS_ENABLED` | Enable IPFS Kubo node |
 
 ### 3. Set up Tailscale and Cloudflare
 
@@ -117,7 +128,10 @@ homelab reload [service]        Reload Caddy config or a service's routing confi
 homelab update [service]        Pull latest images and recreate containers
 homelab delete <service>        Remove service entirely (alias: rm)
 homelab status [service]        Show status overview or per-service detail
+homelab ps [service]            Show container status and ports
+homelab ps <service>            Show per-service container details with merged state/health
 homelab logs [service]          Tail logs (TTY → interactive TUI log viewer)
+homelab doctor [service]        Environment health check
 ```
 
 `start`, `stop`, and `restart` accept batch flags:
@@ -129,11 +143,7 @@ homelab start --group media --all    # error: mutually exclusive
 homelab start --build                # rebuild images before starting
 ```
 
-`restart` also supports `--build`:
-
-```
-homelab restart --build              # rebuild and recreate
-```
+`restart` also supports `--build`.
 
 Aliases: `start` ↔ `up`, `stop` ↔ `down`
 
@@ -403,7 +413,7 @@ the system keyring and injected into docker compose at runtime.
 | [Uptime Kuma](https://github.com/louislam/uptime-kuma) | `status.home.*` | Service monitoring |
 | [Vaultwarden](https://github.com/dani-garcia/vaultwarden) | `vault.home.*` | Password manager |
 
-> **⚠️ Service Testing Status**: These services are included in the catalog but have **not yet been tested for functional completeness**. The configurations are based on official Docker images and best practices, but actual deployment behavior may vary. Contributors and testers are welcome to verify and improve these service definitions. Please see [Contributing](#contributing) below.
+> **⚠️ Service Testing Status**: These services are included in the catalog but have varying levels of real-world testing. See the [Service Testing Status](docs/service-testing.md) document for what has been verified on each network layer. Contributions and test reports welcome — see [Contributing](#contributing) below.
 
 ---
 
@@ -480,13 +490,13 @@ This leaves your configured global DNS (e.g. NextDNS) as the sole upstream.
 
 ## Contributing
 
-Contributions are welcome! The project is in active development, and many services in the catalog would benefit from real-world testing and refinement.
+Contributions are welcome! The project is in active development, and services in the catalog need real-world testing across all network layers.
 
 ### Ways to contribute
 
-1. **Test services**: Deploy services from the catalog and report issues or improvements
-2. **Add new services**: Follow [docs/adding-a-service.md](docs/adding-a-service.md) to contribute services
-3. **Report bugs**: Open issues with detailed reproduction steps and logs
+1. **Test services**: Deploy services from the catalog, verify they work on your network layers, and submit a PR updating the [Service Testing Status](docs/service-testing.md) table with your results
+2. **Add new services**: Follow [docs/adding-a-service.md](docs/adding-a-service.md) to contribute services to the catalog
+3. **Report bugs**: Open issues with detailed reproduction steps and logs — include the service name, network layer, and relevant logs from `homelab logs`
 4. **Improve documentation**: Fix typos, clarify instructions, add examples
 5. **Submit PRs**: Bug fixes, new features, and improvements are welcome
 

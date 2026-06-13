@@ -4,9 +4,9 @@ Thank you for your interest in contributing! This project is in active developme
 
 ## Ways to contribute
 
-1. **Test services**: Deploy services from the catalog and report issues or improvements
+1. **Test services**: Deploy services from the catalog, verify they work on each network layer, and submit a PR updating the [Service Testing Status](docs/service-testing.md) table. Every tested service helps the community!
 2. **Add new services**: Follow the [service addition guide](docs/adding-a-service.md)
-3. **Report bugs**: Open issues with detailed reproduction steps and logs
+3. **Report bugs**: Open issues with detailed reproduction steps and logs — include the service name, network layer (tailnet/CF/Tor/I2P/Ygg), and relevant output from `homelab logs` and `homelab doctor`
 4. **Improve documentation**: Fix typos, clarify instructions, add examples
 5. **Submit PRs**: Bug fixes, new features, and improvements are welcome
 

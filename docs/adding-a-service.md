@@ -14,6 +14,8 @@ homelab new paperless --container paperless-ngx --port 8000
 
 This creates `~/.config/homelab/services/paperless/` with boilerplate files. Edit the generated files, then follow the steps below to test and optionally contribute to the catalog.
 
+> **Port config format**: The scaffolded `config.yaml` uses the new list-of-strings format. For a single HTTP port, use a bare port number (e.g. `- 8000`). For services with multiple ports, use named entries (e.g. `- ssh:22`) or mapped entries (e.g. `- 22:22`). See below for examples.
+
 ---
 
 ## Full workflow
@@ -131,6 +133,15 @@ secrets:
   PAPERLESS_ADMIN_PASSWORD:
     required: false
     description: "Initial admin password (optional)"
+
+ports:
+  - "{{.Port}}"
+```
+
+> **Port format reference**:
+> - `- 8000` — bare port number, routes to main subdomain (one per service)
+> - `- web:8000` — named port, routes to `web.<service>.home.*` subdomain
+> - `- 22:22` — mapped port (host:container), Caddy L4 proxy
 ```
 
 Run the interactive setup wizard to configure values:

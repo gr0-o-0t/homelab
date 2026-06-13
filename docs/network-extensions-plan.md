@@ -1,4 +1,27 @@
-# Network Extension Services — Implementation Plan
+# Network Extension Services — Implementation Status
+
+> ⚠️ This document was originally an implementation plan. Most phases are now **implemented and shipped**. The content below is kept for historical reference. See [docs/architecture.md](architecture.md) for the current architecture and [docs/service-testing.md](service-testing.md) for testing status.
+
+## Status by Phase
+
+| Phase | Scope | Status |
+|-------|-------|--------|
+| **1** | Core compose profiles | ✅ Implemented |
+| **2** | Profile activation helper | ✅ Implemented |
+| **3** | Config schema | ✅ Implemented |
+| **4a** | `homelab tor` command | ✅ Implemented — `cmd/tor.go` |
+| **4b** | `homelab i2p` command | ✅ Implemented — `cmd/i2p.go` |
+| **4c** | `homelab ygg` command | ✅ Implemented — `cmd/yggdrasil.go` |
+| **4d** | `homelab ipfs` command | ✅ Implemented — `cmd/ipfs.go` |
+| **5** | Asset templates | ✅ Implemented |
+| **6** | Service routing (Caddy) | ✅ Implemented |
+| **7** | Setup wizard updates | ✅ Implemented |
+| **8** | Asset installation | ✅ Implemented |
+| **9** | Doctor + health checks | ✅ Implemented |
+
+---
+
+## Original Implementation Plan
 
 ## Overview
 

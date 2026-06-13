@@ -1,13 +1,27 @@
 SHELL := /bin/bash
 .DEFAULT_GOAL := build
 
-.PHONY: build install tidy test test-race lint lint-full ci catalog
+# Version from git tag or commit
+VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+LDFLAGS := -ldflags="-X main.version=$(VERSION)"
+
+.PHONY: build build-linux-amd64 build-linux-arm64 release install tidy test test-race lint lint-full ci catalog version
 
 build:
-	go build -o homelab .
+	go build $(LDFLAGS) -o homelab .
+
+build-linux-amd64:
+	GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o "homelab_$(VERSION)_linux_amd64" .
+
+build-linux-arm64:
+	GOOS=linux GOARCH=arm64 go build $(LDFLAGS) -o "homelab_$(VERSION)_linux_arm64" .
+
+release: build-linux-amd64 build-linux-arm64
+	@echo "Release binaries:"
+	@ls -lh homelab_$(VERSION)_linux_*
 
 install:
-	go install .
+	go install $(LDFLAGS) .
 
 tidy:
 	go mod tidy
@@ -31,3 +45,6 @@ ci: lint lint-full test-race build
 catalog:
 	@rm -rf services && cp -r assets/services services
 	@echo "services/ updated from assets/services/"
+
+version:
+	@echo "$(VERSION)"

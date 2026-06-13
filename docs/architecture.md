@@ -34,9 +34,14 @@
                  │   │  │    Caddy    │  │  Cloudflare │     │  │
                  │   │  │  (network   │  │   Tunnel   │     │  │
                  │   │  │  namespace) │  │ (cloudflared)│    │  │
-                 │   │  └─────────────┘  └─────┬──────┘     │  │
-                 │   │                         │             │  │
-                 │   │         home-services network         │  │
+                 │   │  └──────┬──────┘  └──────┬───────┘     │  │
+                 │   │         │                │             │  │
+                 │   │         │  ┌─────────────▼───┐         │  │
+                 │   │         │  │  Tor / I2P /    │         │  │
+                 │   │         │  │  Yggdrasil /    │         │  │
+                 │   │         │  │  IPFS (profiles)│         │  │
+                 │   │         │  └──────┬──────────┘         │  │
+                 │   │         │ home-services network         │  │
                  │   │  ┌──────────┐  ┌────────┴──┐         │  │
                  │   │  │  immich  │  │ jellyfin  │  ...    │  │
                  │   │  └──────────┘  └───────────┘         │  │
@@ -94,13 +99,25 @@ For services that need to be publicly accessible on the internet, Cloudflare Tun
 
 Public services use a separate subdomain (default: `pub.example.com`) and are served through Cloudflare's global network.
 
-### 6. Modular service exposure
+### 6. Multi-layer service exposure
 
-Each service directory ships with two Caddyfile snippets:
+Each service directory ships with Caddyfile snippets:
 - `caddy.conf` — Private reverse proxy (tailnet-only)
 - `caddy.cf.conf` — Public reverse proxy (Cloudflare Tunnel)
 
-Running `homelab enable <name>` symlinks `caddy.conf` into `caddy/conf.d/` and reloads Caddy gracefully (no downtime, no cert re-issuance). Running `homelab enable <name> --cf` symlinks `caddy.cf.conf` instead. `homelab disable <name>` removes the symlink.
+Running `homelab enable <name>` symlinks `caddy.conf` into `caddy/conf.d/` and reloads Caddy. Running `homelab enable <name> --cf` symlinks `caddy.cf.conf` instead.
+
+For alternative network extensions:
+
+| Extension | Mechanism | CLI flag |
+|---|---|---|
+| Cloudflare Tunnel | cloudflared sidecar, DNS routing | `--cf` |
+| Tor onion service | torrc.d configs, SIGHUP reload | `--tor` |
+| I2P eepsite | i2ptunnel config, container restart | `--i2p` |
+| Yggdrasil mesh | socat TCP6→TCP4 forwarder | `--ygg` |
+| IPFS Gateway | Caddy reverse proxy to Kubo API | `ext ipfs gateway` |
+
+`homelab disable <name>` removes any exposure. Extension containers (Tor, I2P, Yggdrasil, IPFS) are managed via `homelab ext` subcommands.
 
 ## Network traffic flow (per request)
 
@@ -130,4 +147,37 @@ Client (anywhere on internet)
                                 └─► Caddy (TLS termination)
                                       └─► reverse_proxy immich:2283
                                             └─► Immich app
+```
+
+### Tor onion service access
+
+```
+Tor client (anywhere)
+  └─► Tor network: <onion>.onion
+        └─► Tor container (hidden service endpoint)
+              └─► HiddenServicePort 80 → <service>:<port>
+                    └─► Docker home-services network
+                          └─► Target service container
+```
+
+### I2P eepsite access
+
+```
+I2P client
+  └─► I2P network: <name>.i2p
+        └─► I2P container (eepsite router)
+              └─► i2ptunnel: HTTP proxy to service
+                    └─► Docker home-services network
+                          └─► Target service container
+```
+
+### Yggdrasil mesh access
+
+```
+Yggdrasil peer
+  └─► Yggdrasil IPv6: [200:...]:<port>
+        └─► Yggdrasil container (mesh node)
+              └─► socat: TCP6 → TCP4 forwarder
+                    └─► Docker home-services network
+                          └─► Target service container
 ```
