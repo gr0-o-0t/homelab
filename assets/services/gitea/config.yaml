@@ -19,5 +19,4 @@ databases:
         password: GI_DB_PASS
         database: GI_DB_NAME
 ports:
-  web:
-    port: 3000
+  - 3000

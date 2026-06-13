@@ -7,5 +7,4 @@ databases:
       env:
         dsn: SEARXNG_REDIS_URL
 ports:
-  web:
-    port: 8080
+  - 8080

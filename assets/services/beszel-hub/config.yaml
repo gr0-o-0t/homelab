@@ -10,5 +10,4 @@ vars:
     required: false
 secrets: {}
 ports:
-  web:
-    port: 8090
+  - 8090

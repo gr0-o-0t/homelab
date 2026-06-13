@@ -14,5 +14,4 @@ vars:
 
 secrets: {}
 ports:
-  web:
-    port: 8096
+  - 8096

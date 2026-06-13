@@ -1,9 +1,14 @@
 package configgen
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/groot/homelab/internal/config"
 )
 
 func TestLayerDisplayURL_Private(t *testing.T) {
@@ -60,4 +65,38 @@ func TestLayerDisplayURL_CFWithoutDomain(t *testing.T) {
 	env := map[string]string{} // no DOMAIN
 	url := LayerDisplayURL("cf", "gitea", env)
 	assert.Equal(t, "https://gitea.{DOMAIN}", url)
+}
+
+// ── PortEntries integration ────────────────────────────────────────────────
+
+func TestLoadServiceInfo_NewFormat(t *testing.T) {
+	dir := t.TempDir()
+	svcDir := filepath.Join(dir, "services", "testapp")
+	require.NoError(t, os.MkdirAll(svcDir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(svcDir, "config.yaml"),
+		[]byte("ports:\n  - web:8080\n  - admin:9090\n"),
+		0o644,
+	))
+
+	info, err := LoadServiceInfo(dir, "testapp")
+	require.NoError(t, err)
+	require.True(t, info.HasVars)
+	assert.Len(t, info.Ports, 2)
+	assert.Equal(t, 8080, info.Ports["web"].Port)
+	assert.Equal(t, 9090, info.Ports["admin"].Port)
+}
+
+func TestResolvePorts_NewFormat(t *testing.T) {
+	ports := config.PortEntries{
+		"web":   {Port: 3000},
+		"admin": {Port: 9090},
+	}
+	result, err := ResolvePorts(ports, nil)
+	require.NoError(t, err)
+	require.Len(t, result, 2)
+	assert.Equal(t, "admin", result[0].Name)
+	assert.Equal(t, 9090, result[0].Port)
+	assert.Equal(t, "web", result[1].Name)
+	assert.Equal(t, 3000, result[1].Port)
 }

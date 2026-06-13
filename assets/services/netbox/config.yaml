@@ -41,5 +41,4 @@ databases:
         host: NB_REDIS_CACHE_HOST
         port: NB_REDIS_CACHE_PORT
 ports:
-  web:
-    port: 8080
+  - 8080

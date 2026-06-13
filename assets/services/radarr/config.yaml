@@ -17,5 +17,4 @@ vars:
 
 secrets: {}
 ports:
-  web:
-    port: 7878
+  - 7878

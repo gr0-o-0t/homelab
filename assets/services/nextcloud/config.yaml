@@ -21,5 +21,4 @@ databases:
       env:
         host: NC_REDIS_HOST
 ports:
-  web:
-    port: 80
+  - 80

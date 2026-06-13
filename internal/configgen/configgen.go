@@ -38,14 +38,14 @@ type Request struct {
 // ServiceInfo holds the parsed service configuration needed for generation.
 type ServiceInfo struct {
 	Name    string
-	Ports   map[string]config.PortEntry
+	Ports   config.PortEntries
 	HasVars bool // whether config.yaml was found and parsed
 }
 
 // LoadServiceInfo reads a service's config.yaml and returns its port info.
 // Returns an empty ServiceInfo (no error) if config.yaml doesn't exist.
 func LoadServiceInfo(configDir, svcName string) (ServiceInfo, error) {
-	info := ServiceInfo{Name: svcName, Ports: make(map[string]config.PortEntry)}
+	info := ServiceInfo{Name: svcName, Ports: make(config.PortEntries)}
 
 	svcCfg, err := config.Load(config.ServiceConfigFile(configDir, svcName))
 	if err != nil {
@@ -64,7 +64,7 @@ func LoadServiceInfo(configDir, svcName string) (ServiceInfo, error) {
 // ResolvePorts resolves the port selection from the --ports flag.
 // If explicit port names are given, filter to those. Otherwise return all.
 // For each resolved port, detect the protocol (tcp/udp) and assign a display name.
-func ResolvePorts(ports map[string]config.PortEntry, selected []string) ([]PortSelection, error) {
+func ResolvePorts(ports config.PortEntries, selected []string) ([]PortSelection, error) {
 	var result []PortSelection
 
 	keys := make([]string, 0, len(ports))

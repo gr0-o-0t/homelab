@@ -28,5 +28,4 @@ databases:
         port: REDIS_PORT
 
 ports:
-  web:
-    port: 2283
+  - 2283

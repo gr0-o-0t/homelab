@@ -8,5 +8,4 @@ vars:
 
 secrets: {}
 ports:
-  web:
-    port: 5000
+  - 5000

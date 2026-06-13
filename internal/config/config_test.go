@@ -237,3 +237,126 @@ func TestDefaultConfigDir_HomeDir(t *testing.T) {
 	home, _ := os.UserHomeDir()
 	assert.Equal(t, filepath.Join(home, ".config", "homelab"), result)
 }
+
+// ── PortEntries ────────────────────────────────────────────────────────────
+
+func TestPortEntries_OldFormat(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "config.yaml", `
+ports:
+  web:
+    port: 8080
+    protocol: tcp
+`)
+	cfg, err := config.Load(filepath.Join(dir, "config.yaml"))
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+	require.NotNil(t, cfg.Ports)
+	assert.Equal(t, 8080, cfg.Ports["web"].Port)
+	assert.Equal(t, "tcp", cfg.Ports["web"].Protocol)
+}
+
+func TestPortEntries_NewFormat_Named(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "config.yaml", `ports:
+  - web:8080
+`)
+	cfg, err := config.Load(filepath.Join(dir, "config.yaml"))
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+	require.NotNil(t, cfg.Ports)
+	assert.Equal(t, 8080, cfg.Ports["web"].Port)
+	assert.Equal(t, "tcp", cfg.Ports["web"].Protocol)
+}
+
+func TestPortEntries_NewFormat_Unnamed(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "config.yaml", `ports:
+  - 8080
+`)
+	cfg, err := config.Load(filepath.Join(dir, "config.yaml"))
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+	require.NotNil(t, cfg.Ports)
+	assert.Equal(t, 8080, cfg.Ports["default"].Port)
+}
+
+func TestPortEntries_NewFormat_Mapped(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "config.yaml", `ports:
+  - 8080:9090
+`)
+	cfg, err := config.Load(filepath.Join(dir, "config.yaml"))
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+	require.NotNil(t, cfg.Ports)
+	// Mapped port stored under host port as key, container port as value
+	assert.Equal(t, 9090, cfg.Ports["8080"].Port)
+}
+
+func TestPortEntries_NewFormat_Multiple(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "config.yaml", `ports:
+  - web:8080
+  - ssh:22
+  - 3000
+`)
+	cfg, err := config.Load(filepath.Join(dir, "config.yaml"))
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+	require.NotNil(t, cfg.Ports)
+	assert.Equal(t, 8080, cfg.Ports["web"].Port)
+	assert.Equal(t, 22, cfg.Ports["ssh"].Port)
+	assert.Equal(t, 3000, cfg.Ports["default"].Port)
+}
+
+func TestPortEntries_EmptyList(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "config.yaml", `ports:`)
+	cfg, err := config.Load(filepath.Join(dir, "config.yaml"))
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+	assert.Nil(t, cfg.Ports)
+}
+
+func TestPortEntries_SaveRoundtrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	original := &config.Config{
+		Ports: config.PortEntries{
+			"web": {Port: 8080, Protocol: "tcp"},
+			"ssh": {Port: 22, Protocol: "tcp"},
+		},
+	}
+	require.NoError(t, config.Save(path, original))
+	loaded, err := config.Load(path)
+	require.NoError(t, err)
+	require.NotNil(t, loaded)
+	assert.Equal(t, original.Ports["web"], loaded.Ports["web"])
+	assert.Equal(t, original.Ports["ssh"], loaded.Ports["ssh"])
+}
+
+func TestPortEntries_DuplicateDefault(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "config.yaml", `ports:
+  - 3000
+  - 4000
+`)
+	cfg, err := config.Load(filepath.Join(dir, "config.yaml"))
+	assert.ErrorContains(t, err, "at most one unnamed/mapped port allowed")
+	assert.Nil(t, cfg)
+}
+
+func TestPortEntries_DefaultPlusMapped(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "config.yaml", `ports:
+  - 3000
+  - 22:22
+`)
+	cfg, err := config.Load(filepath.Join(dir, "config.yaml"))
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+	require.NotNil(t, cfg.Ports)
+	assert.Equal(t, 3000, cfg.Ports["default"].Port)
+	assert.Equal(t, 22, cfg.Ports["22"].Port)
+}

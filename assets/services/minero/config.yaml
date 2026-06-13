@@ -9,5 +9,4 @@ vars:
     value: "p2pool"
     required: false
 ports:
-  p2p:
-    port: 18080
+  - 18080

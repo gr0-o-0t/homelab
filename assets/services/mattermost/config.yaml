@@ -13,5 +13,4 @@ databases:
       env:
         dsn: MM_DATASOURCE
 ports:
-  web:
-    port: 8065
+  - 8065

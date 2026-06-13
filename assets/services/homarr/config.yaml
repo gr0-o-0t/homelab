@@ -3,5 +3,4 @@ secrets:
   ENCRYPTION_KEY:
     required: true
 ports:
-  web:
-    port: 7575
+  - 7575

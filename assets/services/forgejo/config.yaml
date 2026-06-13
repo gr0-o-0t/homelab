@@ -19,7 +19,5 @@ databases:
         password: F_DB_PASS
         database: F_DB_NAME
 ports:
-  web:
-    port: 3000
-  ssh:
-    port: 22
+  - 3000
+  - ssh:22

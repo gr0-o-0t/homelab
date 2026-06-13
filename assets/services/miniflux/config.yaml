@@ -15,5 +15,4 @@ databases:
       env:
         dsn: DATABASE_URL
 ports:
-  web:
-    port: 8080
+  - 8080

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/groot/homelab/internal/secrets"
@@ -29,6 +30,123 @@ type SecretEntry struct {
 type PortEntry struct {
 	Port     int    `yaml:"port"`
 	Protocol string `yaml:"protocol,omitempty"` // "tcp" (default) or "udp"
+}
+
+// PortEntries accepts ports config in both the old map format and the new
+// list-of-strings format. Internal representation is always map[string]PortEntry.
+//
+// New format (recommended):
+//
+//	ports:
+//	  - web:8080
+//	  - 8080
+//	  - 8080:9090
+//
+// Legacy format (backward compatible):
+//
+//	ports:
+//	  web:
+//	    port: 8080
+//	    protocol: tcp
+type PortEntries map[string]PortEntry
+
+// UnmarshalYAML accepts both the new list format and the legacy mapping format.
+func (p *PortEntries) UnmarshalYAML(value *yaml.Node) error {
+	switch value.Kind {
+	case yaml.SequenceNode:
+		return p.decodeNew(value)
+	case yaml.MappingNode:
+		return p.decodeLegacy(value)
+	default:
+		return fmt.Errorf("ports: expected sequence or mapping, got kind %d", value.Kind)
+	}
+}
+
+func (p *PortEntries) decodeLegacy(value *yaml.Node) error {
+	var old map[string]PortEntry
+	if err := value.Decode(&old); err != nil {
+		return fmt.Errorf("decoding legacy ports format: %w", err)
+	}
+	*p = PortEntries(old)
+	return nil
+}
+
+func (p *PortEntries) decodeNew(value *yaml.Node) error {
+	*p = make(PortEntries)
+	for _, item := range value.Content {
+		var s string
+		if err := item.Decode(&s); err != nil {
+			return fmt.Errorf("decoding port entry: %w", err)
+		}
+		name, port, err := parsePortString(s)
+		if err != nil {
+			return err
+		}
+		if name == "default" {
+			if _, exists := (*p)["default"]; exists {
+				return fmt.Errorf("port config %q: at most one unnamed/mapped port allowed (second conflicts with existing default port %d)", s, (*p)["default"].Port)
+			}
+		}
+		(*p)[name] = PortEntry{Port: port, Protocol: "tcp"}
+	}
+	return nil
+}
+
+// parsePortString parses a single port spec string.
+// Accepted formats:
+//
+//	"web:8080"   → name="web", port=8080      (named port)
+//	"8080"       → name="default", port=8080  (unnamed/unmapped default port)
+//	"8080:9090"  → name="8080", port=9090     (mapped port, host port is key)
+func parsePortString(s string) (name string, port int, err error) {
+	if s == "" {
+		return "", 0, fmt.Errorf("empty port string")
+	}
+
+	parts := strings.SplitN(s, ":", 3)
+	if len(parts) > 2 {
+		return "", 0, fmt.Errorf("invalid port format %q: too many colons", s)
+	}
+
+	if len(parts) == 2 {
+		// Could be "name:port" or "host:container"
+		name, portStr := parts[0], parts[1]
+		if name == "" || portStr == "" {
+			return "", 0, fmt.Errorf("invalid port format %q: empty segment", s)
+		}
+		p, err := strconv.Atoi(portStr)
+		if err != nil {
+			return "", 0, fmt.Errorf("invalid port number %q in %q", portStr, s)
+		}
+		if p < 1 || p > 65535 {
+			return "", 0, fmt.Errorf("port %d out of range (1-65535) in %q", p, s)
+		}
+		// If the name part is numeric, treat as "host:container" mapped port
+		// Use host port as key so multiple mapped ports don't conflict with "default"
+		if isNumeric(name) {
+			return name, p, nil
+		}
+		return name, p, nil
+	}
+
+	// Single segment: bare port number
+	p, err := strconv.Atoi(s)
+	if err != nil {
+		return "", 0, fmt.Errorf("invalid port %q: not a number and not name:port format", s)
+	}
+	if p < 1 || p > 65535 {
+		return "", 0, fmt.Errorf("port %d out of range (1-65535)", p)
+	}
+	return "default", p, nil
+}
+
+func isNumeric(s string) bool {
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return len(s) > 0
 }
 
 // DBType identifies a supported database engine.
@@ -161,7 +279,7 @@ type Config struct {
 	Groups     map[string][]string    `yaml:"groups,omitempty"`
 	Databases  yaml.Node              `yaml:"databases,omitempty"`
 	Extensions []string               `yaml:"extensions,omitempty"`
-	Ports      map[string]PortEntry   `yaml:"ports,omitempty"`
+	Ports      PortEntries            `yaml:"ports,omitempty"`
 }
 
 // extensionAliases maps config.yaml extension names to registry (canonical) names.

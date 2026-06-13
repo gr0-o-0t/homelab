@@ -8,5 +8,4 @@ vars:
 
 secrets: {}
 ports:
-  web:
-    port: 3923
+  - 3923

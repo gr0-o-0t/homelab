@@ -1,5 +1,4 @@
 vars: {}
 secrets: {}
 ports:
-  web:
-    port: 1411
+  - 1411

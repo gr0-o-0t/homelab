@@ -17,6 +17,4 @@ secrets:
   #   required: true
 
 ports:
-  web:
-    port: {{.Port}}
-    protocol: tcp
+  - web:{{.Port}}
