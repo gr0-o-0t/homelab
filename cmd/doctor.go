@@ -271,56 +271,6 @@ func renderExtensionChecks(cfgFile string, dc *docker.Client, pass *bool) {
 	}
 }
 
-// ── homelab service doctor ────────────────────────────────────────────────────
-
-var serviceDoctorFlags struct {
-	all bool
-	fix bool
-}
-
-var serviceDoctorCmd = &cobra.Command{
-	Use:               "doctor [service]",
-	Short:             "Check health of a specific service (or all with --all)",
-	Args:              cobra.MaximumNArgs(1),
-	ValidArgsFunction: completeServiceNames,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		dir := configDir()
-
-		if serviceDoctorFlags.all {
-			svcs, err := service.Discover(dir)
-			if err != nil {
-				return err
-			}
-			if len(svcs) == 0 {
-				fmt.Println(styles.Muted.Render("\n  No services found.\n"))
-				return nil
-			}
-			var failed []string
-			for _, svc := range svcs {
-				ok := runServiceDoctorFor(dir, svc.Name, serviceDoctorFlags.fix)
-				if !ok {
-					failed = append(failed, svc.Name)
-				}
-			}
-			fmt.Println()
-			if len(failed) > 0 {
-				fmt.Printf("  %s %s\n\n",
-					styles.Err.Render("Checks failed for:"),
-					strings.Join(failed, ", "))
-			} else {
-				fmt.Printf("  %s\n\n", styles.Success.Render("All services healthy."))
-			}
-			return nil
-		}
-
-		if len(args) == 0 {
-			return fmt.Errorf("service name required (or use --all)")
-		}
-		runServiceDoctorFor(dir, args[0], serviceDoctorFlags.fix)
-		return nil
-	},
-}
-
 func runServiceDoctorFor(dir, name string, fix bool) bool {
 	fmt.Printf("\n%s %s\n\n",
 		styles.Header.Render("Service Health:"),
@@ -384,7 +334,5 @@ func hasResolvedExtension(cfg *config.Config, canonicalName string) bool {
 func init() {
 	doctorCmd.Flags().BoolVar(&doctorFixFlag, "fix", false, "Auto-repair safe issues (missing network, broken symlinks, missing dirs)")
 	doctorCmd.Flags().BoolVar(&doctorAllFlag, "all", false, "Run doctor for all installed services")
-	serviceDoctorCmd.Flags().BoolVar(&serviceDoctorFlags.all, "all", false, "Run doctor for all installed services")
-	serviceDoctorCmd.Flags().BoolVar(&serviceDoctorFlags.fix, "fix", false, "Auto-repair safe issues")
-	serviceCmd.AddCommand(serviceDoctorCmd)
+
 }

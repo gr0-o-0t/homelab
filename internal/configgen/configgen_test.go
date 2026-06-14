@@ -100,3 +100,72 @@ func TestResolvePorts_NewFormat(t *testing.T) {
 	assert.Equal(t, "web", result[1].Name)
 	assert.Equal(t, 3000, result[1].Port)
 }
+
+func TestPortSubdomain_Default(t *testing.T) {
+	assert.Equal(t, "", portSubdomain("svc", "default"))
+}
+
+func TestPortSubdomain_Web(t *testing.T) {
+	assert.Equal(t, "", portSubdomain("svc", "web"))
+}
+
+func TestPortSubdomain_Numeric(t *testing.T) {
+	assert.Equal(t, "", portSubdomain("svc", "8080"))
+}
+
+func TestPortSubdomain_Named(t *testing.T) {
+	assert.Equal(t, "admin", portSubdomain("svc", "admin"))
+}
+
+func TestBuildBlock_PrivateDefaultPort(t *testing.T) {
+	block, err := buildBlock("private", "gitea", "gitea", PortSelection{Name: "default", Port: 3000, Protocol: "tcp"})
+	require.NoError(t, err)
+	assert.Equal(t, "private", block.Extension)
+	assert.Equal(t, "default", block.PortName)
+	assert.Contains(t, block.Content, "gitea.{$HOME_SUBDOMAIN}.{$DOMAIN}")
+	assert.Contains(t, block.Content, "import wildcard_tls")
+	assert.Contains(t, block.Content, "reverse_proxy gitea:3000")
+}
+
+func TestBuildBlock_CFNamedPort(t *testing.T) {
+	block, err := buildBlock("cf", "gitea", "gitea", PortSelection{Name: "web", Port: 8080, Protocol: "tcp"})
+	require.NoError(t, err)
+	assert.Equal(t, "cf", block.Extension)
+	assert.Contains(t, block.Content, "http://gitea.{$DOMAIN}")
+	assert.Contains(t, block.Content, "reverse_proxy gitea:8080")
+	assert.NotContains(t, block.Content, "import wildcard_tls")
+}
+
+func TestBuildBlock_Tor(t *testing.T) {
+	block, err := buildBlock("tor", "mysvc", "mysvc", PortSelection{Name: "default", Port: 80, Protocol: "tcp"})
+	require.NoError(t, err)
+	assert.Contains(t, block.Content, "mysvc.onion")
+	assert.Contains(t, block.Content, "reverse_proxy mysvc:80")
+}
+
+func TestBuildBlock_I2P(t *testing.T) {
+	block, err := buildBlock("i2p", "mysvc", "mysvc", PortSelection{Name: "default", Port: 80, Protocol: "tcp"})
+	require.NoError(t, err)
+	assert.Contains(t, block.Content, "mysvc.i2p")
+	assert.Contains(t, block.Content, "reverse_proxy mysvc:80")
+}
+
+func TestBuildBlock_Ygg(t *testing.T) {
+	block, err := buildBlock("ygg", "mysvc", "mysvc", PortSelection{Name: "default", Port: 80, Protocol: "tcp"})
+	require.NoError(t, err)
+	assert.Contains(t, block.Content, "mysvc.ygg")
+	assert.Contains(t, block.Content, "reverse_proxy mysvc:80")
+}
+
+func TestBuildBlock_DisplayNameDiffers(t *testing.T) {
+	// displayName differs from svcName (--name override)
+	block, err := buildBlock("private", "My App", "my-app", PortSelection{Name: "web", Port: 3000, Protocol: "tcp"})
+	require.NoError(t, err)
+	assert.Contains(t, block.Content, "My App.{$HOME_SUBDOMAIN}.{$DOMAIN}")
+	assert.Contains(t, block.Content, "reverse_proxy my-app:3000")
+}
+
+func TestBuildBlock_UnknownExtension(t *testing.T) {
+	_, err := buildBlock("unknown", "svc", "svc", PortSelection{Name: "default", Port: 80, Protocol: "tcp"})
+	assert.ErrorContains(t, err, "unknown extension")
+}

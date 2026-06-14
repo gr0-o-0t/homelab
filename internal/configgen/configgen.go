@@ -1,5 +1,10 @@
 // Package configgen generates Caddy config blocks from service port declarations
 // and extension flags. Used by `homelab enable <service> --cf --i2p ...`.
+//
+// This is the modern routing path alongside the legacy symlink path in
+// caddy.Manager. New services declare ports in config.yaml and this package
+// generates Caddy config directly. Old services ship static caddy.conf files
+// that caddy.Manager symlinks into place.
 package configgen
 
 import (
@@ -231,13 +236,24 @@ func buildYggBlock(displayName, svcName string, port PortSelection) string {
 
 // portSubdomain returns a subdomain prefix when the port name is non-default.
 // Only the unnamed/default port ("default" or the only HTTP port) gets no prefix.
+// Numeric port names (mapped ports like "8080:9090") also get no prefix.
 func portSubdomain(displayName, portName string) string {
 	// If there's only one port named "web" or "default", no subdomain needed
-	if portName == "default" || portName == "web" {
+	if portName == "default" || portName == "web" || isNumeric(portName) {
 		return ""
 	}
 	// Named port → subdomain prefix
 	return portName
+}
+
+// isNumeric reports whether s consists only of decimal digits.
+func isNumeric(s string) bool {
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // LayerDisplayURL returns the human-readable access URL for a service on the

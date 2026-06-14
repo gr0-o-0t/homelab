@@ -17,6 +17,8 @@ Use 'up' to create and start containers.
 
   homelab start              # core stack (start existing containers)
   homelab start jellyfin     # one service
+  homelab start --all        # every installed service
+  homelab start --group media  # all services in the "media" group
 
 Note: This runs 'docker compose start' under the hood — containers must
 already exist. Use 'homelab up' to create and start.`,
@@ -24,20 +26,9 @@ already exist. Use 'homelab up' to create and start.`,
 	ValidArgsFunction: completeServiceNames,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		dir := configDir()
-
-		if len(args) > 0 {
-			name := args[0]
-			if err := validateService(dir, name); err != nil {
-				return err
-			}
-			fmt.Printf("%s Starting %s\n", styles.Primary.Render("→"), styles.Bold.Render(name))
-			return run.Default().DockerComposeEnv(
-				run.ServiceComposeFile(dir, name),
-				buildEnv(dir, name),
-				"start",
-			)
+		if len(args) > 0 || startFlags.all || startFlags.group != "" {
+			return runServiceStart(cmd, args)
 		}
-
 		env := buildEnv(dir, "")
 		composeFile := run.CoreComposeFile(dir)
 		if _, err := os.Stat(composeFile); err != nil {
@@ -50,4 +41,34 @@ already exist. Use 'homelab up' to create and start.`,
 			withProfiles(dir, "start")...,
 		)
 	},
+}
+
+var startFlags = batchFlags{}
+
+func runServiceStart(_ *cobra.Command, args []string) error {
+	root := configDir()
+	names, err := resolveTargets(root, startFlags.all, startFlags.group, args)
+	if err != nil {
+		return err
+	}
+	for _, name := range names {
+		if err := validateService(root, name); err != nil {
+			return err
+		}
+		fmt.Printf("%s Starting %s\n", styles.Primary.Render("→"), styles.Bold.Render(name))
+		if err := run.Default().DockerComposeEnv(
+			run.ServiceComposeFile(root, name),
+			buildEnv(root, name),
+			"start",
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func init() {
+	startCmd.Flags().BoolVar(&startFlags.all, "all", false, "Start all installed services")
+	startCmd.Flags().StringVar(&startFlags.group, "group", "", "Start a named service group")
+	_ = startCmd.RegisterFlagCompletionFunc("group", completeGroupNames)
 }

@@ -122,7 +122,7 @@ func runDisable(cmd *cobra.Command, args []string) error {
 
 	if disableStop {
 		fmt.Printf("  %s  Stopping container…\n", styles.Muted.Render("→"))
-		_ = runServiceStop(root, svcName)
+		_ = stopAndRemoveService(root, svcName)
 	}
 
 	fmt.Println()
@@ -140,8 +140,8 @@ func disablePrivate(root, svcName string) error {
 	return nil
 }
 
-// runServiceStop stops a service container via docker compose down.
-func runServiceStop(root, name string) error {
+// stopAndRemoveService stops and removes a service container via docker compose down.
+func stopAndRemoveService(root, name string) error {
 	return run.Default().DockerComposeEnv(
 		run.ServiceComposeFile(root, name),
 		buildEnv(root, name),

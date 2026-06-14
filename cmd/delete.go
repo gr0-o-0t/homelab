@@ -77,7 +77,7 @@ func runDelete(_ *cobra.Command, args []string) error {
 
 	// 2. Stop service containers
 	fmt.Printf("  %s  Stopping containers…\n", styles.Muted.Render("→"))
-	_ = runServiceStop(root, svcName)
+	_ = stopAndRemoveService(root, svcName)
 
 	// 3. Remove service directory
 	svcDir := filepath.Join(root, "services", svcName)

@@ -1,6 +1,21 @@
 // Package caddy manages Caddy routing: enabling/disabling services via
 // symlinks into caddy/conf.d/ (private) and caddy/conf.d-cf/ (Cloudflare),
 // and reloading the running Caddy container.
+//
+// # ROUTING SYSTEMS
+//
+// Caddy config is managed through two parallel systems:
+//
+//  1. Legacy symlink path (this package): services/<name>/caddy.conf →
+//     caddy/conf.d/<name>.conf. Used by older services that ship static
+//     caddy.conf files. Manager.Enable() symlinks; Manager.Disable() removes.
+//
+//  2. Modern configgen path (configgen.WriteFile): generates Caddy config
+//     blocks from config.yaml's ports: declaration. Used by newer services.
+//     Config is written directly (not symlinked).
+//
+// DisableBoth() tries both paths. New services should prefer the ports:
+// declaration approach in config.yaml.
 package caddy
 
 import (

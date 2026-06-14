@@ -19,8 +19,8 @@ var rootFlags struct {
 }
 
 var (
-	rootCfg *config.Config
-	cfgMu   sync.Mutex
+	rootCfg  *config.Config
+	loadOnce sync.Once
 )
 
 var rootCmd = &cobra.Command{
@@ -125,21 +125,17 @@ func noColor() bool {
 
 // extEnabled checks whether a named extension is enabled in the root config.
 // Cache loaded config to avoid re-parsing config.yaml on every call.
-// Retries on failure (mutex, not sync.Once).
 func extEnabled(cfgDir, name string) bool {
-	cfgMu.Lock()
-	if rootCfg == nil {
+	loadOnce.Do(func() {
 		cfg, err := config.Load(config.RootConfigFile(cfgDir, rootFlags.configFile))
 		if err == nil {
 			rootCfg = cfg
 		}
-	}
-	cfg := rootCfg
-	cfgMu.Unlock()
-	if cfg == nil {
+	})
+	if rootCfg == nil {
 		return false
 	}
-	return cfg.HasExtension(name)
+	return rootCfg.HasExtension(name)
 }
 
 // buildEnv assembles the full docker compose environment map.

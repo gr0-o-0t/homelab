@@ -252,6 +252,100 @@ func TestPullCommand_AllEmpty(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+// ── stop/start batch flags ──────────────────────────────────────────────────
+
+func TestStopCommand_AllEmpty(t *testing.T) {
+	tmp := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmp, "services"), 0o755))
+	rootCmd := cmd.RootCmd()
+	rootCmd.SetArgs([]string{"--config-dir", tmp, "stop", "--all"})
+	err := rootCmd.Execute()
+	assert.NoError(t, err)
+}
+
+func TestStartCommand_AllEmpty(t *testing.T) {
+	tmp := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmp, "services"), 0o755))
+	rootCmd := cmd.RootCmd()
+	rootCmd.SetArgs([]string{"--config-dir", tmp, "start", "--all"})
+	err := rootCmd.Execute()
+	assert.NoError(t, err)
+}
+
+func TestStopCommand_GroupNotFound(t *testing.T) {
+	tmp := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmp, "services"), 0o755))
+	rootCmd := cmd.RootCmd()
+	rootCmd.SetArgs([]string{"--config-dir", tmp, "stop", "--group", "nonexistent"})
+	err := rootCmd.Execute()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "group")
+}
+
+func TestStartCommand_GroupNotFound(t *testing.T) {
+	tmp := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmp, "services"), 0o755))
+	rootCmd := cmd.RootCmd()
+	rootCmd.SetArgs([]string{"--config-dir", tmp, "start", "--group", "nonexistent"})
+	err := rootCmd.Execute()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "group")
+}
+
+// ── update batch flags ───────────────────────────────────────────────────────
+
+func TestServiceUpdate_GroupNotFound(t *testing.T) {
+	tmp := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmp, "services"), 0o755))
+	rootCmd := cmd.RootCmd()
+	rootCmd.SetArgs([]string{"--config-dir", tmp, "update", "--group", "nonexistent"})
+	err := rootCmd.Execute()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "group")
+}
+
+// ── enable/disable ───────────────────────────────────────────────────────────
+
+func TestEnableCommand_NoErrorOnMissingInEmptyDir(t *testing.T) {
+	// Enable on a missing service prints a message but doesn't error
+	// (it falls through gracefully when services dir is empty).
+	tmp := t.TempDir()
+	rootCmd := cmd.RootCmd()
+	rootCmd.SetArgs([]string{"--config-dir", tmp, "enable", "nonexistent"})
+	err := rootCmd.Execute()
+	assert.NoError(t, err)
+}
+
+func TestDisableCommand_MissingService(t *testing.T) {
+	// Disable on a missing service prints a message but doesn't error
+	// (it gracefully handles non-existent entries).
+	tmp := t.TempDir()
+	rootCmd := cmd.RootCmd()
+	rootCmd.SetArgs([]string{"--config-dir", tmp, "disable", "nonexistent"})
+	err := rootCmd.Execute()
+	assert.NoError(t, err)
+}
+
+// ── doctor ───────────────────────────────────────────────────────────────────
+
+func TestDoctorCommand_AllNoServices(t *testing.T) {
+	tmp := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmp, "services"), 0o755))
+
+	rootCmd := cmd.RootCmd()
+	rootCmd.SetArgs([]string{"--config-dir", tmp, "doctor", "--all"})
+	err := rootCmd.Execute()
+	assert.NoError(t, err)
+}
+
+func TestDoctorCommand_RunsHealthCheckOnEmptyDir(t *testing.T) {
+	tmp := t.TempDir()
+	rootCmd := cmd.RootCmd()
+	rootCmd.SetArgs([]string{"--config-dir", tmp, "doctor"})
+	err := rootCmd.Execute()
+	assert.NoError(t, err) // runs health checks, reports failures but doesn't error
+}
+
 // ── completion ────────────────────────────────────────────────────────────────
 
 func TestCompletionCommand_Bash(t *testing.T) {

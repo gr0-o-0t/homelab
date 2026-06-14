@@ -157,24 +157,34 @@ func (p *Provisioner) provisionPostgres(ctx context.Context, svcName string, dec
 	out, _ := p.execPSQL(container, "postgres", "postgres",
 		"-c", fmt.Sprintf("SELECT 1 FROM pg_database WHERE datname='%s'", decl.Database))
 	if strings.TrimSpace(string(out)) == "" {
-		_ = p.RC.Run("docker", "exec", container, "psql", "-U", "postgres",
-			"-c", fmt.Sprintf("CREATE DATABASE %s", escID(decl.Database)))
+		if err := p.RC.Run("docker", "exec", container, "psql", "-U", "postgres",
+			"-c", fmt.Sprintf("CREATE DATABASE %s", escID(decl.Database))); err != nil {
+			return fmt.Errorf("creating database %s: %w", decl.Database, err)
+		}
 	}
 
 	// 2. Create user if not exists (PG 15+).
-	_ = p.RC.Run("docker", "exec", container, "psql", "-U", "postgres",
-		"-c", fmt.Sprintf("CREATE USER IF NOT EXISTS %s WITH PASSWORD '%s'", escID(decl.User), password))
+	if err := p.RC.Run("docker", "exec", container, "psql", "-U", "postgres",
+		"-c", fmt.Sprintf("CREATE USER IF NOT EXISTS %s WITH PASSWORD '%s'", escID(decl.User), password)); err != nil {
+		return fmt.Errorf("creating user %s: %w", decl.User, err)
+	}
 
 	// 3. Grant privileges.
-	_ = p.RC.Run("docker", "exec", container, "psql", "-U", "postgres",
-		"-c", fmt.Sprintf("GRANT ALL PRIVILEGES ON DATABASE %s TO %s", escID(decl.Database), escID(decl.User)))
-	_ = p.RC.Run("docker", "exec", container, "psql", "-U", "postgres", "-d", decl.Database,
-		"-c", fmt.Sprintf("GRANT ALL ON SCHEMA public TO %s", escID(decl.User)))
+	if err := p.RC.Run("docker", "exec", container, "psql", "-U", "postgres",
+		"-c", fmt.Sprintf("GRANT ALL PRIVILEGES ON DATABASE %s TO %s", escID(decl.Database), escID(decl.User))); err != nil {
+		return fmt.Errorf("granting db privileges: %w", err)
+	}
+	if err := p.RC.Run("docker", "exec", container, "psql", "-U", "postgres", "-d", decl.Database,
+		"-c", fmt.Sprintf("GRANT ALL ON SCHEMA public TO %s", escID(decl.User))); err != nil {
+		return fmt.Errorf("granting schema privileges: %w", err)
+	}
 
 	// 4. Extensions.
 	for _, ext := range decl.Extensions {
-		_ = p.RC.Run("docker", "exec", container, "psql", "-U", "postgres", "-d", decl.Database,
-			"-c", fmt.Sprintf("CREATE EXTENSION IF NOT EXISTS %q", ext))
+		if err := p.RC.Run("docker", "exec", container, "psql", "-U", "postgres", "-d", decl.Database,
+			"-c", fmt.Sprintf("CREATE EXTENSION IF NOT EXISTS %q", ext)); err != nil {
+			return fmt.Errorf("creating extension %s: %w", ext, err)
+		}
 	}
 
 	return nil
