@@ -1,0 +1,40 @@
+# ─────────────────────────────────────────────────────────────────
+# Shared Prometheus for homelab services
+# ─────────────────────────────────────────────────────────────────
+# Install:  homelab add prometheus && homelab up prometheus
+# Services that expose metrics ship a `prometheus-target.json` file in
+# their own assets/services/<name>/ directory, e.g.:
+#   [{"targets": ["<name>:<port>"], "labels": {"job": "<name>"}}]
+# Prometheus auto-discovers these via file_sd — no other wiring needed.
+# ─────────────────────────────────────────────────────────────────
+
+networks:
+  home-services:
+    name: home-services
+    external: true
+
+services:
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: homelab-prometheus
+    restart: unless-stopped
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../:/homelab-services:ro
+      - prometheus-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=15d"
+    networks:
+      - home-services
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:9090/-/healthy || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  prometheus-data:
+    name: homelab_prometheus_data

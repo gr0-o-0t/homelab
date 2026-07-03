@@ -1,0 +1,6 @@
+[
+  {
+    "targets": ["litellm:4000"],
+    "labels": { "job": "litellm" }
+  }
+]

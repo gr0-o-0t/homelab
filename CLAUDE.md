@@ -44,7 +44,9 @@ homelab delete <service>    (alias: rm)            # remove service entirely
 ```bash
 homelab                                            # interactive TUI (service browser)
 homelab status [service]                           # show status overview or per-service detail
-homelab logs [service]                             # logs (TUI on TTY, plain otherwise)
+homelab logs [service]                             # logs (TUI on TTY, plain otherwise) — installed services only
+homelab caddy status                               # Caddy container status
+homelab caddy logs                                 # stream Caddy container logs individually
 homelab doctor [service] [--fix] [--all]           # health check with optional auto-repair
 homelab validate                                   # validate Caddyfile syntax
 homelab service list                               # list services + exposure status (legacy, hidden)

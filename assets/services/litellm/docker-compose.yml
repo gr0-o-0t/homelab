@@ -1,0 +1,42 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Service: LiteLLM (OpenAI-compatible LLM proxy/gateway + usage dashboard)
+# https://docs.litellm.ai/docs/simple_proxy
+# ─────────────────────────────────────────────────────────────────────────────
+# Database: uses shared PostgreSQL (homelab-postgres). DATABASE_URL is
+# auto-generated at `homelab setup litellm` and injected at runtime.
+#
+# litellm-config.yaml (mounted at /app/config.yaml) only enables the
+# Prometheus callback — LLM models are added via the proxy UI/API and
+# persisted to Postgres (STORE_MODEL_IN_DB). Metrics are scraped by the
+# shared Prometheus instance via prometheus-target.json (see that file).
+# ─────────────────────────────────────────────────────────────────────────────
+
+networks:
+  home-services:
+    name: home-services
+    external: true
+
+services:
+  litellm:
+    image: litellm/litellm:latest
+    container_name: litellm
+    restart: unless-stopped
+    command:
+      - "--config=/app/config.yaml"
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      STORE_MODEL_IN_DB: "True"
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
+      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY:-}
+    volumes:
+      - ./litellm-config.yaml:/app/config.yaml:ro
+    networks:
+      - home-services
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness')"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s

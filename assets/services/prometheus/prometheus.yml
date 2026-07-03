@@ -1,0 +1,17 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # Auto-discovers scrape targets dropped by any other installed service.
+  # A service opts in by shipping a `prometheus-target.json` file in its own
+  # assets/services/<name>/ directory — no changes needed here or in the CLI.
+  # Prometheus watches these files for changes and reloads automatically.
+  - job_name: homelab-services
+    file_sd_configs:
+      - files:
+          - /homelab-services/*/prometheus-target.json
+        refresh_interval: 1m

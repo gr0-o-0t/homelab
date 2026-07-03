@@ -1,0 +1,9 @@
+vars: {}
+
+secrets:
+  GRAFANA_ADMIN_PASSWORD:
+    required: true
+    description: "Password for the Grafana 'admin' user"
+
+ports:
+  - 3000

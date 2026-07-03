@@ -1,0 +1,37 @@
+# ─────────────────────────────────────────────────────────────────
+# Shared Grafana for homelab services
+# ─────────────────────────────────────────────────────────────────
+# Install: homelab add grafana && homelab setup grafana && homelab up grafana
+# Pre-provisioned with the shared Prometheus (homelab-prometheus) as its
+# default datasource — see provisioning/datasources/prometheus.yaml.
+# ─────────────────────────────────────────────────────────────────
+
+networks:
+  home-services:
+    name: home-services
+    external: true
+
+services:
+  grafana:
+    image: grafana/grafana-oss:latest
+    container_name: homelab-grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      GF_SERVER_ROOT_URL: https://grafana.${HOME_SUBDOMAIN}.${DOMAIN}
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./provisioning:/etc/grafana/provisioning:ro
+    networks:
+      - home-services
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  grafana-data:
+    name: homelab_grafana_data

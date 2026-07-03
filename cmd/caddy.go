@@ -13,6 +13,55 @@ import (
 	"github.com/spf13/cobra"
 )
 
+const caddyContainerName = "caddy"
+
+var caddyCmd = &cobra.Command{
+	Use:   caddyContainerName,
+	Short: "Inspect the Caddy reverse proxy",
+	Long: `Inspect the core Caddy container individually.
+
+Use "homelab reload"/"homelab validate" to manage its configuration —
+this command group is read-only status/logs.`,
+}
+
+var caddyStatusCmd = &cobra.Command{
+	Use:     "status",
+	Aliases: []string{"ps"},
+	Short:   "Show Caddy container status",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		fmt.Printf("\n%s\n\n", styles.Header.Render("Caddy"))
+		state := containerStatus(caddyContainerName)
+		if state == containerStateRunning {
+			fmt.Printf("  %s  caddy  %s\n", styles.Success.Render("✓"), styles.StateTag(state))
+		} else {
+			fmt.Printf("  %s  caddy  %s\n", styles.Err.Render("✗"), styles.StateTag(state))
+			fmt.Printf("\n  Start with: %s\n", styles.Primary.Render("homelab start"))
+		}
+		fmt.Println()
+		return nil
+	},
+}
+
+var caddyLogsCmd = &cobra.Command{
+	Use:   "logs",
+	Short: "Stream Caddy container logs",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		root := configDir()
+		env := buildEnv(root, "")
+		return run.Default().DockerComposeEnv(
+			run.CoreComposeFile(root),
+			env,
+			withProfiles(root, "logs", "-f", caddyContainerName)...,
+		)
+	},
+}
+
+func init() {
+	caddyCmd.AddCommand(caddyStatusCmd)
+	caddyCmd.AddCommand(caddyLogsCmd)
+	rootCmd.AddCommand(caddyCmd)
+}
+
 var reloadCmd = &cobra.Command{
 	Use:   "reload [service]",
 	Short: "Reload Caddy config or a service's routing",

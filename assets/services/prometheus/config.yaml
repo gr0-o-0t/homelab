@@ -1,6 +1,4 @@
 vars: {}
-
 secrets: {}
 ports:
-  - 5006
-
+  - 9090

@@ -12,7 +12,6 @@ services:
   actual-budget:
     image: actualbudget/actual-server:latest-alpine
     container_name: actual-budget
-    user: "${PUID:-1000}:${PGID:-1000}"
     restart: unless-stopped
     volumes:
       - actual-budget-data:/data

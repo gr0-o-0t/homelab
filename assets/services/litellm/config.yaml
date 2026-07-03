@@ -1,0 +1,20 @@
+vars: {}
+
+secrets:
+  LITELLM_MASTER_KEY:
+    required: true
+    description: "Proxy auth key — also the admin UI password (user: admin)"
+  LITELLM_SALT_KEY:
+    required: false
+    description: "Encrypts model/provider API keys stored in Postgres — set once, never change"
+
+databases:
+  - postgres:
+      database: litellm
+      user: litellm
+      dsn_template: "postgresql://{user}:{password}@{host}:{port}/{database}"
+      env:
+        dsn: DATABASE_URL
+
+ports:
+  - 4000

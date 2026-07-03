@@ -1,0 +1,5 @@
+# Mounted into the litellm container at /app/config.yaml.
+# Models are managed via the proxy UI/API and persisted to Postgres
+# (STORE_MODEL_IN_DB), so this file only turns on the Prometheus callback.
+litellm_settings:
+  callbacks: ["prometheus"]
