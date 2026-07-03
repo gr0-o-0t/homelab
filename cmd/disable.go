@@ -23,13 +23,15 @@ Select which layers to remove with extension flags:
   --ygg   remove Yggdrasil mesh config
 
 Without flags, only the private tailnet config is removed.
-Use -a to stop the service container as well.
+-a/--all removes every extension layer AND stops the container.
+--stop stops the container without touching extension layers.
 
 Examples:
   homelab disable gitea                  # private only
   homelab disable gitea --cf             # remove CF exposure
   homelab disable gitea --cf --i2p       # CF + I2P
-  homelab disable gitea -a               # all layers + stop container`,
+  homelab disable gitea -a               # all layers + stop container
+  homelab disable gitea --stop           # stop container only`,
 	Args:              cobra.ExactArgs(1),
 	ValidArgsFunction: completeServiceNames,
 	RunE:              runDisable,
@@ -40,8 +42,8 @@ var (
 	disableI2P  bool
 	disableTor  bool
 	disableYgg  bool
-	disableAll  bool
-	disableStop bool // -a flag
+	disableAll  bool // -a flag: all extension layers + stop container
+	disableStop bool // --stop: stop container only, standalone
 )
 
 func init() {
@@ -49,8 +51,8 @@ func init() {
 	disableCmd.Flags().BoolVar(&disableI2P, "i2p", false, "Remove I2P eepsite config")
 	disableCmd.Flags().BoolVar(&disableTor, "tor", false, "Remove Tor onion service config")
 	disableCmd.Flags().BoolVar(&disableYgg, "ygg", false, "Remove Yggdrasil mesh config")
-	disableCmd.Flags().BoolVar(&disableAll, "all", false, "Remove ALL extension configs")
-	disableCmd.Flags().BoolVarP(&disableStop, "stop", "a", false, "Also stop the service container")
+	disableCmd.Flags().BoolVarP(&disableAll, "all", "a", false, "Remove ALL extension configs and stop the container")
+	disableCmd.Flags().BoolVar(&disableStop, "stop", false, "Also stop the service container")
 	rootCmd.AddCommand(disableCmd)
 }
 
@@ -64,6 +66,7 @@ func runDisable(cmd *cobra.Command, args []string) error {
 		disableI2P = true
 		disableTor = true
 		disableYgg = true
+		disableStop = true
 	}
 
 	hasSpecific := disableCf || disableI2P || disableTor || disableYgg
@@ -82,6 +85,9 @@ func runDisable(cmd *cobra.Command, args []string) error {
 	if disableCf {
 		if err := configgen.RemoveFile(root, "cf", svcName, ""); err != nil {
 			return fmt.Errorf("cf: %w", err)
+		}
+		if layer, ok := extRegistry().Get("cf"); ok {
+			_ = layer.Disable(svcName)
 		}
 		fmt.Printf("  %s  Cloudflare: removed\n", styles.Warning.Render("→"))
 	}

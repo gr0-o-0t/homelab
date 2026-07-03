@@ -360,3 +360,22 @@ func TestPortEntries_DefaultPlusMapped(t *testing.T) {
 	assert.Equal(t, 3000, cfg.Ports["default"].Port)
 	assert.Equal(t, 22, cfg.Ports["22"].Port)
 }
+
+// ── ExtensionLabel / AllExtensions canonical-name consistency ────────────────
+
+func TestExtensionLabel_UsesCanonicalNamesFromAllExtensions(t *testing.T) {
+	// Every name AllExtensions() yields (what callers like `ext list` iterate)
+	// must have a real label in ExtensionLabel, not fall through to the
+	// identity default — that's exactly how "ygg" silently regressed to
+	// showing "ygg" as its own label after the alias was renamed from
+	// "yggdrasil" without updating ExtensionLabel's switch to match.
+	for _, name := range config.AllExtensions() {
+		label := config.ExtensionLabel(name)
+		assert.NotEqual(t, name, label, "ExtensionLabel(%q) fell through to the identity default", name)
+	}
+}
+
+func TestExtensionLabel_ResolvesLegacyYggdrasilAlias(t *testing.T) {
+	assert.Equal(t, "ygg", config.ResolveExtension("yggdrasil"))
+	assert.Equal(t, config.ExtensionLabel("ygg"), config.ExtensionLabel(config.ResolveExtension("yggdrasil")))
+}

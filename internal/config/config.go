@@ -314,16 +314,20 @@ func ExtensionProfile(ext string) string {
 	}
 }
 
-// ExtensionLabel returns a human-readable label for an extension.
+// ExtensionLabel returns a human-readable label for an extension. Takes the
+// canonical name (see AllExtensions/ResolveExtension) — "ygg", not the
+// legacy config.yaml alias "yggdrasil".
 func ExtensionLabel(ext string) string {
 	switch ext {
+	case "ts":
+		return "Tailscale"
 	case "cf":
 		return "Cloudflare Tunnel"
 	case "tor":
 		return "Tor onion service proxy"
 	case "i2p":
 		return "I2P router + eepsite proxy"
-	case "yggdrasil":
+	case "ygg":
 		return "Yggdrasil mesh node"
 	case "ipfs":
 		return "IPFS Kubo node"

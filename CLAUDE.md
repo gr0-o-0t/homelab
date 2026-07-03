@@ -92,14 +92,19 @@ homelab ext status [ext]                           # show container status for a
 homelab ext logs [ext]                             # stream logs for all or one extension
 homelab ext start [ext]                            # start extension container(s)
 homelab ext stop [ext]                             # stop extension container(s)
+```
 
-homelab ext cf route add <service>                 # add Cloudflare DNS route
-homelab ext cf route rm <service>                  # remove Cloudflare DNS route
-homelab ext ipfs gateway enable                    # enable IPFS Gateway Caddy route
-homelab ext ipfs gateway disable                   # disable IPFS Gateway Caddy route
-homelab ext i2p <status|logs|list>                 # i2pd router management
-homelab ext tor <status|logs|list>                 # Tor onion service management
-homelab ext ygg <status|logs|list>                 # Yggdrasil mesh management
+Extension-specific management (DNS routes, IPFS gateway, per-layer status/logs)
+lives under each extension's own top-level command, not under `ext`:
+
+```bash
+homelab cf route add <service>                     # add Cloudflare DNS route
+homelab cf route rm <service>                      # remove Cloudflare DNS route
+homelab ipfs gateway enable                        # enable IPFS Gateway Caddy route
+homelab ipfs gateway disable                       # disable IPFS Gateway Caddy route
+homelab i2p <status|logs|list>                     # i2pd router management
+homelab tor <status|logs|list>                      # Tor onion service management
+homelab ygg <status|logs|list>                      # Yggdrasil mesh management
 ```
 
 ## Architecture

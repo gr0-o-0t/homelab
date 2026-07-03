@@ -49,9 +49,14 @@ Commands:
   ext start [ext]          Start extension containers
   ext stop [ext]           Stop extension containers
 
-Extension-specific subcommands:
-  ext cf route             Manage Cloudflare DNS routes
-  ext ipfs gateway         Manage IPFS Gateway Caddy route
+Extension-specific management (Cloudflare DNS routes, IPFS gateway, per-layer
+status/logs) lives under each extension's own top-level command, not under
+"ext":
+  homelab cf route add <svc>     Add a Cloudflare DNS route
+  homelab ipfs gateway enable    Enable the IPFS Gateway Caddy route
+  homelab tor status             Tor-specific status
+  homelab i2p status             I2P-specific status
+  homelab ygg status             Yggdrasil-specific status
 
 Service-level exposure is managed via the root enable/disable command:
   homelab enable <svc> --i2p    expose via I2P eepsite
@@ -84,16 +89,10 @@ var extListCmd = &cobra.Command{
 		fmt.Printf("\n%s\n\n", styles.Header.Render("Network Extensions"))
 
 		all := config.AllExtensions()
-		enabled := make(map[string]bool)
-		if cfg != nil {
-			for _, e := range cfg.Extensions {
-				enabled[e] = true
-			}
-		}
 
 		for _, name := range all {
 			label := config.ExtensionLabel(name)
-			if enabled[name] {
+			if hasResolvedExtension(cfg, name) {
 				fmt.Printf("  %s  %-12s  %s\n",
 					styles.Success.Render("✓"),
 					styles.Bold.Render(name),
@@ -307,8 +306,10 @@ func init() {
 		extStopCmd,
 	)
 
-	// Register full per-layer commands at root level (replaces ext hub).
-	// extCmd is kept for source backward compat but not registered on root.
+	// Register full per-layer commands at root level for extension-specific
+	// subcommands (route management, per-layer status/logs, etc.) alongside
+	// the "ext" hub for cross-extension list/status/logs/start/stop.
+	rootCmd.AddCommand(extCmd)
 	rootCmd.AddCommand(cfCmd)
 	rootCmd.AddCommand(torCmd)
 	rootCmd.AddCommand(i2pCmd)
