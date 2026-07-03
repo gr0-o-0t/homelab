@@ -37,38 +37,68 @@ func IsSecret(name string) bool {
 // Use Open to create one; all methods are safe to call on a nil Manager
 // (they become no-ops that return empty strings).
 type Manager struct {
-	ring keyring.Keyring
+	ring    keyring.Keyring
+	Backend keyring.BackendType // which backend actually got selected
 }
 
-// Open opens the best available keyring backend for the current platform.
+// defaultBackends is the fallback priority list, tried one at a time so the
+// caller can observe which one actually won (the keyring library gives no
+// way to introspect this when handed the whole list at once).
 //
 // Backend priority (Linux): SecretService → KWallet → Pass → encrypted file.
 // Backend priority (macOS): Keychain → encrypted file.
 // Backend priority (Windows): Windows Credential Store → encrypted file.
+var defaultBackends = []keyring.BackendType{
+	keyring.SecretServiceBackend,
+	keyring.KWalletBackend,
+	keyring.PassBackend,
+	keyring.KeychainBackend,
+	keyring.WinCredBackend,
+	keyring.FileBackend,
+}
+
+// Open opens the best available keyring backend for the current platform.
 //
 // The file backend stores items at ~/.config/homelab/secrets/ using NaCl
 // secretbox encryption. The passphrase is derived from /etc/machine-id so
-// it is tied to the specific host without requiring user interaction.
+// it is tied to the specific host without requiring user interaction. Since
+// /etc/machine-id is world-readable by design, this backend is a weaker
+// fallback than a real OS keyring — Open logs a warning whenever it's the
+// one that ends up being used, so a silent downgrade (e.g. no dbus session
+// in a plain SSH session) is at least visible.
 func Open() (*Manager, error) {
 	pass, _ := machinePassphrase()
-
-	ring, err := keyring.Open(keyring.Config{
-		ServiceName: "homelab",
-		AllowedBackends: []keyring.BackendType{
-			keyring.SecretServiceBackend,
-			keyring.KWalletBackend,
-			keyring.PassBackend,
-			keyring.KeychainBackend,
-			keyring.WinCredBackend,
-			keyring.FileBackend,
-		},
-		FileDir:          ExpandHome("~/.config/homelab/secrets"),
-		FilePasswordFunc: keyring.FixedStringPrompt(pass),
-	})
+	m, err := openBackends(defaultBackends, ExpandHome("~/.config/homelab/secrets"), pass)
 	if err != nil {
-		return nil, fmt.Errorf("open keyring: %w", err)
+		return nil, err
 	}
-	return &Manager{ring: ring}, nil
+	if m.Backend == keyring.FileBackend {
+		fmt.Fprintln(os.Stderr, "warning: no OS keyring available — secrets are stored in an encrypted file "+
+			"(~/.config/homelab/secrets) whose passphrase is derived from /etc/machine-id, which is "+
+			"world-readable by design. This is weaker than a real OS keyring.")
+	}
+	return m, nil
+}
+
+// openBackends tries each backend in order, one at a time, and keeps the
+// first that succeeds — functionally identical to passing the whole list to
+// a single keyring.Open call, but lets the caller see which one won.
+func openBackends(backends []keyring.BackendType, fileDir, pass string) (*Manager, error) {
+	var lastErr error
+	for _, b := range backends {
+		ring, err := keyring.Open(keyring.Config{
+			ServiceName:      "homelab",
+			AllowedBackends:  []keyring.BackendType{b},
+			FileDir:          fileDir,
+			FilePasswordFunc: keyring.FixedStringPrompt(pass),
+		})
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		return &Manager{ring: ring, Backend: b}, nil
+	}
+	return nil, fmt.Errorf("open keyring: no backend available: %w", lastErr)
 }
 
 // RootKey returns the keyring item key for a root-level secret.
