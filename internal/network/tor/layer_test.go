@@ -30,22 +30,9 @@ func TestLayer_CaddyConfigDir(t *testing.T) {
 	assert.Equal(t, "/home/user/.config/homelab/caddy/conf.d-tor", dir)
 }
 
-func TestLayer_Enable_WritesCaddyConfig(t *testing.T) {
-	root := t.TempDir()
-	l := newForTest(root, noopReload)
-
-	svcName := "gitea"
-	ports := []network.PortSelection{{Name: "web", Port: 3000, Protocol: "tcp"}}
-
-	err := l.Enable(svcName, svcName, network.ServiceInfo{}, ports)
-	require.NoError(t, err)
-
-	caddyPath := filepath.Join(root, "caddy", "conf.d-tor", svcName+".conf")
-	data, err := os.ReadFile(caddyPath)
-	require.NoError(t, err, "Caddy config should exist")
-	assert.Contains(t, string(data), "gitea.onion")
-	assert.Contains(t, string(data), "reverse_proxy gitea:3000")
-}
+// Caddy config writing/removal for tor is owned entirely by
+// internal/configgen now (see cmd/enable.go, cmd/disable.go). Enable/Disable
+// here only manage torrc.d, the hidden-service directory, and the reload.
 
 func TestLayer_Enable_WritesTorrcConfig(t *testing.T) {
 	root := t.TempDir()
@@ -78,12 +65,8 @@ func TestLayer_Disable_RemovesConfigs(t *testing.T) {
 
 	require.NoError(t, l.Disable("gitea"))
 
-	caddyPath := filepath.Join(root, "caddy", "conf.d-tor", "gitea.conf")
-	_, err := os.Stat(caddyPath)
-	assert.True(t, os.IsNotExist(err), "Caddy config should be removed")
-
 	torrcPath := filepath.Join(root, "tor", "torrc.d", "gitea.conf")
-	_, err = os.Stat(torrcPath)
+	_, err := os.Stat(torrcPath)
 	assert.True(t, os.IsNotExist(err), "Torrc config should be removed")
 }
 
@@ -93,18 +76,4 @@ func TestLayer_Disable_Idempotent(t *testing.T) {
 
 	err := l.Disable("nonexistent")
 	assert.NoError(t, err, "Disable should be idempotent")
-}
-
-func TestLayer_GenerateCaddyBlock(t *testing.T) {
-	root := t.TempDir()
-	l := newForTest(root, noopReload)
-
-	err := l.Enable("test", "test", network.ServiceInfo{},
-		[]network.PortSelection{{Name: "web", Port: 8080, Protocol: "tcp"}})
-	require.NoError(t, err)
-
-	data, err := os.ReadFile(filepath.Join(root, "caddy", "conf.d-tor", "test.conf"))
-	require.NoError(t, err)
-	assert.Contains(t, string(data), "test.onion")
-	assert.Contains(t, string(data), "reverse_proxy test:8080")
 }

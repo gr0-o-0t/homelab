@@ -43,14 +43,14 @@ func runDelete(_ *cobra.Command, args []string) error {
 	fmt.Printf("  %s  Removing network config…\n", styles.Muted.Render("→"))
 
 	// Private tailnet
-	_ = configgen.RemoveFile(root, "private", svcName, "")
+	_ = configgen.RemoveAllPortFiles(root, "private", svcName)
 	_ = caddy.New(root).Disable(svcName)
 
 	// Extension layers
-	_ = configgen.RemoveFile(root, "cf", svcName, "")
-	_ = configgen.RemoveFile(root, "i2p", svcName, "")
-	_ = configgen.RemoveFile(root, "tor", svcName, "")
-	_ = configgen.RemoveFile(root, "ygg", svcName, "")
+	_ = configgen.RemoveAllPortFiles(root, "cf", svcName)
+	_ = configgen.RemoveAllPortFiles(root, "i2p", svcName)
+	_ = configgen.RemoveAllPortFiles(root, "tor", svcName)
+	_ = configgen.RemoveAllPortFiles(root, "ygg", svcName)
 
 	// Remove I2P tunnel
 	_ = RemoveI2PTunnel(root, svcName)

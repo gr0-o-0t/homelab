@@ -83,7 +83,7 @@ func runDisable(cmd *cobra.Command, args []string) error {
 
 	// Extension layers (via registry for extension-specific tunnel config)
 	if disableCf {
-		if err := configgen.RemoveFile(root, "cf", svcName, ""); err != nil {
+		if err := configgen.RemoveAllPortFiles(root, "cf", svcName); err != nil {
 			return fmt.Errorf("cf: %w", err)
 		}
 		if layer, ok := extRegistry().Get("cf"); ok {
@@ -92,7 +92,7 @@ func runDisable(cmd *cobra.Command, args []string) error {
 		fmt.Printf("  %s  Cloudflare: removed\n", styles.Warning.Render("→"))
 	}
 	if disableI2P {
-		if err := configgen.RemoveFile(root, "i2p", svcName, ""); err != nil {
+		if err := configgen.RemoveAllPortFiles(root, "i2p", svcName); err != nil {
 			return fmt.Errorf("i2p: %w", err)
 		}
 		if layer, ok := extRegistry().Get("i2p"); ok {
@@ -101,7 +101,7 @@ func runDisable(cmd *cobra.Command, args []string) error {
 		fmt.Printf("  %s  I2P: removed\n", styles.Warning.Render("→"))
 	}
 	if disableTor {
-		if err := configgen.RemoveFile(root, "tor", svcName, ""); err != nil {
+		if err := configgen.RemoveAllPortFiles(root, "tor", svcName); err != nil {
 			return fmt.Errorf("tor: %w", err)
 		}
 		if layer, ok := extRegistry().Get("tor"); ok {
@@ -110,7 +110,7 @@ func runDisable(cmd *cobra.Command, args []string) error {
 		fmt.Printf("  %s  Tor: removed\n", styles.Warning.Render("→"))
 	}
 	if disableYgg {
-		if err := configgen.RemoveFile(root, "ygg", svcName, ""); err != nil {
+		if err := configgen.RemoveAllPortFiles(root, "ygg", svcName); err != nil {
 			return fmt.Errorf("ygg: %w", err)
 		}
 		if layer, ok := extRegistry().Get("ygg"); ok {
@@ -139,7 +139,7 @@ func disablePrivate(root, svcName string) error {
 	// Try old symlink removal first (may not exist → generated config fallback)
 	if err := caddy.New(root).Disable(svcName); err != nil {
 		// No symlink — try removing any auto-generated config
-		if err := configgen.RemoveFile(root, "private", svcName, ""); err != nil {
+		if err := configgen.RemoveAllPortFiles(root, "private", svcName); err != nil {
 			return fmt.Errorf("service %q has no active private route", svcName)
 		}
 	}

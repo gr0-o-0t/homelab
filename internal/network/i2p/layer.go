@@ -77,36 +77,22 @@ func (l *Layer) Status() network.Status {
 
 // ── Service exposure ─────────────────────────────────────────────────────────
 
-// Enable writes Caddy config to conf.d-i2p/ AND appends an I2P tunnel section
-// to tunnels.conf, then reloads i2pd. The Caddy block uses host override so
-// Caddy routes by Host header.
+// Enable appends an I2P tunnel section to tunnels.conf for the service, then
+// reloads i2pd. Caddy config (host-override routing to Caddy) is written
+// separately by internal/configgen — see cmd/enable.go.
 func (l *Layer) Enable(svcName, displayName string, info network.ServiceInfo, ports []network.PortSelection) error {
 	for _, port := range ports {
-		// 1. Write Caddy config to conf.d-i2p/
-		caddyBlock := l.caddyBlock(displayName, svcName, port)
-		if err := l.writeCaddyConfig(svcName, port.Name, caddyBlock); err != nil {
-			return fmt.Errorf("writing caddy config: %w", err)
-		}
-
-		// 2. Append I2P tunnel to tunnels.conf
 		if err := l.appendTunnel(svcName, port.Port); err != nil {
 			return fmt.Errorf("writing i2p tunnel: %w", err)
 		}
 	}
-
-	// 3. Reload i2pd
 	return l.reload()
 }
 
-// Disable removes both Caddy config and I2P tunnel config for the service, then reloads.
+// Disable removes the I2P tunnel config for the service and reloads. Caddy
+// config removal is handled separately by internal/configgen.
 func (l *Layer) Disable(svcName string) error {
-	// Remove Caddy config
-	caddyDir := l.CaddyConfigDir(l.repoRoot)
-	_ = os.Remove(filepath.Join(caddyDir, svcName+".conf"))
-
-	// Remove I2P tunnel from tunnels.conf
 	_ = l.removeTunnel(svcName)
-
 	return l.reload()
 }
 
@@ -114,23 +100,6 @@ func (l *Layer) Disable(svcName string) error {
 
 func (l *Layer) CaddyConfigDir(configRoot string) string {
 	return filepath.Join(configRoot, "caddy", "conf.d-i2p")
-}
-
-// ── Caddy block generation ────────────────────────────────────────────────────
-
-func (l *Layer) caddyBlock(displayName, svcName string, port network.PortSelection) string {
-	return fmt.Sprintf("%s.i2p {\n    reverse_proxy %s:%d\n}\n", displayName, svcName, port.Port)
-}
-
-func (l *Layer) writeCaddyConfig(svcName, portName, content string) error {
-	dir := l.CaddyConfigDir(l.repoRoot)
-	if err := os.MkdirAll(dir, 0o750); err != nil {
-		return fmt.Errorf("creating caddy config dir: %w", err)
-	}
-
-	// For i2p, use just the service name as filename (no port suffix)
-	path := filepath.Join(dir, svcName+".conf")
-	return os.WriteFile(path, []byte(content), 0o600)
 }
 
 // ── I2P-specific helpers ─────────────────────────────────────────────────────

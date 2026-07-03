@@ -30,20 +30,9 @@ func TestLayer_CaddyConfigDir(t *testing.T) {
 	assert.Equal(t, "/home/user/.config/homelab/caddy/conf.d-i2p", dir)
 }
 
-func TestLayer_Enable_WritesCaddyConfig(t *testing.T) {
-	root := t.TempDir()
-	l := newForTest(root, noopReload)
-
-	err := l.Enable("gitea", "gitea", network.ServiceInfo{},
-		[]network.PortSelection{{Name: "web", Port: 3000, Protocol: "tcp"}})
-	require.NoError(t, err)
-
-	caddyPath := filepath.Join(root, "caddy", "conf.d-i2p", "gitea.conf")
-	data, err := os.ReadFile(caddyPath)
-	require.NoError(t, err)
-	assert.Contains(t, string(data), "gitea.i2p")
-	assert.Contains(t, string(data), "reverse_proxy gitea:3000")
-}
+// Caddy config writing/removal for i2p is owned entirely by
+// internal/configgen now (see cmd/enable.go, cmd/disable.go). Enable/Disable
+// here only manage tunnels.conf and the reload.
 
 func TestLayer_Enable_WritesTunnelConfig(t *testing.T) {
 	root := t.TempDir()
@@ -86,9 +75,6 @@ func TestLayer_Disable_RemovesConfigs(t *testing.T) {
 		[]network.PortSelection{{Name: "web", Port: 3000, Protocol: "tcp"}}))
 
 	require.NoError(t, l.Disable("gitea"))
-
-	_, err := os.Stat(filepath.Join(root, "caddy", "conf.d-i2p", "gitea.conf"))
-	assert.True(t, os.IsNotExist(err), "Caddy config should be removed")
 
 	tunPath := filepath.Join(root, "i2p", "tunnels.conf")
 	data, err := os.ReadFile(tunPath)

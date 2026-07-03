@@ -218,17 +218,29 @@ func buildI2PBlock(displayName, svcName string, port PortSelection) string {
 }
 
 func buildTorBlock(displayName, svcName string, port PortSelection) string {
+	sub := portSubdomain(displayName, port.Name)
+	host := displayName
+	if sub != "" {
+		host = sub + "." + host
+	}
+
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s.onion {\n", displayName)
+	fmt.Fprintf(&b, "%s.onion {\n", host)
 	fmt.Fprintf(&b, "    reverse_proxy %s:%d\n", svcName, port.Port)
 	b.WriteString("}\n")
 	return b.String()
 }
 
 func buildYggBlock(displayName, svcName string, port PortSelection) string {
+	sub := portSubdomain(displayName, port.Name)
+	host := displayName
+	if sub != "" {
+		host = sub + "." + host
+	}
+
 	var b strings.Builder
-	fmt.Fprintf(&b, "# Yggdrasil route: %s → %s:%d\n", displayName, svcName, port.Port)
-	fmt.Fprintf(&b, "%s.ygg {\n", displayName)
+	fmt.Fprintf(&b, "# Yggdrasil route: %s → %s:%d\n", host, svcName, port.Port)
+	fmt.Fprintf(&b, "%s.ygg {\n", host)
 	fmt.Fprintf(&b, "    reverse_proxy %s:%d\n", svcName, port.Port)
 	b.WriteString("}\n")
 	return b.String()
@@ -326,6 +338,20 @@ func ConfigDir(configRoot, ext string) string {
 	return filepath.Join(configRoot, "caddy", "conf.d-"+ext)
 }
 
+// blockFilename returns the filename (without directory or extension) for a
+// generated Caddy config block. Applied uniformly across all 5 extension
+// types — a service with multiple non-default ports gets one file per port
+// (<service>-<port>.conf); the default/only port gets <service>.conf. This
+// must stay consistent for every extension: a special-cased "always
+// <service>.conf" for private/cf here previously caused each port's write to
+// silently overwrite the last for any multi-port service.
+func blockFilename(svcName, portName string) string {
+	if portName != "" && portName != "default" && portName != "web" {
+		return svcName + "-" + portName
+	}
+	return svcName
+}
+
 // WriteFile writes a generated Caddy config block to the extension-specific conf.d directory.
 func WriteFile(configRoot, ext, svcName, portName, content string) error {
 	dir := ConfigDir(configRoot, ext)
@@ -333,34 +359,42 @@ func WriteFile(configRoot, ext, svcName, portName, content string) error {
 		return fmt.Errorf("creating %s: %w", dir, err)
 	}
 
-	// File name pattern: <service>-<port>.conf or <service>.conf for default port
-	filename := svcName
-	if portName != "" && portName != "default" && portName != "web" {
-		filename = svcName + "-" + portName
-	}
-	// For private/cf, don't add port suffix to keep backward compat
-	if ext == "private" || ext == "cf" {
-		filename = svcName
-	}
-
-	path := filepath.Join(dir, filename+".conf")
+	path := filepath.Join(dir, blockFilename(svcName, portName)+".conf")
 	return os.WriteFile(path, []byte(content), 0o600)
 }
 
 // RemoveFile removes a generated Caddy config file for the given service/extension/port.
 func RemoveFile(configRoot, ext, svcName, portName string) error {
 	dir := ConfigDir(configRoot, ext)
-	filename := svcName
-	if portName != "" && portName != "default" && portName != "web" {
-		filename = svcName + "-" + portName
-	}
-	if ext == "private" || ext == "cf" {
-		filename = svcName
-	}
-	path := filepath.Join(dir, filename+".conf")
+	path := filepath.Join(dir, blockFilename(svcName, portName)+".conf")
 	err := os.Remove(path)
 	if os.IsNotExist(err) {
 		return nil // already removed
 	}
 	return err
+}
+
+// RemoveAllPortFiles removes the generated Caddy config for every port the
+// service declares under the given extension. Since a multi-port service
+// gets one generated file per port (see blockFilename), removing only the
+// default-named file (portName "") would orphan the rest. Falls back to a
+// single default-name removal for services with no declared ports (legacy
+// static-caddy.conf services, or a config.yaml with none at all) — that's
+// the only file that could exist for them.
+func RemoveAllPortFiles(configRoot, ext, svcName string) error {
+	info, err := LoadServiceInfo(configRoot, svcName)
+	if err != nil || len(info.Ports) == 0 {
+		return RemoveFile(configRoot, ext, svcName, "")
+	}
+	ports, err := ResolvePorts(info.Ports, nil)
+	if err != nil {
+		return RemoveFile(configRoot, ext, svcName, "")
+	}
+	var firstErr error
+	for _, p := range ports {
+		if err := RemoveFile(configRoot, ext, svcName, p.Name); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
 }

@@ -71,41 +71,25 @@ func (l *Layer) Status() network.Status {
 
 // ── Service exposure ─────────────────────────────────────────────────────────
 
-// Enable writes Caddy config to conf.d-tor/ AND torrc.d config for the service,
-// then reloads tor. The Caddy block routes <displayName>.onion → svcName:<port>.
+// Enable writes torrc.d config for the service and reloads tor. Caddy config
+// (routing <displayName>.onion → svcName:<port>) is written separately by
+// internal/configgen — see cmd/enable.go.
 func (l *Layer) Enable(svcName, displayName string, info network.ServiceInfo, ports []network.PortSelection) error {
 	for _, port := range ports {
-		// 1. Write Caddy config to conf.d-tor/
-		caddyBlock := l.caddyBlock(displayName, svcName, port)
-		if err := l.writeCaddyConfig(svcName, port.Name, caddyBlock); err != nil {
-			return fmt.Errorf("writing caddy config: %w", err)
-		}
-
-		// 2. Write torrc.d config
 		if err := l.appendTorService(svcName, port.Port); err != nil {
 			return fmt.Errorf("writing torrc config: %w", err)
 		}
 	}
-
-	// 3. Reload tor to pick up new configs
 	return l.reload()
 }
 
-// Disable removes both Caddy config and torrc.d config for the service, then reloads.
+// Disable removes torrc.d config for the service and reloads. Caddy config
+// removal is handled separately by internal/configgen.
 func (l *Layer) Disable(svcName string) error {
-	// Remove Caddy config
-	caddyDir := l.CaddyConfigDir(l.repoRoot)
-	caddyPath := filepath.Join(caddyDir, svcName+".conf")
-	if err := os.Remove(caddyPath); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("removing caddy config: %w", err)
-	}
-
-	// Remove torrc.d config
 	confPath := l.torServicePath(svcName)
 	if err := os.Remove(confPath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("removing torrc config: %w", err)
 	}
-
 	return l.reload()
 }
 
@@ -113,23 +97,6 @@ func (l *Layer) Disable(svcName string) error {
 
 func (l *Layer) CaddyConfigDir(configRoot string) string {
 	return filepath.Join(configRoot, "caddy", "conf.d-tor")
-}
-
-// ── Caddy block generation ────────────────────────────────────────────────────
-
-func (l *Layer) caddyBlock(displayName, svcName string, port network.PortSelection) string {
-	return fmt.Sprintf("%s.onion {\n    reverse_proxy %s:%d\n}\n", displayName, svcName, port.Port)
-}
-
-func (l *Layer) writeCaddyConfig(svcName, portName, content string) error {
-	dir := l.CaddyConfigDir(l.repoRoot)
-	if err := os.MkdirAll(dir, 0o750); err != nil {
-		return fmt.Errorf("creating caddy config dir: %w", err)
-	}
-
-	// For tor, use just the service name as filename (no port suffix)
-	path := filepath.Join(dir, svcName+".conf")
-	return os.WriteFile(path, []byte(content), 0o600)
 }
 
 // ── Tor-specific helpers ─────────────────────────────────────────────────────

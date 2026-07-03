@@ -4,8 +4,6 @@
 package cf
 
 import (
-	"fmt"
-	"os"
 	"path/filepath"
 
 	"github.com/groot/homelab/internal/network"
@@ -54,39 +52,20 @@ func (l *Layer) Status() network.Status {
 	return network.Status{ContainerState: state}
 }
 
+// Enable and Disable are no-ops: cf has no extension-native state beyond
+// Caddy routing, and Caddy config for every extension (including cf) is now
+// written/removed solely by internal/configgen — see cmd/enable.go and
+// cmd/disable.go. Kept on the interface for registry/status/logs use.
 func (l *Layer) Enable(svcName, displayName string, info network.ServiceInfo, ports []network.PortSelection) error {
-	for _, port := range ports {
-		caddyBlock := l.caddyBlock(displayName, svcName, port)
-		if err := l.writeCaddyConfig(svcName, port.Name, caddyBlock); err != nil {
-			return fmt.Errorf("writing caddy config: %w", err)
-		}
-	}
 	return nil
 }
 
 func (l *Layer) Disable(svcName string) error {
-	caddyDir := l.CaddyConfigDir(l.repoRoot)
-	_ = os.Remove(filepath.Join(caddyDir, svcName+".conf"))
 	return nil
 }
 
 func (l *Layer) CaddyConfigDir(configRoot string) string {
 	return filepath.Join(configRoot, "caddy", "conf.d-cf")
-}
-
-// Caddy block for CF uses http:// prefix (TLS terminated at Cloudflare edge).
-func (l *Layer) caddyBlock(displayName, svcName string, port network.PortSelection) string {
-	domain := fmt.Sprintf("%s.{$DOMAIN}", displayName)
-	return fmt.Sprintf("http://%s {\n    reverse_proxy %s:%d\n}\n", domain, svcName, port.Port)
-}
-
-func (l *Layer) writeCaddyConfig(svcName, portName, content string) error {
-	dir := l.CaddyConfigDir(l.repoRoot)
-	if err := os.MkdirAll(dir, 0o750); err != nil {
-		return fmt.Errorf("creating caddy config dir: %w", err)
-	}
-	path := filepath.Join(dir, svcName+".conf")
-	return os.WriteFile(path, []byte(content), 0o600)
 }
 
 func (l *Layer) env() map[string]string {

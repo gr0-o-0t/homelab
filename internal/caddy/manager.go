@@ -113,9 +113,11 @@ func (m *Manager) IsPublicEnabled(name string) (bool, error) {
 // (written by configgen.WriteFile) and legacy symlinks. NotFound errors
 // are silently ignored — the operation is idempotent.
 func (m *Manager) DisableBoth(name string) error {
-	// Remove generated config files (modern path).
-	_ = configgen.RemoveFile(m.RepoRoot, "private", name, "")
-	_ = configgen.RemoveFile(m.RepoRoot, "cf", name, "")
+	// Remove generated config files (modern path) — a multi-port service can
+	// have one file per port, so this must remove all of them, not just the
+	// default-named one.
+	_ = configgen.RemoveAllPortFiles(m.RepoRoot, "private", name)
+	_ = configgen.RemoveAllPortFiles(m.RepoRoot, "cf", name)
 
 	// Also try legacy symlink removal (backward compat).
 	privateLink := filepath.Join(m.RepoRoot, "caddy", "conf.d", name+".conf")

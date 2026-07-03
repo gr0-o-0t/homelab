@@ -29,16 +29,9 @@ func TestLayer_CaddyConfigDir(t *testing.T) {
 	assert.Equal(t, "/home/user/.config/homelab/caddy/conf.d-ygg", l.CaddyConfigDir("/home/user/.config/homelab"))
 }
 
-func TestLayer_Enable_WritesCaddyConfig(t *testing.T) {
-	root := t.TempDir()
-	l := newForTest(root, noopRestart)
-	err := l.Enable("gitea", "gitea", network.ServiceInfo{},
-		[]network.PortSelection{{Name: "web", Port: 3000, Protocol: "tcp"}})
-	require.NoError(t, err)
-	data, _ := os.ReadFile(filepath.Join(root, "caddy", "conf.d-ygg", "gitea.conf"))
-	assert.Contains(t, string(data), "gitea.ygg")
-	assert.Contains(t, string(data), "reverse_proxy gitea:3000")
-}
+// Caddy config writing/removal for ygg is owned entirely by
+// internal/configgen now (see cmd/enable.go, cmd/disable.go). Enable/Disable
+// here only manage socat.d forwarders and the restart.
 
 func TestLayer_Enable_WritesForwarder(t *testing.T) {
 	root := t.TempDir()
@@ -51,16 +44,38 @@ func TestLayer_Enable_WritesForwarder(t *testing.T) {
 	assert.Contains(t, string(data), "TARGET=gitea:3000")
 }
 
+func TestLayer_Enable_MultiplePorts_SeparateForwarderFiles(t *testing.T) {
+	root := t.TempDir()
+	l := newForTest(root, noopRestart)
+	err := l.Enable("gitea", "gitea", network.ServiceInfo{},
+		[]network.PortSelection{
+			{Name: "web", Port: 3000, Protocol: "tcp"},
+			{Name: "ssh", Port: 2222, Protocol: "tcp"},
+		})
+	require.NoError(t, err)
+
+	web, err := os.ReadFile(filepath.Join(root, "yggdrasil", "socat.d", "gitea.forward"))
+	require.NoError(t, err, "default-named forward file should exist for the first port")
+	assert.Contains(t, string(web), "TARGET=gitea:3000")
+
+	ssh, err := os.ReadFile(filepath.Join(root, "yggdrasil", "socat.d", "gitea-ssh.forward"))
+	require.NoError(t, err, "second port should get its own forward file instead of overwriting the first")
+	assert.Contains(t, string(ssh), "TARGET=gitea:2222")
+}
+
 func TestLayer_Disable_RemovesConfigs(t *testing.T) {
 	root := t.TempDir()
 	l := newForTest(root, noopRestart)
 	require.NoError(t, l.Enable("gitea", "gitea", network.ServiceInfo{},
-		[]network.PortSelection{{Name: "web", Port: 3000, Protocol: "tcp"}}))
+		[]network.PortSelection{
+			{Name: "web", Port: 3000, Protocol: "tcp"},
+			{Name: "ssh", Port: 2222, Protocol: "tcp"},
+		}))
 	require.NoError(t, l.Disable("gitea"))
-	_, err := os.Stat(filepath.Join(root, "caddy", "conf.d-ygg", "gitea.conf"))
-	assert.True(t, os.IsNotExist(err))
-	_, err = os.Stat(filepath.Join(root, "yggdrasil", "socat.d", "gitea.forward"))
-	assert.True(t, os.IsNotExist(err))
+	_, err := os.Stat(filepath.Join(root, "yggdrasil", "socat.d", "gitea.forward"))
+	assert.True(t, os.IsNotExist(err), "default forward file should be removed")
+	_, err = os.Stat(filepath.Join(root, "yggdrasil", "socat.d", "gitea-ssh.forward"))
+	assert.True(t, os.IsNotExist(err), "per-port forward file should also be removed")
 }
 
 func TestLayer_Disable_Idempotent(t *testing.T) {
