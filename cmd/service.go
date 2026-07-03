@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -775,9 +777,29 @@ func runDashboardTUI(root string) error {
 }
 
 // runLogTUI launches the fullscreen log viewer for a single service.
+//
+// The in-app "q"/ctrl+c keypress already cleans up the underlying
+// `docker compose logs -f` process via the model's own Update handling, but
+// that path is only reached through Bubble Tea's terminal raw-mode key
+// capture. A SIGINT/SIGTERM delivered outside that (a `kill <pid>`, a
+// dropped SSH session) bypasses it entirely — Go's default action for those
+// signals is immediate process termination with no cleanup at all. Register
+// our own handler so the child process is still killed and reaped, then let
+// the Program shut down cleanly (restoring the terminal) before exiting.
 func runLogTUI(root, serviceName string) error {
 	model := tuiLogs.New(root, serviceName, buildEnv(root, serviceName))
 	p := tea.NewProgram(model, tea.WithAltScreen())
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
+	go func() {
+		if _, ok := <-sigCh; ok {
+			model.Stop()
+			p.Quit()
+		}
+	}()
+
 	_, err := p.Run()
 	return err
 }

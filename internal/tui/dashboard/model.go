@@ -1108,9 +1108,15 @@ func resolveEnv(fn EnvBuilderFn, name string) map[string]string {
 
 func clip(s string, n int) string {
 	if n <= 0 || len(s) <= n {
+		// len(s) is a byte count, always >= rune count for UTF-8, so passing
+		// here guarantees the rune count is also <= n — safe to return as-is.
 		return s
 	}
-	return s[:n-1] + "…"
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n-1]) + "…"
 }
 
 // stripAnsi removes ANSI escape sequences from log output.

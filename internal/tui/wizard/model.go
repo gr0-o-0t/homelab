@@ -19,6 +19,14 @@ import (
 
 var nameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 
+// containerRe matches Docker's own container-name constraint. Unlike Name
+// (constrained above), Container had no format check at all — it flows
+// unvalidated into docker-compose.yml as both a YAML mapping key and
+// container_name value, and into caddy.conf as a reverse_proxy target, so a
+// value with a space, colon, or slash would produce a corrupt compose file
+// or Caddyfile directive that's only caught later, if at all.
+var containerRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`)
+
 type step int
 
 const (
@@ -232,8 +240,12 @@ func (m Model) validateCurrent() error {
 		}
 
 	case stepContainer:
-		if strings.TrimSpace(m.containerInput.Value()) == "" {
+		container := strings.TrimSpace(m.containerInput.Value())
+		if container == "" {
 			return fmt.Errorf("container name is required")
+		}
+		if !containerRe.MatchString(container) {
+			return fmt.Errorf("use letters, digits, underscores, dots, and hyphens only")
 		}
 
 	case stepPort:

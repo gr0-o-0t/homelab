@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -53,6 +54,19 @@ func New(repoRoot, serviceName string, env map[string]string) Model {
 	}
 }
 
+// Stop terminates the underlying log-stream process. Safe to call more than
+// once (startLogStream's stop closure is itself idempotent) and safe to call
+// concurrently with a running Program — exported so callers can hook OS
+// signal handling (SIGINT/SIGTERM delivered outside the terminal's raw-mode
+// key capture, e.g. `kill <pid>` or a dropped SSH session) to guarantee the
+// child process is killed even when Bubble Tea's own shutdown doesn't route
+// through this model's Update (only the in-app "q"/ctrl+c keypress does).
+func (m Model) Stop() {
+	if m.stopFn != nil {
+		m.stopFn()
+	}
+}
+
 func (m Model) Init() tea.Cmd {
 	return waitForLine(m.logCh)
 }
@@ -90,12 +104,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewport.GotoTop()
 
 		default:
-			// Any manual scroll disables auto-follow.
-			atBottom := m.viewport.AtBottom()
+			// Any manual scroll disables auto-follow. Check AtBottom() after
+			// applying the keystroke, not before — otherwise scrolling away
+			// from the bottom doesn't disable follow until the *next*
+			// keystroke, since the pre-scroll position was still "at bottom".
 			var vpCmd tea.Cmd
 			m.viewport, vpCmd = m.viewport.Update(msg)
 			cmds = append(cmds, vpCmd)
-			if !atBottom {
+			if !m.viewport.AtBottom() {
 				m.following = false
 			}
 		}
@@ -215,12 +231,22 @@ func startLogStream(repoRoot, serviceName string, env map[string]string) (<-chan
 			return
 		}
 
+		// cmd.Wait() must be called exactly once. The scan loop below calls
+		// it on the normal exit path (stdout EOF); the kill goroutine calls
+		// it after forcing termination. sync.Once makes whichever happens
+		// first the one that actually reaps the process, instead of the
+		// done-channel exit path (select's <-done case, below) skipping
+		// Wait() entirely and leaving a zombie.
+		var waitOnce sync.Once
+		reap := func() { waitOnce.Do(func() { _ = cmd.Wait() }) }
+
 		// Kill process when stop is called.
 		go func() {
 			<-done
 			if cmd.Process != nil {
 				_ = cmd.Process.Kill()
 			}
+			reap()
 		}()
 
 		scanner := bufio.NewScanner(stdout)
@@ -232,7 +258,7 @@ func startLogStream(repoRoot, serviceName string, env map[string]string) (<-chan
 				return
 			}
 		}
-		_ = cmd.Wait()
+		reap()
 	}()
 
 	return ch, func() {

@@ -139,6 +139,26 @@ func Test_Wizard_ContainerRequired(t *testing.T) {
 	assert.Contains(t, m2.errMsg, "required")
 }
 
+// Regression: Container previously had no format check at all (unlike
+// Name), so a value like "app:1" or one containing a space flowed straight
+// into the generated docker-compose.yml (as a YAML key and container_name)
+// and caddy.conf (as a reverse_proxy target), producing a corrupt file
+// instead of a validation error at input time.
+func Test_Wizard_ContainerRejectsInvalidCharacters(t *testing.T) {
+	for _, bad := range []string{"app:1", "my app", "app/name", "app@host"} {
+		m := newTestModel("")
+		m.width, m.height = 80, 24
+		m.nameInput.SetValue("paperless")
+		m.step = stepContainer
+		m.containerInput.SetValue(bad)
+
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		m2 := updated.(Model)
+		assert.Equal(t, stepContainer, m2.step, "invalid container %q should not advance", bad)
+		assert.NotEmpty(t, m2.errMsg, "invalid container %q should set an error", bad)
+	}
+}
+
 func Test_Wizard_ContainerAdvances(t *testing.T) {
 	m := newTestModel("")
 	m.width, m.height = 80, 24

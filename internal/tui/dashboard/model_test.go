@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"testing"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/assert"
@@ -415,4 +416,36 @@ func Test_CoreStatusMsg_TorI2pYggIpfsPreserved(t *testing.T) {
 	assert.Equal(t, "exited", m2.core.i2p)
 	assert.Equal(t, "running", m2.core.yggdrasil)
 	assert.Equal(t, "", m2.core.ipfs)
+}
+
+// ── clip ──────────────────────────────────────────────────────────────────────
+
+func Test_Clip_ShorterThanLimit_Unchanged(t *testing.T) {
+	assert.Equal(t, "abc", clip("abc", 10))
+}
+
+func Test_Clip_ASCIITruncation(t *testing.T) {
+	assert.Equal(t, "abcd…", clip("abcdefgh", 5))
+}
+
+// Regression: clip() used to slice by byte index (s[:n-1]), which can cut a
+// multi-byte UTF-8 rune in half. Container names, log lines, and error text
+// can all contain non-ASCII characters.
+func Test_Clip_MultiByteRunes_NotCorrupted(t *testing.T) {
+	s := "café-postgres-container" // "é" is 2 bytes in UTF-8
+	result := clip(s, 5)
+	assert.True(t, utf8.ValidString(result), "clip must not produce invalid UTF-8")
+	assert.Equal(t, "café…", result)
+}
+
+func Test_Clip_EmojiNotCorrupted(t *testing.T) {
+	s := "🎉🎉🎉🎉🎉🎉🎉🎉" // each emoji is a multi-byte rune
+	result := clip(s, 4)
+	assert.True(t, utf8.ValidString(result))
+	assert.Equal(t, "🎉🎉🎉…", result)
+}
+
+func Test_Clip_ZeroOrNegativeLimit_ReturnsUnchanged(t *testing.T) {
+	assert.Equal(t, "abcdef", clip("abcdef", 0))
+	assert.Equal(t, "abcdef", clip("abcdef", -1))
 }
