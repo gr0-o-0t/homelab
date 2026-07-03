@@ -10,6 +10,7 @@ import (
 
 	"github.com/groot/homelab/internal/caddy"
 	"github.com/groot/homelab/internal/config"
+	"github.com/groot/homelab/internal/configgen"
 	"github.com/groot/homelab/internal/diagnostics"
 	"github.com/groot/homelab/internal/docker"
 	"github.com/groot/homelab/internal/run"
@@ -108,7 +109,9 @@ func runDoctor(_ *cobra.Command, args []string) error {
 
 	// Core stack extras — Caddy config validate + Tailscale connectivity
 	if dc != nil {
-		caddyState := dc.ContainerState(context.Background(), "caddy")
+		caddyCtx, caddyCancel := context.WithTimeout(context.Background(), 3*time.Second)
+		caddyState := dc.ContainerState(caddyCtx, "caddy")
+		caddyCancel()
 		if caddyState == containerStateRunning {
 			var buf strings.Builder
 			r := &run.Commander{Stdout: &buf, Stderr: &buf}
@@ -119,7 +122,9 @@ func runDoctor(_ *cobra.Command, args []string) error {
 				pass = false
 			}
 		}
-		tsState := dc.ContainerState(context.Background(), "tailscale")
+		tsCtx, tsCancel := context.WithTimeout(context.Background(), 3*time.Second)
+		tsState := dc.ContainerState(tsCtx, "tailscale")
+		tsCancel()
 		if tsState == containerStateRunning {
 			ip, ok := tailscaleIP()
 			if ok {
@@ -290,14 +295,18 @@ func runServiceDoctorFor(dir, name string, fix bool) bool {
 	renderCheckGroup(diagnostics.RunServiceContainerChecks(name, dc), &pass)
 	renderCheckGroup(diagnostics.RunServiceRoutingChecks(dir, name), &pass)
 
-	// --fix auto-repair for Caddy routes (private only — matches original)
+	// --fix auto-repair for the private Caddy route. Reuses enablePrivate
+	// (cmd/enable.go), which already dispatches correctly between the
+	// legacy static-caddy.conf path and the modern configgen/ports: path —
+	// this used to only handle the legacy path directly, so --fix was a
+	// silent no-op for any service using the modern routing.
 	if !pass && fix {
 		mgr := caddy.New(dir)
 		enabled, _ := mgr.IsEnabled(name)
 		if !enabled {
-			caddyConf := filepath.Join(dir, "services", name, "caddy.conf")
-			if fileExistsAt(caddyConf) {
-				if err := mgr.Enable(name); err == nil {
+			info, err := configgen.LoadServiceInfo(dir, name)
+			if err == nil {
+				if err := enablePrivate(dir, name, info); err == nil {
 					fmt.Printf("  %s  private route re-enabled\n", styles.Success.Render("✓"))
 					pass = true
 				}
