@@ -82,18 +82,18 @@ func (l *Layer) Status() network.Status {
 // separately by internal/configgen — see cmd/enable.go.
 func (l *Layer) Enable(svcName, displayName string, info network.ServiceInfo, ports []network.PortSelection) error {
 	for _, port := range ports {
-		if err := l.appendTunnel(svcName, port.Port); err != nil {
+		if err := l.AppendTunnel(svcName, port.Port); err != nil {
 			return fmt.Errorf("writing i2p tunnel: %w", err)
 		}
 	}
-	return l.reload()
+	return l.Reload()
 }
 
 // Disable removes the I2P tunnel config for the service and reloads. Caddy
 // config removal is handled separately by internal/configgen.
 func (l *Layer) Disable(svcName string) error {
-	_ = l.removeTunnel(svcName)
-	return l.reload()
+	_ = l.RemoveTunnel(svcName)
+	return l.Reload()
 }
 
 // ── Config ────────────────────────────────────────────────────────────────────
@@ -103,29 +103,39 @@ func (l *Layer) CaddyConfigDir(configRoot string) string {
 }
 
 // ── I2P-specific helpers ─────────────────────────────────────────────────────
+//
+// Exported so cmd/i2p.go (the standalone `homelab i2p enable/disable/list`
+// commands) can call these directly instead of maintaining its own copy —
+// two copies previously diverged (one was missing the tunnels.conf
+// directory creation on first use, and they disagreed on whether removing a
+// missing tunnel is an error), which broke the very workflow i2pEnableCmd's
+// own help text suggested (enable via `i2p enable`, then via `enable --i2p`).
 
-func (l *Layer) tunnelsPath() string {
+// TunnelsPath returns the path to i2pd's tunnels.conf.
+func (l *Layer) TunnelsPath() string {
 	return filepath.Join(l.repoRoot, "i2p", "tunnels.conf")
 }
 
-// appendTunnel appends an HTTP tunnel section to tunnels.conf.
-// The tunnel routes .i2p traffic through caddy:80 with hostoverride
-// so Caddy can route by Host header.
-func (l *Layer) appendTunnel(name string, port int) error {
-	tunPath := l.tunnelsPath()
+// AppendTunnel appends an HTTP tunnel section to tunnels.conf, routing
+// <name>.i2p traffic through caddy:80 with hostoverride so Caddy can route
+// by Host header. Idempotent: a tunnel with the same name already present
+// is left as-is rather than erroring, since enabling i2p for a service twice
+// (e.g. once via `homelab i2p enable`, once via `homelab enable --i2p`) is a
+// normal, expected sequence, not a conflict.
+func (l *Layer) AppendTunnel(name string, port int) error {
+	tunPath := l.TunnelsPath()
 
-	// Ensure parent directory exists (like Tor's appendTorService creates torrc.d/)
 	if err := os.MkdirAll(filepath.Dir(tunPath), 0o750); err != nil {
 		return fmt.Errorf("creating i2p config dir: %w", err)
 	}
 
-	existing, err := l.parseTunnels()
+	existing, err := l.ParseTunnels()
 	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("reading tunnels.conf: %w", err)
 	}
 	for _, t := range existing {
 		if t.Name == name {
-			return fmt.Errorf("tunnel for %q already exists in tunnels.conf", name)
+			return nil // already configured
 		}
 	}
 
@@ -143,9 +153,10 @@ func (l *Layer) appendTunnel(name string, port int) error {
 	return nil
 }
 
-// removeTunnel removes a named tunnel section from tunnels.conf.
-func (l *Layer) removeTunnel(name string) error {
-	tunPath := l.tunnelsPath()
+// RemoveTunnel removes a named tunnel section from tunnels.conf.
+// Idempotent: a missing tunnel (or missing tunnels.conf) is not an error.
+func (l *Layer) RemoveTunnel(name string) error {
+	tunPath := l.TunnelsPath()
 
 	data, err := os.ReadFile(tunPath)
 	if err != nil {
@@ -172,9 +183,9 @@ func (l *Layer) removeTunnel(name string) error {
 	return os.WriteFile(tunPath, []byte(strings.Join(newLines, "\n")), 0o600)
 }
 
-// parseTunnels reads and parses tunnels.conf into sections.
-func (l *Layer) parseTunnels() ([]TunnelSection, error) {
-	path := l.tunnelsPath()
+// ParseTunnels reads and parses tunnels.conf into sections.
+func (l *Layer) ParseTunnels() ([]TunnelSection, error) {
+	path := l.TunnelsPath()
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -260,7 +271,8 @@ func sectionRange(lines []string, name string) (int, int, bool) {
 	return start, end, true
 }
 
-func (l *Layer) reload() error {
+// Reload sends SIGHUP to i2pd so it re-reads tunnels.conf.
+func (l *Layer) Reload() error {
 	if l.reloadHook != nil {
 		return l.reloadHook()
 	}

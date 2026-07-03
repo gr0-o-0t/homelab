@@ -53,7 +53,9 @@ func runDelete(_ *cobra.Command, args []string) error {
 	_ = configgen.RemoveAllPortFiles(root, "ygg", svcName)
 
 	// Remove I2P tunnel
-	_ = RemoveI2PTunnel(root, svcName)
+	if l, err := i2pLayer(); err == nil {
+		_ = l.RemoveTunnel(svcName)
+	}
 	// Remove Tor service
 	_ = RemoveTorService(root, svcName)
 	// Remove Ygg forwarder
@@ -66,7 +68,9 @@ func runDelete(_ *cobra.Command, args []string) error {
 
 	// Reload extension daemons
 	if containerStatus(i2pContainer) == containerStateRunning {
-		_ = ReloadI2pd()
+		if l, err := i2pLayer(); err == nil {
+			_ = l.Reload()
+		}
 	}
 	if containerStatus(torContainer) == containerStateRunning {
 		_ = ReloadTor()

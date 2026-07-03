@@ -52,7 +52,11 @@ func TestLayer_Enable_WritesTunnelConfig(t *testing.T) {
 	assert.Contains(t, string(data), "hostoverride = gitea.i2p")
 }
 
-func TestLayer_Enable_DuplicateTunnel(t *testing.T) {
+// Enabling the same tunnel twice must succeed, not error — this is exactly
+// the sequence `homelab i2p enable <svc>` followed by its own suggested next
+// step `homelab enable <svc> --i2p` produces, and previously crashed because
+// the two commands maintained separately-diverged copies of this logic.
+func TestLayer_Enable_DuplicateTunnel_IsIdempotent(t *testing.T) {
 	root := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "i2p"), 0o750))
 	l := newForTest(root, noopReload)
@@ -62,8 +66,11 @@ func TestLayer_Enable_DuplicateTunnel(t *testing.T) {
 
 	err := l.Enable("gitea", "gitea", network.ServiceInfo{},
 		[]network.PortSelection{{Name: "web", Port: 3000, Protocol: "tcp"}})
-	assert.Error(t, err, "Duplicate tunnel should error")
-	assert.Contains(t, err.Error(), "already exists")
+	assert.NoError(t, err)
+
+	tunnels, err := l.ParseTunnels()
+	require.NoError(t, err)
+	assert.Len(t, tunnels, 1, "the tunnel section should not be duplicated")
 }
 
 func TestLayer_Disable_RemovesConfigs(t *testing.T) {
@@ -105,7 +112,7 @@ keys = gitea.dat
 `
 	require.NoError(t, os.WriteFile(tunPath, []byte(content), 0o600))
 
-	tunnels, err := l.parseTunnels()
+	tunnels, err := l.ParseTunnels()
 	require.NoError(t, err)
 	require.Len(t, tunnels, 1)
 	assert.Equal(t, "gitea", tunnels[0].Name)

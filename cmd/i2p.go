@@ -3,10 +3,9 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"path/filepath"
-	"regexp"
-	"strings"
+	"strconv"
 
+	"github.com/groot/homelab/internal/network/i2p"
 	"github.com/groot/homelab/internal/run"
 	"github.com/groot/homelab/internal/tui/styles"
 	"github.com/spf13/cobra"
@@ -29,174 +28,24 @@ or removing a tunnel, i2pd reloads config automatically (SIGHUP).
   homelab i2p logs                stream container logs`,
 }
 
-// ── paths ─────────────────────────────────────────────────────────────────────
-
-// I2pTunnelsPath returns the path to the i2pd tunnels.conf.
-func I2pTunnelsPath(root string) string {
-	return filepath.Join(root, "i2p", "tunnels.conf")
-}
-
-// ── helpers ───────────────────────────────────────────────────────────────────
-
-// ReloadI2pd sends SIGHUP to i2pd so it re-reads tunnels.conf.
-func ReloadI2pd() error {
-	return run.Default().DockerExec(i2pContainer, "kill", "-HUP", "1")
-}
-
-// TunnelSection is a parsed eepsite tunnel from tunnels.conf.
-type TunnelSection struct {
-	Name         string
-	Host         string
-	Port         string
-	Keys         string
-	HostOverride string
-}
-
-// ParseTunnels reads and parses tunnels.conf into sections.
-func ParseTunnels(root string) ([]TunnelSection, error) {
-	path := I2pTunnelsPath(root)
-	data, err := os.ReadFile(path) // nosec G304 — path is constructed from configDir
-	if err != nil {
-		return nil, err
+// i2pLayer fetches the registered i2p network layer, type-asserting to the
+// concrete type so callers can reach the tunnels.conf helpers that aren't
+// part of the generic network.NetworkLayer interface. Delegating here (
+// instead of duplicating ParseTunnels/AppendTunnel/RemoveTunnel/etc. in this
+// file) is deliberate: this package used to keep its own copy of that logic,
+// which diverged from internal/network/i2p.Layer's (missing a MkdirAll,
+// disagreeing on remove-of-missing-tunnel semantics) and broke the exact
+// workflow this command's own help text suggests — see AppendTunnel's doc.
+func i2pLayer() (*i2p.Layer, error) {
+	layer, ok := extRegistry().Get("i2p")
+	if !ok {
+		return nil, fmt.Errorf("i2p extension not registered")
 	}
-
-	var tunnels []TunnelSection
-	lines := strings.Split(string(data), "\n")
-
-	reSection := regexp.MustCompile(`^\[(.+)\]$`)
-	var current *TunnelSection
-	for _, raw := range lines {
-		line := strings.TrimSpace(raw)
-		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") || strings.HasPrefix(line, "##") {
-			if line == "" && current != nil && current.Host != "" {
-				tunnels = append(tunnels, *current)
-				current = nil
-			}
-			continue
-		}
-
-		if m := reSection.FindStringSubmatch(line); m != nil {
-			if current != nil && current.Host != "" {
-				tunnels = append(tunnels, *current)
-			}
-			current = &TunnelSection{Name: m[1]}
-			continue
-		}
-
-		if current == nil {
-			continue
-		}
-
-		parts := strings.SplitN(line, "=", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		key := strings.TrimSpace(parts[0])
-		val := strings.TrimSpace(parts[1])
-
-		switch key {
-		case "host":
-			current.Host = val
-		case "port":
-			current.Port = val
-		case "keys":
-			current.Keys = val
-		case "hostoverride":
-			current.HostOverride = val
-		}
+	l, ok := layer.(*i2p.Layer)
+	if !ok {
+		return nil, fmt.Errorf("unexpected i2p layer type %T", layer)
 	}
-
-	if current != nil && current.Host != "" {
-		tunnels = append(tunnels, *current)
-	}
-
-	return tunnels, nil
-}
-
-// SectionRange returns the start and end line indices (0-based, end-exclusive)
-// of the section with the given name in the parsed lines.
-func SectionRange(lines []string, name string) (int, int, bool) {
-	re := regexp.MustCompile(`^\[` + regexp.QuoteMeta(name) + `\]$`)
-	start := -1
-	for i, line := range lines {
-		if re.MatchString(strings.TrimSpace(line)) {
-			start = i
-			break
-		}
-	}
-	if start < 0 {
-		return 0, 0, false
-	}
-
-	end := start + 1
-	for end < len(lines) {
-		trimmed := strings.TrimSpace(lines[end])
-		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") && !strings.HasPrefix(trimmed, "##") {
-			break
-		}
-		end++
-	}
-
-	return start, end, true
-}
-
-// AppendI2PTunnel appends an HTTP tunnel section to tunnels.conf.
-// The tunnel routes .i2p traffic through Caddy:80 with hostoverride
-// so Caddy can route by Host header.
-func AppendI2PTunnel(root, name, port string) error {
-	tunPath := I2pTunnelsPath(root)
-
-	existing, err := ParseTunnels(root)
-	if err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("reading tunnels.conf: %w", err)
-	}
-	for _, t := range existing {
-		if t.Name == name {
-			return fmt.Errorf("tunnel for %q already exists in tunnels.conf", name)
-		}
-	}
-
-	f, err := os.OpenFile(tunPath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o600)
-	if err != nil {
-		return fmt.Errorf("opening tunnels.conf: %w", err)
-	}
-	defer func() { _ = f.Close() }()
-
-	// Tunnel goes through Caddy:80 with hostoverride so Caddy routes by Host
-	section := fmt.Sprintf("\n[%s]\ntype = http\nhost = caddy\nport = 80\nhostoverride = %s.i2p\nkeys = %s.dat\n",
-		name, name, name)
-	if _, err := f.WriteString(section); err != nil {
-		return fmt.Errorf("writing tunnels.conf: %w", err)
-	}
-	return nil
-}
-
-// RemoveI2PTunnel removes a tunnel section from tunnels.conf.
-func RemoveI2PTunnel(root, name string) error {
-	tunPath := I2pTunnelsPath(root)
-
-	data, err := os.ReadFile(tunPath) // nosec G304 — path is constructed from configDir
-	if err != nil {
-		return fmt.Errorf("reading tunnels.conf: %w", err)
-	}
-
-	lines := strings.Split(string(data), "\n")
-	start, end, found := SectionRange(lines, name)
-	if !found {
-		return fmt.Errorf("no tunnel for %q found in tunnels.conf", name)
-	}
-
-	removeStart := start
-	if removeStart > 0 && strings.TrimSpace(lines[removeStart-1]) == "" {
-		removeStart--
-	}
-	var newLines []string
-	newLines = append(newLines, lines[:removeStart]...)
-	newLines = append(newLines, lines[end:]...)
-	if err := os.WriteFile(tunPath, []byte(strings.Join(newLines, "\n")), 0o600); err != nil {
-		return fmt.Errorf("writing tunnels.conf: %w", err)
-	}
-	return nil
+	return l, nil
 }
 
 // ── status ────────────────────────────────────────────────────────────────────
@@ -275,8 +124,16 @@ for the full flow (Caddy route + i2pd tunnel + reload).`,
 				return fmt.Errorf("detecting port for %s: %w\n  Use --port to specify explicitly", name, err)
 			}
 		}
+		portNum, err := strconv.Atoi(port)
+		if err != nil {
+			return fmt.Errorf("invalid port %q: %w", port, err)
+		}
 
-		if err := AppendI2PTunnel(root, name, port); err != nil {
+		l, err := i2pLayer()
+		if err != nil {
+			return err
+		}
+		if err := l.AppendTunnel(name, portNum); err != nil {
 			return err
 		}
 
@@ -286,10 +143,10 @@ for the full flow (Caddy route + i2pd tunnel + reload).`,
 			styles.Bold.Render(name+".i2p"))
 		fmt.Printf("  %s  Config:  %s\n",
 			styles.Muted.Render("↳"),
-			styles.Muted.Render(I2pTunnelsPath(root)))
+			styles.Muted.Render(l.TunnelsPath()))
 
 		if containerStatus(i2pContainer) == containerStateRunning {
-			if err := ReloadI2pd(); err != nil {
+			if err := l.Reload(); err != nil {
 				fmt.Printf("  %s  Warning: reload failed (%v) — restart i2pd manually\n",
 					styles.Warning.Render("!"), err)
 			} else {
@@ -312,10 +169,12 @@ var i2pDisableCmd = &cobra.Command{
 	ValidArgsFunction: completeServiceNames,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := args[0]
-		root := configDir()
 
-		err := RemoveI2PTunnel(root, name)
+		l, err := i2pLayer()
 		if err != nil {
+			return err
+		}
+		if err := l.RemoveTunnel(name); err != nil {
 			return err
 		}
 
@@ -323,7 +182,7 @@ var i2pDisableCmd = &cobra.Command{
 			styles.Warning.Render("→"), styles.Bold.Render(name+".i2p"))
 
 		if containerStatus(i2pContainer) == containerStateRunning {
-			if err := ReloadI2pd(); err != nil {
+			if err := l.Reload(); err != nil {
 				fmt.Printf("  %s  Warning: reload failed (%v)\n",
 					styles.Warning.Render("!"), err)
 			} else {
@@ -352,7 +211,11 @@ var i2pListCmd = &cobra.Command{
 			return nil
 		}
 
-		tunnels, err := ParseTunnels(root)
+		l, err := i2pLayer()
+		if err != nil {
+			return err
+		}
+		tunnels, err := l.ParseTunnels()
 		if err != nil {
 			if os.IsNotExist(err) {
 				fmt.Printf("  %s  No tunnels.conf — run setup first\n", styles.Muted.Render("!"))
@@ -383,7 +246,7 @@ var i2pListCmd = &cobra.Command{
 
 		fmt.Printf("\n  %s  Config: %s\n",
 			styles.Muted.Render("↳"),
-			styles.Muted.Render(I2pTunnelsPath(root)))
+			styles.Muted.Render(l.TunnelsPath()))
 		fmt.Println()
 		return nil
 	},
