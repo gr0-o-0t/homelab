@@ -34,9 +34,42 @@ type Service struct {
 	HostPorts []string
 
 	// Populated by DiscoverWithDocker; zero-value when Docker is unavailable.
-	Containers []docker.ContainerSummary
+	// ContainerDetail (not just ContainerSummary) so per-container Health is
+	// available without a second Docker round trip — see AggregateHealth.
+	Containers []docker.ContainerDetail
 	Running    int // count of containers in "running" state
 	Total      int // total container count
+}
+
+// AggregateHealth reduces a multi-container service's per-container health
+// to one status: any "unhealthy" wins (something is actually broken); else
+// any "starting" wins; else "healthy" if at least one container reports it
+// (and none report unhealthy/starting); else "" (no healthcheck data at
+// all). Using only the first container's health (as callers used to do)
+// picks an arbitrary container's status to represent the whole service — a
+// healthy app container could show "unhealthy" because of an unrelated
+// sidecar, or vice versa.
+func AggregateHealth(containers []docker.ContainerDetail) string {
+	var sawUnhealthy, sawStarting, sawHealthy bool
+	for _, c := range containers {
+		switch c.Health {
+		case "unhealthy":
+			sawUnhealthy = true
+		case "starting":
+			sawStarting = true
+		case "healthy":
+			sawHealthy = true
+		}
+	}
+	switch {
+	case sawUnhealthy:
+		return "unhealthy"
+	case sawStarting:
+		return "starting"
+	case sawHealthy:
+		return "healthy"
+	}
+	return ""
 }
 
 // Discover scans the services/ directory and returns basic state without
@@ -57,27 +90,7 @@ func DiscoverWithDocker(repoRoot string, dc *docker.Client) ([]Service, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	for i, svc := range svcs {
-		containers, err := dc.ServiceContainers(ctx, svc.Name)
-		if err != nil {
-			// Docker unavailable or project not started — leave counts at zero.
-			continue
-		}
-		svcs[i].Containers = containers
-		svcs[i].Total = len(containers)
-		for _, c := range containers {
-			if c.State == "running" {
-				svcs[i].Running++
-			}
-		}
-		// Enrich with host port mappings from container detail.
-		details, err := dc.InspectContainers(ctx, containers)
-		if err == nil {
-			for di := range details {
-				svcs[i].HostPorts = append(svcs[i].HostPorts, details[di].Ports...)
-			}
-		}
-	}
+	enrichWithDocker(ctx, dc, svcs, false)
 	return svcs, nil
 }
 
@@ -124,30 +137,47 @@ func DiscoverAllWithDocker(repoRoot string, dc *docker.Client, catalogNames []st
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
+	enrichWithDocker(ctx, dc, svcs, true)
+	return svcs, nil
+}
+
+// enrichWithDocker populates Containers/Running/Total/HostPorts for each
+// service from live Docker data, in place. Shared by DiscoverWithDocker and
+// DiscoverAllWithDocker, which previously duplicated this loop verbatim.
+// onlyInstalled skips catalog-only stub entries (DiscoverAllWithDocker's
+// case); DiscoverWithDocker's services are always installed, so it passes
+// false.
+func enrichWithDocker(ctx context.Context, dc *docker.Client, svcs []Service, onlyInstalled bool) {
 	for i, svc := range svcs {
-		if !svc.Installed {
+		if onlyInstalled && !svc.Installed {
 			continue
 		}
 		containers, err := dc.ServiceContainers(ctx, svc.Name)
 		if err != nil {
+			// Docker unavailable or project not started — leave counts at zero.
 			continue
 		}
-		svcs[i].Containers = containers
 		svcs[i].Total = len(containers)
 		for _, c := range containers {
 			if c.State == "running" {
 				svcs[i].Running++
 			}
 		}
-		// Enrich with host port mappings from container detail.
+
 		details, err := dc.InspectContainers(ctx, containers)
-		if err == nil {
-			for di := range details {
-				svcs[i].HostPorts = append(svcs[i].HostPorts, details[di].Ports...)
+		if err != nil {
+			// Fall back to bare summaries so Total/Running/State still
+			// reflect reality even without Health/Ports.
+			details = make([]docker.ContainerDetail, len(containers))
+			for j, c := range containers {
+				details[j] = docker.ContainerDetail{ContainerSummary: c}
 			}
 		}
+		svcs[i].Containers = details
+		for di := range details {
+			svcs[i].HostPorts = append(svcs[i].HostPorts, details[di].Ports...)
+		}
 	}
-	return svcs, nil
 }
 
 // ── internal ──────────────────────────────────────────────────────────────────

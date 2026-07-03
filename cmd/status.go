@@ -263,26 +263,6 @@ func runStatus(_ *cobra.Command, args []string) error {
 	}
 	fmt.Printf("  %s  %s\n\n", styles.Bold.Render("Services"), styles.Muted.Render(summaryLine))
 
-	// Gather health for service containers
-	svcHealth := make(map[string]string)
-	sd, sdErr := docker.New()
-	if sdErr == nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-
-		for _, s := range svcs {
-			containers, err := sd.ServiceContainers(ctx, s.Name)
-			if err != nil || len(containers) == 0 {
-				continue
-			}
-			details, err := sd.InspectContainers(ctx, containers)
-			if err == nil && len(details) > 0 {
-				svcHealth[s.Name] = details[0].Health
-			}
-		}
-		_ = sd.Close()
-	}
-
 	// Table header
 	fmt.Printf("  %s  %s  %s  %s  %s\n",
 		styles.TableHeader.Render(styles.Width(styles.ColWidthName).Render("SERVICE")),
@@ -297,8 +277,10 @@ func runStatus(_ *cobra.Command, args []string) error {
 	for _, svc := range svcs {
 		name := styles.Width(styles.ColWidthName).Render(truncate(svc.Name, styles.ColWidthName-1))
 
-		// STATE column — merged state + health
-		stateCol := styles.Width(12).Render(mergedState(svc, svcHealth[svc.Name]))
+		// STATE column — merged state + health, aggregated across every
+		// container the service has (not just whichever the API listed
+		// first), from data discoverServices already fetched.
+		stateCol := styles.Width(12).Render(mergedState(svc, service.AggregateHealth(svc.Containers)))
 
 		// PORTS column — always visible
 		var portsStr string
