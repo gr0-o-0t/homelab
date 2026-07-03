@@ -3,6 +3,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -236,11 +237,11 @@ func (d *ServiceDatabases) UnmarshalYAML(value *yaml.Node) error {
 }
 
 func (d *ServiceDatabases) decodeSequence(value *yaml.Node) error {
-	for _, item := range value.Content {
+	for i, item := range value.Content {
 		// Each item: { postgres: { database: ..., env: ... } }
 		// item is a mapping node with one key-value pair
 		if item.Kind != yaml.MappingNode || len(item.Content) < 2 {
-			continue
+			return fmt.Errorf("databases: entry %d (line %d) is not a valid %q-style mapping", i, item.Line, "type: {options}")
 		}
 		var dbType DBType
 		if err := item.Content[0].Decode(&dbType); err != nil {
@@ -603,8 +604,15 @@ func ServiceConfigFile(configDir, svcName string) string {
 //  5. Database connection vars  (injected when service declares DB deps)
 //
 // Pass sm=nil to skip all keyring lookups.
+//
+// A non-nil error means one or more secrets couldn't be read from the
+// keyring due to a genuine backend failure (Manager.Get already treats
+// "not set" as a nil error with an empty value) — env still contains
+// everything that *did* resolve, so callers can choose to proceed with a
+// partial result and surface the error as a warning rather than aborting.
 func BuildEnv(rootConfigFile, configDir, svcName string, sm *secrets.Manager) (map[string]string, error) {
 	env := make(map[string]string)
+	var errs []error
 
 	// 1. Root vars from config.yaml
 	rootCfg, err := Load(rootConfigFile)
@@ -622,14 +630,19 @@ func BuildEnv(rootConfigFile, configDir, svcName string, sm *secrets.Manager) (m
 	// 2. Root secrets from keyring
 	if sm != nil && rootCfg != nil {
 		for k := range rootCfg.Secrets {
-			if val, _ := sm.Get("", k); val != "" {
+			val, err := sm.Get("", k)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("secret %q: %w", k, err))
+				continue
+			}
+			if val != "" {
 				env[k] = val
 			}
 		}
 	}
 
 	if svcName == "" {
-		return env, nil
+		return env, errors.Join(errs...)
 	}
 
 	// 3. Service vars (override root)
@@ -647,7 +660,12 @@ func BuildEnv(rootConfigFile, configDir, svcName string, sm *secrets.Manager) (m
 		// 4. Service secrets from keyring (override root secrets)
 		if sm != nil {
 			for k := range svcCfg.Secrets {
-				if val, _ := sm.Get(svcName, k); val != "" {
+				val, err := sm.Get(svcName, k)
+				if err != nil {
+					errs = append(errs, fmt.Errorf("secret %q: %w", k, err))
+					continue
+				}
+				if val != "" {
 					env[k] = val
 				}
 			}
@@ -660,12 +678,14 @@ func BuildEnv(rootConfigFile, configDir, svcName string, sm *secrets.Manager) (m
 		if err == nil && rootDB != nil {
 			svcDB, err := svcCfg.ServiceDatabases()
 			if err == nil && svcDB != nil {
-				injectDBEnv(env, rootDB, svcDB, svcName, sm)
+				if err := injectDBEnv(env, rootDB, svcDB, svcName, sm); err != nil {
+					errs = append(errs, err)
+				}
 			}
 		}
 	}
 
-	return env, nil
+	return env, errors.Join(errs...)
 }
 
 // defaultDSNTemplate returns the default DSN template for a DB type.
@@ -682,11 +702,35 @@ func defaultDSNTemplate(t DBType) string {
 	}
 }
 
-// injectDBEnv appends database connection variables into env.
-func injectDBEnv(env map[string]string, rootDB *DatabaseConfig, svcDB ServiceDatabases, svcName string, sm *secrets.Manager) {
+// buildDSN renders a DSN template by substituting
+// {host}/{port}/{user}/{password}/{database} in a single pass via
+// strings.NewReplacer. Sequential strings.ReplaceAll calls would re-scan
+// already-substituted text, so a value that happens to contain another
+// placeholder's literal token (e.g. a user name containing the substring
+// "{database}") would get corrupted by a later substitution; NewReplacer
+// matches all patterns against the original string in one pass instead.
+func buildDSN(tmpl, host, portStr, user, password, database string) string {
+	replacer := strings.NewReplacer(
+		"{host}", host,
+		"{port}", portStr,
+		"{user}", user,
+		"{password}", password,
+		"{database}", database,
+	)
+	return replacer.Replace(tmpl)
+}
+
+// injectDBEnv appends database connection variables into env. Returns an
+// error only for a genuine keyring failure reading the DB password — never
+// for "not set", which Manager.Get already reports as a nil error.
+func injectDBEnv(env map[string]string, rootDB *DatabaseConfig, svcDB ServiceDatabases, svcName string, sm *secrets.Manager) error {
 	rootPassword := ""
 	if sm != nil {
-		rootPassword, _ = sm.Get("", DBPasswordKey(svcName))
+		pw, err := sm.Get("", DBPasswordKey(svcName))
+		if err != nil {
+			return fmt.Errorf("reading db password for %q: %w", svcName, err)
+		}
+		rootPassword = pw
 	}
 
 	for _, entry := range svcDB {
@@ -728,26 +772,15 @@ func injectDBEnv(env map[string]string, rootDB *DatabaseConfig, svcDB ServiceDat
 					tmpl = defaultDSNTemplate(entry.Type)
 				}
 				if tmpl != "" {
-					dsn := tmpl
-					dsn = strings.ReplaceAll(dsn, "{host}", host)
-					dsn = strings.ReplaceAll(dsn, "{port}", portStr)
-					dsn = strings.ReplaceAll(dsn, "{user}", entry.User)
-					dsn = strings.ReplaceAll(dsn, "{password}", rootPassword)
-					dsn = strings.ReplaceAll(dsn, "{database}", entry.Database)
-					env[target] = dsn
+					env[target] = buildDSN(tmpl, host, portStr, entry.User, rootPassword, entry.Database)
 				}
 			default:
 				// Legacy DSN template: logical is the template, target is the env var name
 				if strings.Contains(logical, "://") || strings.Contains(logical, "{user}") {
-					dsn := logical
-					dsn = strings.ReplaceAll(dsn, "{host}", host)
-					dsn = strings.ReplaceAll(dsn, "{port}", portStr)
-					dsn = strings.ReplaceAll(dsn, "{user}", entry.User)
-					dsn = strings.ReplaceAll(dsn, "{password}", rootPassword)
-					dsn = strings.ReplaceAll(dsn, "{database}", entry.Database)
-					env[target] = dsn
+					env[target] = buildDSN(logical, host, portStr, entry.User, rootPassword, entry.Database)
 				}
 			}
 		}
 	}
+	return nil
 }

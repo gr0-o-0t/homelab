@@ -41,6 +41,13 @@ type Manager struct {
 	Backend keyring.BackendType // which backend actually got selected
 }
 
+// NewForTest wraps an arbitrary keyring.Keyring implementation (e.g. a fake
+// that returns errors on demand) in a Manager, for exercising callers'
+// error-handling paths without touching a real OS keyring backend.
+func NewForTest(ring keyring.Keyring) *Manager {
+	return &Manager{ring: ring}
+}
+
 // defaultBackends is the fallback priority list, tried one at a time so the
 // caller can observe which one actually won (the keyring library gives no
 // way to introspect this when handed the whole list at once).

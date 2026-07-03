@@ -1,14 +1,17 @@
 package config_test
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/99designs/keyring"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/groot/homelab/internal/config"
+	"github.com/groot/homelab/internal/secrets"
 )
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -18,6 +21,25 @@ func writeFile(t *testing.T, dir, rel, content string) {
 	path := filepath.Join(dir, rel)
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+}
+
+// erroringKeyring is a keyring.Keyring that always fails, for exercising
+// BuildEnv/injectDBEnv's handling of a genuine backend failure (as opposed
+// to "secret not set", which Manager.Get reports as a nil error).
+type erroringKeyring struct{}
+
+func (erroringKeyring) Get(string) (keyring.Item, error) {
+	return keyring.Item{}, errors.New("backend unavailable")
+}
+func (erroringKeyring) GetMetadata(string) (keyring.Metadata, error) {
+	return keyring.Metadata{}, errors.New("backend unavailable")
+}
+func (erroringKeyring) Set(keyring.Item) error  { return errors.New("backend unavailable") }
+func (erroringKeyring) Remove(string) error     { return errors.New("backend unavailable") }
+func (erroringKeyring) Keys() ([]string, error) { return nil, errors.New("backend unavailable") }
+
+func erroringSecretsManager() *secrets.Manager {
+	return secrets.NewForTest(erroringKeyring{})
 }
 
 // ── Load ──────────────────────────────────────────────────────────────────────
@@ -378,4 +400,101 @@ func TestExtensionLabel_UsesCanonicalNamesFromAllExtensions(t *testing.T) {
 func TestExtensionLabel_ResolvesLegacyYggdrasilAlias(t *testing.T) {
 	assert.Equal(t, "ygg", config.ResolveExtension("yggdrasil"))
 	assert.Equal(t, config.ExtensionLabel("ygg"), config.ExtensionLabel(config.ResolveExtension("yggdrasil")))
+}
+
+// ── DSN templating: single-pass replace ──────────────────────────────────────
+
+func TestBuildEnv_DSNPlaceholderCollision_SinglePassReplace(t *testing.T) {
+	// A user/database value that happens to contain another placeholder's
+	// literal token used to get corrupted by sequential strings.ReplaceAll
+	// calls re-scanning already-substituted text.
+	dir := t.TempDir()
+	rootPath := filepath.Join(dir, "config.yaml")
+	writeFile(t, dir, "config.yaml", `
+databases:
+  postgres:
+    host: dbhost
+    port: 5432
+`)
+	writeFile(t, dir, "services/myapp/config.yaml", `
+databases:
+  - postgres:
+      database: mydb
+      user: "{database}"
+      env:
+        dsn: DATABASE_URL
+`)
+	env, err := config.BuildEnv(rootPath, dir, "myapp", nil)
+	require.NoError(t, err)
+	assert.Equal(t, "postgres://{database}:@dbhost:5432/mydb", env["DATABASE_URL"],
+		"the {user} substitution's literal value must not be re-matched by the later {database} substitution")
+}
+
+// ── databases: malformed entries fail loudly ─────────────────────────────────
+
+func TestServiceDatabases_MalformedEntry_Errors(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "config.yaml", `databases:
+  - postgres
+  - redis:
+      env:
+        host: REDIS_HOST
+`)
+	cfg, err := config.Load(filepath.Join(dir, "config.yaml"))
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+
+	_, err = cfg.ServiceDatabases()
+	assert.ErrorContains(t, err, "databases:",
+		"a malformed entry (bare scalar instead of a type/options mapping) must not be silently dropped")
+}
+
+// ── Genuine keyring errors are surfaced, not swallowed as "not set" ──────────
+
+func TestBuildEnv_PropagatesGenuineKeyringError_RootSecret(t *testing.T) {
+	dir := t.TempDir()
+	rootPath := filepath.Join(dir, "config.yaml")
+	writeFile(t, dir, "config.yaml", `
+secrets:
+  TS_AUTHKEY:
+    required: true
+`)
+	env, err := config.BuildEnv(rootPath, dir, "", erroringSecretsManager())
+	assert.Error(t, err, "a genuine keyring backend failure must not be silently swallowed")
+	_, present := env["TS_AUTHKEY"]
+	assert.False(t, present, "a secret whose lookup failed should not appear in env as empty")
+}
+
+func TestBuildEnv_PropagatesGenuineKeyringError_ServiceSecret(t *testing.T) {
+	dir := t.TempDir()
+	rootPath := filepath.Join(dir, "config.yaml")
+	writeFile(t, dir, "config.yaml", "vars:\n  DOMAIN:\n    value: example.com\n")
+	writeFile(t, dir, "services/myapp/config.yaml", `
+secrets:
+  API_KEY:
+    required: true
+`)
+	_, err := config.BuildEnv(rootPath, dir, "myapp", erroringSecretsManager())
+	assert.Error(t, err)
+}
+
+func TestBuildEnv_PropagatesGenuineKeyringError_DBPassword(t *testing.T) {
+	dir := t.TempDir()
+	rootPath := filepath.Join(dir, "config.yaml")
+	writeFile(t, dir, "config.yaml", `
+databases:
+  postgres:
+    host: dbhost
+    port: 5432
+`)
+	writeFile(t, dir, "services/myapp/config.yaml", `
+databases:
+  - postgres:
+      database: mydb
+      user: myuser
+      env:
+        dsn: DATABASE_URL
+`)
+	_, err := config.BuildEnv(rootPath, dir, "myapp", erroringSecretsManager())
+	assert.Error(t, err)
 }
