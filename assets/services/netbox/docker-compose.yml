@@ -11,12 +11,16 @@
 # Both stay local since shared homelab-redis can't split ports.
 # Env vars (NB_REDIS_HOST/NB_REDIS_PORT/NB_REDIS_CACHE_*) injected
 # from config.yaml at runtime.
+# Both redis instances sit on netbox-internal only — not reachable from
+# other services on home-services, matching the isolation convention.
 # ─────────────────────────────────────────────────────────────────────────────
 
 networks:
   home-services:
     name: home-services
     external: true
+  netbox-internal:
+    internal: true
 
 services:
   netbox:
@@ -52,6 +56,7 @@ services:
       - netbox-data:/config
     networks:
       - home-services
+      - netbox-internal
     healthcheck:
       test:
         [
@@ -70,7 +75,7 @@ services:
     restart: unless-stopped
     command: valkey-server --port 6379
     networks:
-      - home-services
+      - netbox-internal
     healthcheck:
       test: ["CMD-SHELL", "valkey-cli -p 6379 ping || exit 1"]
       interval: 10s
@@ -84,7 +89,7 @@ services:
     restart: unless-stopped
     command: valkey-server --port 6380
     networks:
-      - home-services
+      - netbox-internal
     healthcheck:
       test: ["CMD-SHELL", "valkey-cli -p 6380 ping || exit 1"]
       interval: 10s

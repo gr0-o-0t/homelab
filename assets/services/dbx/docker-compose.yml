@@ -1,0 +1,34 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Service: dbx (lightweight, cross-platform database client — MySQL,
+# PostgreSQL, SQLite, Redis, MongoDB, DuckDB, ClickHouse, SQL Server and more)
+# https://github.com/t8y2/dbx
+# ─────────────────────────────────────────────────────────────────────────────
+
+networks:
+  home-services:
+    name: home-services
+    external: true
+
+services:
+  dbx:
+    image: t8y2/dbx
+    container_name: dbx
+    restart: unless-stopped
+    volumes:
+      - dbx-data:/app/data
+    networks:
+      - home-services
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q --spider http://localhost:4224 2>/dev/null || exit 1",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  dbx-data:
+    name: dbx_data
