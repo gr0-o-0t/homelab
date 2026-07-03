@@ -89,7 +89,7 @@ func runDisable(cmd *cobra.Command, args []string) error {
 		if err := configgen.RemoveFile(root, "i2p", svcName, ""); err != nil {
 			return fmt.Errorf("i2p: %w", err)
 		}
-		if layer, ok := extRegistry.Get("i2p"); ok {
+		if layer, ok := extRegistry().Get("i2p"); ok {
 			_ = layer.Disable(svcName)
 		}
 		fmt.Printf("  %s  I2P: removed\n", styles.Warning.Render("→"))
@@ -98,7 +98,7 @@ func runDisable(cmd *cobra.Command, args []string) error {
 		if err := configgen.RemoveFile(root, "tor", svcName, ""); err != nil {
 			return fmt.Errorf("tor: %w", err)
 		}
-		if layer, ok := extRegistry.Get("tor"); ok {
+		if layer, ok := extRegistry().Get("tor"); ok {
 			_ = layer.Disable(svcName)
 		}
 		fmt.Printf("  %s  Tor: removed\n", styles.Warning.Render("→"))
@@ -107,7 +107,7 @@ func runDisable(cmd *cobra.Command, args []string) error {
 		if err := configgen.RemoveFile(root, "ygg", svcName, ""); err != nil {
 			return fmt.Errorf("ygg: %w", err)
 		}
-		if layer, ok := extRegistry.Get("ygg"); ok {
+		if layer, ok := extRegistry().Get("ygg"); ok {
 			_ = layer.Disable(svcName)
 		}
 		fmt.Printf("  %s  Yggdrasil: removed\n", styles.Warning.Render("→"))

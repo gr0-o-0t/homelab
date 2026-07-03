@@ -16,7 +16,7 @@ func withProfiles(cfgDir string, args ...string) []string {
 	if cfg != nil {
 		for _, ext := range cfg.Extensions {
 			resolved := config.ResolveExtension(ext)
-			if layer, ok := extRegistry.Get(resolved); ok {
+			if layer, ok := extRegistry().Get(resolved); ok {
 				profile := layer.Profile()
 				if profile == "" {
 					continue // skip layers with no compose profile (e.g., tailscale)

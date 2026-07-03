@@ -717,9 +717,9 @@ func runDashboardTUI(root string) error {
 	// Build network layer list from registry + config for header pills.
 	cfgFile := config.RootConfigFile(root, rootFlags.configFile)
 	cfg, _ := config.Load(cfgFile)
-	layers := make([]network.NetworkLayer, 0, len(extRegistry.Names()))
-	for _, name := range extRegistry.Names() {
-		if layer, ok := extRegistry.Get(name); ok {
+	layers := make([]network.NetworkLayer, 0, len(extRegistry().Names()))
+	for _, name := range extRegistry().Names() {
+		if layer, ok := extRegistry().Get(name); ok {
 			// Only include layers enabled in config (or always-on like ts)
 			if cfg != nil && (name == "ts" || hasResolvedExtension(cfg, name)) {
 				layers = append(layers, layer)

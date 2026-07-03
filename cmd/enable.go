@@ -174,7 +174,7 @@ func enableExtension(root, svcName, displayName, ext string) error {
 
 	// Network extension-specific config via registry
 	resolved := config.ResolveExtension(ext)
-	if layer, ok := extRegistry.Get(resolved); ok {
+	if layer, ok := extRegistry().Get(resolved); ok {
 		ports := make([]network.PortSelection, len(blocks))
 		for i, b := range blocks {
 			portNum, _ := strconv.Atoi(extractPortFromBlock(b.Content, displayName))

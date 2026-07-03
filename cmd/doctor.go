@@ -224,7 +224,7 @@ func renderExtensionChecks(cfgFile string, dc *docker.Client, pass *bool) {
 	}
 
 	var results []diagnostics.CheckResult
-	for _, layer := range extRegistry.All() {
+	for _, layer := range extRegistry().All() {
 		name := layer.Name()
 		if !hasResolvedExtension(cfg, name) {
 			continue

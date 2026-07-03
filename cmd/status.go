@@ -63,7 +63,7 @@ func runStatus(_ *cobra.Command, args []string) error {
 	entries = append(entries, coreEntry{Name: "caddy", Ext: ""})
 
 	// Layers from registry (tailscale, cf, tor, i2p, ygg, ipfs)
-	for _, layer := range extRegistry.All() {
+	for _, layer := range extRegistry().All() {
 		ename := layer.Name()
 		// Special: CF shows also when CF_TUNNEL_TOKEN is set even if not enabled
 		if ename == "cf" {
