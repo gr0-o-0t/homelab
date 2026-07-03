@@ -599,8 +599,8 @@ func mergedCoreState(state, health string) string {
 // stopped, partial (N/M).
 func mergedState(svc service.Service, health string) string {
 	// Check container-level states first for states that Running count can't distinguish.
-	for _, c := range svc.Containers {
-		if c.State == "restarting" {
+	for i := range svc.Containers {
+		if svc.Containers[i].State == "restarting" {
 			return styles.Warning.Render("restarting")
 		}
 	}

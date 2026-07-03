@@ -891,7 +891,8 @@ func (m Model) renderInstalledDetail(svc *service.Service, height, width int) st
 	// Containers
 	if len(svc.Containers) > 0 {
 		b.WriteString("\n " + styles.PaneTitle.Render("Containers") + "\n")
-		for i, c := range svc.Containers {
+		for i := range svc.Containers {
+			c := &svc.Containers[i]
 			cName := clip(c.Name, 20)
 			stateStyle := styles.Muted
 			switch c.State {

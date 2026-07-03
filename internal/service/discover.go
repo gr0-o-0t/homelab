@@ -51,8 +51,8 @@ type Service struct {
 // sidecar, or vice versa.
 func AggregateHealth(containers []docker.ContainerDetail) string {
 	var sawUnhealthy, sawStarting, sawHealthy bool
-	for _, c := range containers {
-		switch c.Health {
+	for i := range containers {
+		switch containers[i].Health {
 		case "unhealthy":
 			sawUnhealthy = true
 		case "starting":

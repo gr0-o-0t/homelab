@@ -19,7 +19,7 @@ func newReadyModel(t *testing.T, lines int) Model {
 	m = updated.(Model)
 	require.True(t, m.ready)
 
-	for i := 0; i < lines; i++ {
+	for range lines {
 		updated, _ = m.Update(logLineMsg{line: strings.Repeat("x", 10)})
 		m = updated.(Model)
 	}
