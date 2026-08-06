@@ -5,15 +5,23 @@ on:
     tags:
       - "v*.*.*"
 
+# Creating a release and uploading assets is a write. Repositories default the
+# GITHUB_TOKEN to read-only, so without this the build succeeds and the upload
+# step fails at the very end.
+permissions:
+  contents: write
+
 jobs:
-  goreleaser:
+  release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # fetch-depth: 0 is load-bearing — the Makefile derives VERSION from
+      # `git tag --points-at HEAD`, which sees nothing in a shallow clone.
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: true
@@ -28,24 +36,18 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           name: "homelab ${{ github.ref_name }}"
+          generate_release_notes: true
           body: |
-            ## Release ${{ github.ref_name }}
-
-            See the [CHANGELOG](../CHANGELOG.md) for what's new.
-
-            ### Downloads
-
-            - [homelab_${{ github.ref_name }}_linux_amd64](homelab_${{ github.ref_name }}_linux_amd64) — x86_64
-            - [homelab_${{ github.ref_name }}_linux_arm64](homelab_${{ github.ref_name }}_linux_arm64) — ARM64 (Raspberry Pi, etc.)
-
             ### Install
 
             ```bash
-            # Download and install
-            wget https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/homelab_${{ github.ref_name }}_linux_amd64
-            chmod +x homelab_${{ github.ref_name }}_linux_amd64
-            sudo mv homelab_${{ github.ref_name }}_linux_amd64 /usr/local/bin/homelab
+            VERSION=${{ github.ref_name }}
+            wget https://github.com/${{ github.repository }}/releases/download/$VERSION/homelab_${VERSION}_linux_amd64
+            chmod +x homelab_${VERSION}_linux_amd64
+            sudo mv homelab_${VERSION}_linux_amd64 /usr/local/bin/homelab
             ```
+
+            Swap `amd64` for `arm64` on a Raspberry Pi or other ARM64 host.
 
             Then run `homelab setup` to configure.
           files: |
