@@ -1,18 +1,45 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Service: Immich (self-hosted photo & video backup)
 # https://immich.app/docs/install/docker-compose
-# db: uses shared Redis (homelab-redis). REDIS_HOSTNAME/REDIS_PORT
-# injected from config.yaml `databases:` section at runtime.
-# Postgres stays local (immich-postgres) — Immich's fork bundles
-# pgvector/pgvecto.rs extensions not in shared homelab-postgres.
+#
+# db: uses shared homelab-postgres and homelab-redis. Both connection sets are
+# injected from config.yaml `databases:` at runtime.
+#
+# Immich no longer runs its own Postgres: the shared instance is now the
+# VectorChord build (pgvector + vchord), which is exactly what Immich requires,
+# so a second database container earns nothing. Upstream supports this setup —
+# https://docs.immich.app/administration/postgres-standalone/
+# ─────────────────────────────────────────────────────────────────────────────
+# ⚠ MIGRATING AN EXISTING INSTALL
+#
+# The old immich-postgres container holds all your library metadata (albums,
+# faces, timestamps). The photo files themselves live in immich_uploads and are
+# untouched. Nothing here moves that metadata, so starting this version as-is
+# hands Immich an empty database. Before `homelab up immich`:
+#
+#   1. homelab up postgres                     # shared instance, VectorChord
+#   2. homelab setup immich                     # creates db, role, extensions
+#   3. docker start immich-postgres              # the old PG14 container
+#      docker exec immich-postgres \
+#          pg_dump -U immich -Fc immich > immich.dump
+#   4. Restore. Errors about the old pgvecto.rs `vectors` extension are
+#      expected — it is gone as of Immich 3.0 and VectorChord replaces it:
+#      docker exec -i homelab-postgres \
+#          pg_restore -U postgres -d immich --no-owner --role=immich < immich.dump
+#   5. docker exec homelab-postgres \
+#          psql -U postgres -d immich -c 'REINDEX DATABASE immich;'
+#   6. homelab up immich                        # rebuilds ANN indexes on start
+#
+# Keep the immich_pgdata volume until the library is confirmed intact.
 # ─────────────────────────────────────────────────────────────────────────────
 
 networks:
-  # Shared network — Caddy (via Tailscale namespace) reaches every service here
+  # Shared network — Caddy (via Tailscale namespace) reaches every service here,
+  # and it is how Immich reaches homelab-postgres and homelab-redis.
   home-services:
     name: home-services
     external: true
-  # Internal-only network for Immich's own microservices ↔ database traffic.
+  # Internal-only network for Immich server ↔ machine-learning traffic.
   # Never expose this outside the stack.
   immich-internal:
     internal: true
@@ -24,15 +51,16 @@ services:
     container_name: immich
     user: "${PUID:-1000}:${PGID:-1000}"
     restart: unless-stopped
-    depends_on:
-      immich-postgres:
-        condition: service_healthy
     environment:
       DB_HOSTNAME: ${DB_HOSTNAME}
       DB_PORT: ${DB_PORT}
-      DB_USERNAME: ${DB_USERNAME:-immich}
+      DB_USERNAME: ${DB_USERNAME}
       DB_PASSWORD: ${DB_PASSWORD}
-      DB_DATABASE_NAME: ${DB_DATABASE_NAME:-immich}
+      DB_DATABASE_NAME: ${DB_DATABASE_NAME}
+      # Auto-detection already prefers VectorChord; pinning it means a
+      # misconfigured shared instance fails loudly instead of quietly
+      # falling back to slower plain-pgvector search.
+      DB_VECTOR_EXTENSION: vectorchord
       REDIS_HOSTNAME: ${REDIS_HOSTNAME}
       REDIS_PORT: ${REDIS_PORT}
       UPLOAD_LOCATION: /usr/src/app/upload
@@ -41,8 +69,8 @@ services:
       - immich-uploads:/usr/src/app/upload
       - /etc/localtime:/etc/localtime:ro
     networks:
-      - home-services # reachable by Caddy
-      - immich-internal # internal comms
+      - home-services # Caddy, postgres, redis
+      - immich-internal # machine-learning sidecar
     healthcheck:
       test:
         [
@@ -74,35 +102,8 @@ services:
       retries: 3
       start_period: 120s # model loading takes time
 
-  immich-postgres:
-    image: ghcr.io/immich-app/postgres:14-vectorchord0.4.3-pgvectors0.2.0
-    container_name: immich-postgres
-    user: "${PUID:-1000}:${PGID:-1000}"
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: ${DB_USERNAME:-immich}
-      POSTGRES_PASSWORD: ${DB_PASSWORD}
-      POSTGRES_DB: ${DB_DATABASE_NAME:-immich}
-      POSTGRES_INITDB_ARGS: "--data-checksums"
-    volumes:
-      - immich-pgdata:/var/lib/postgresql/data
-    networks:
-      - immich-internal
-    healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "pg_isready -U ${DB_USERNAME:-immich} -d ${DB_DATABASE_NAME:-immich}",
-        ]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
-
 volumes:
   immich-uploads:
     name: immich_uploads
-  immich-pgdata:
-    name: immich_pgdata
   immich-model-cache:
     name: immich_model-cache

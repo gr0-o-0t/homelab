@@ -27,31 +27,64 @@ type SecretEntry struct {
 	Required bool `yaml:"required"`
 }
 
-// PortEntry describes a single port exposed by a service.
+// PortEntry describes a single port a service exposes.
+//
+// The declaration grammar is one line per exposed port:
+//
+//	8080            → <service>.<home>.<domain>            → container :8080
+//	80:8080         → <service>.<home>.<domain>:80         → container :8080
+//	vault:80        → vault.<home>.<domain>                → container :80
+//	22:22/tcp       → as above, restricted to one protocol
+//
+// The token left of the colon decides which of the two middle forms applies:
+// all digits means "listen on this port", anything else means "serve under this
+// subdomain". A subdomain *replaces* the service name rather than prefixing it,
+// which is how a service can answer on a name that isn't its directory name —
+// vaultwarden serving vault.<home>.<domain> was the case that forced this.
 type PortEntry struct {
-	Port     int    `yaml:"port"`
-	Protocol string `yaml:"protocol,omitempty"` // "tcp" (default) or "udp"
+	// Port is the container port traffic is forwarded to.
+	Port int `yaml:"port"`
+
+	// Listen is the port clients connect on. Zero means the default site port
+	// (443 for the tailnet layer, i.e. no explicit port in the site address).
+	Listen int `yaml:"listen,omitempty"`
+
+	// Subdomain replaces the service name in the site address. Empty means the
+	// service name is used.
+	Subdomain string `yaml:"subdomain,omitempty"`
+
+	// Protocols is "tcp", "udp" or both — both when the declaration says
+	// nothing. Caddy only routes tcp; udp entries are recorded for compose and
+	// documentation, and skipped when generating site blocks.
+	Protocols []string `yaml:"protocols,omitempty"`
+
+	// Protocol is the legacy single-protocol field, still accepted in the
+	// mapping format.
+	Protocol string `yaml:"protocol,omitempty"`
 }
 
-// PortEntries accepts ports config in both the old map format and the new
-// list-of-strings format. Internal representation is always map[string]PortEntry.
-//
-// New format (recommended):
-//
-//	ports:
-//	  - web:8080
-//	  - 8080
-//	  - 8080:9090
-//
-// Legacy format (backward compatible):
-//
-//	ports:
-//	  web:
-//	    port: 8080
-//	    protocol: tcp
+// HasTCP reports whether this port carries TCP, which is the only thing Caddy
+// can route.
+func (e PortEntry) HasTCP() bool {
+	if len(e.Protocols) == 0 {
+		return e.Protocol == "" || strings.EqualFold(e.Protocol, "tcp")
+	}
+	for _, p := range e.Protocols {
+		if strings.EqualFold(p, "tcp") {
+			return true
+		}
+	}
+	return false
+}
+
+// PortEntries accepts ports config in both the legacy mapping format and the
+// list-of-strings format described on PortEntry. Internal representation is
+// always a map keyed by the token left of the colon ("default" when bare), so
+// each declaration gets a stable name for --ports selection and for the
+// per-port filenames generated config uses.
 type PortEntries map[string]PortEntry
 
-// UnmarshalYAML accepts both the new list format and the legacy mapping format.
+// UnmarshalYAML accepts both the list format and the legacy mapping format.
 func (p *PortEntries) UnmarshalYAML(value *yaml.Node) error {
 	switch value.Kind {
 	case yaml.SequenceNode:
@@ -79,66 +112,82 @@ func (p *PortEntries) decodeNew(value *yaml.Node) error {
 		if err := item.Decode(&s); err != nil {
 			return fmt.Errorf("decoding port entry: %w", err)
 		}
-		name, port, err := parsePortString(s)
+		key, entry, err := ParsePortString(s)
 		if err != nil {
 			return err
 		}
-		if name == "default" {
-			if _, exists := (*p)["default"]; exists {
-				return fmt.Errorf("port config %q: at most one unnamed/mapped port allowed (second conflicts with existing default port %d)", s, (*p)["default"].Port)
-			}
+		if _, exists := (*p)[key]; exists {
+			return fmt.Errorf("port config %q: %q is declared twice", s, key)
 		}
-		(*p)[name] = PortEntry{Port: port, Protocol: "tcp"}
+		(*p)[key] = entry
 	}
 	return nil
 }
 
-// parsePortString parses a single port spec string.
-// Accepted formats:
-//
-//	"web:8080"   → name="web", port=8080      (named port)
-//	"8080"       → name="default", port=8080  (unnamed/unmapped default port)
-//	"8080:9090"  → name="8080", port=9090     (mapped port, host port is key)
-func parsePortString(s string) (name string, port int, err error) {
-	if s == "" {
-		return "", 0, fmt.Errorf("empty port string")
+// ParsePortString parses one port declaration. See PortEntry for the grammar.
+func ParsePortString(s string) (key string, entry PortEntry, err error) {
+	spec := strings.TrimSpace(s)
+	if spec == "" {
+		return "", PortEntry{}, fmt.Errorf("empty port string")
 	}
 
-	parts := strings.SplitN(s, ":", 3)
+	// Optional /tcp, /udp, or /tcp/udp suffix. Absent means both.
+	protocols := []string{"tcp", "udp"}
+	if i := strings.Index(spec, "/"); i >= 0 {
+		protocols = nil
+		for _, proto := range strings.Split(spec[i+1:], "/") {
+			proto = strings.ToLower(strings.TrimSpace(proto))
+			if proto != "tcp" && proto != "udp" {
+				return "", PortEntry{}, fmt.Errorf("invalid protocol %q in %q: want tcp or udp", proto, s)
+			}
+			protocols = append(protocols, proto)
+		}
+		if len(protocols) == 0 {
+			return "", PortEntry{}, fmt.Errorf("invalid port format %q: empty protocol", s)
+		}
+		spec = spec[:i]
+	}
+
+	parts := strings.Split(spec, ":")
 	if len(parts) > 2 {
-		return "", 0, fmt.Errorf("invalid port format %q: too many colons", s)
+		return "", PortEntry{}, fmt.Errorf("invalid port format %q: too many colons", s)
 	}
 
-	if len(parts) == 2 {
-		// Could be "name:port" or "host:container"
-		name, portStr := parts[0], parts[1]
-		if name == "" || portStr == "" {
-			return "", 0, fmt.Errorf("invalid port format %q: empty segment", s)
-		}
-		p, err := strconv.Atoi(portStr)
-		if err != nil {
-			return "", 0, fmt.Errorf("invalid port number %q in %q", portStr, s)
-		}
-		if p < 1 || p > 65535 {
-			return "", 0, fmt.Errorf("port %d out of range (1-65535) in %q", p, s)
-		}
-		// If the name part is numeric, treat as "host:container" mapped port
-		// Use host port as key so multiple mapped ports don't conflict with "default"
-		if isNumeric(name) {
-			return name, p, nil
-		}
-		return name, p, nil
-	}
-
-	// Single segment: bare port number
-	p, err := strconv.Atoi(s)
+	port, err := parsePortNumber(parts[len(parts)-1], s)
 	if err != nil {
-		return "", 0, fmt.Errorf("invalid port %q: not a number and not name:port format", s)
+		return "", PortEntry{}, err
+	}
+	entry = PortEntry{Port: port, Protocols: protocols}
+
+	if len(parts) == 1 {
+		return "default", entry, nil
+	}
+
+	left := strings.TrimSpace(parts[0])
+	if left == "" {
+		return "", PortEntry{}, fmt.Errorf("invalid port format %q: empty segment", s)
+	}
+	if isNumeric(left) {
+		listen, err := parsePortNumber(left, s)
+		if err != nil {
+			return "", PortEntry{}, err
+		}
+		entry.Listen = listen
+		return left, entry, nil
+	}
+	entry.Subdomain = left
+	return left, entry, nil
+}
+
+func parsePortNumber(s, spec string) (int, error) {
+	p, err := strconv.Atoi(strings.TrimSpace(s))
+	if err != nil {
+		return 0, fmt.Errorf("invalid port number %q in %q", s, spec)
 	}
 	if p < 1 || p > 65535 {
-		return "", 0, fmt.Errorf("port %d out of range (1-65535)", p)
+		return 0, fmt.Errorf("port %d out of range (1-65535) in %q", p, spec)
 	}
-	return "default", p, nil
+	return p, nil
 }
 
 func isNumeric(s string) bool {
@@ -177,6 +226,10 @@ type DatabaseConfig struct {
 // (e.g. for local DB containers defined in the service's compose file).
 // DSNTemplate: custom DSN template; use {host}/{port}/{user}/{password}/{database}
 // placeholders. Omit to use the per-type default template.
+// Superuser: grant the service's role SUPERUSER on the shared instance. Only
+// for services that manage extensions themselves at runtime (Immich checks and
+// upgrades its vector extension on every start, and its backup path shells out
+// to pg_dumpall) — pre-creating extensions via Extensions is otherwise enough.
 type ServiceDBDecl struct {
 	Database    string            `yaml:"database,omitempty"`
 	User        string            `yaml:"user,omitempty"`
@@ -184,6 +237,7 @@ type ServiceDBDecl struct {
 	Port        int               `yaml:"port,omitempty"`
 	DSNTemplate string            `yaml:"dsn_template,omitempty"`
 	Extensions  []string          `yaml:"extensions,omitempty"`
+	Superuser   bool              `yaml:"superuser,omitempty"`
 	Env         map[string]string `yaml:"env"`
 }
 
@@ -202,8 +256,8 @@ type ServiceDatabases []TypedDBDecl
 // DBTypeSet returns the set of unique DB types in this declaration list.
 func (d ServiceDatabases) DBTypeSet() map[DBType]bool {
 	set := make(map[DBType]bool, len(d))
-	for _, entry := range d {
-		set[entry.Type] = true
+	for i := range d {
+		set[d[i].Type] = true
 	}
 	return set
 }
@@ -302,7 +356,7 @@ func ResolveExtension(name string) string {
 
 // AllExtensions returns all valid extension identifiers (canonical names).
 func AllExtensions() []string {
-	return []string{"ts", "cf", "tor", "i2p", "ygg", "ipfs"}
+	return []string{"ts", "cf", "tor", "i2p", "ygg"}
 }
 
 // ExtensionProfile returns the Docker Compose profile name for an extension.
@@ -330,8 +384,6 @@ func ExtensionLabel(ext string) string {
 		return "I2P router + eepsite proxy"
 	case "ygg":
 		return "Yggdrasil mesh node"
-	case "ipfs":
-		return "IPFS Kubo node"
 	default:
 		return ext
 	}
@@ -391,43 +443,60 @@ func (cfg *Config) ServiceDatabases() (ServiceDatabases, error) {
 	return sd, nil
 }
 
-// DBHost resolves the host field from either a DBHostConfig or by returning
-// the shared container hostname for the given DB type.
+// DBHost resolves the host for a DB type: an explicit root-level override if
+// one is configured, otherwise the shared container hostname.
+//
+// The root `databases:` section is optional — most installs never write one, so
+// falling back to SharedDBContainer here is what makes a service's `databases:`
+// declaration work out of the box. Returning "" instead made injectDBEnv skip
+// the entry, leaving DATABASE_URL and friends unset. Safe on a nil receiver for
+// the same reason: "no root section" is the normal case, not an error.
 func (dc *DatabaseConfig) DBHost(t DBType) string {
-	switch t {
-	case DBPostgres:
-		if dc.Postgres != nil {
-			return dc.Postgres.Host
-		}
-	case DBMariaDB:
-		if dc.MariaDB != nil {
-			return dc.MariaDB.Host
-		}
-	case DBRedis:
-		if dc.Redis != nil {
-			return dc.Redis.Host
+	if dc != nil {
+		switch t {
+		case DBPostgres:
+			if dc.Postgres != nil && dc.Postgres.Host != "" {
+				return dc.Postgres.Host
+			}
+		case DBMariaDB:
+			if dc.MariaDB != nil && dc.MariaDB.Host != "" {
+				return dc.MariaDB.Host
+			}
+		case DBRedis:
+			if dc.Redis != nil && dc.Redis.Host != "" {
+				return dc.Redis.Host
+			}
 		}
 	}
-	return ""
+	return SharedDBContainer(t)
 }
 
-// DBPort resolves the port field from a DBHostConfig.
+// DBPort resolves the port for a DB type, falling back to the engine's default.
+// Nil-receiver safe, and treats a configured 0 as "unset" so a root section that
+// names only a host still yields a usable port.
 func (dc *DatabaseConfig) DBPort(t DBType) int {
+	if dc != nil {
+		switch t {
+		case DBPostgres:
+			if dc.Postgres != nil && dc.Postgres.Port != 0 {
+				return dc.Postgres.Port
+			}
+		case DBMariaDB:
+			if dc.MariaDB != nil && dc.MariaDB.Port != 0 {
+				return dc.MariaDB.Port
+			}
+		case DBRedis:
+			if dc.Redis != nil && dc.Redis.Port != 0 {
+				return dc.Redis.Port
+			}
+		}
+	}
 	switch t {
 	case DBPostgres:
-		if dc.Postgres != nil {
-			return dc.Postgres.Port
-		}
 		return 5432
 	case DBMariaDB:
-		if dc.MariaDB != nil {
-			return dc.MariaDB.Port
-		}
 		return 3306
 	case DBRedis:
-		if dc.Redis != nil {
-			return dc.Redis.Port
-		}
 		return 6379
 	}
 	return 0
@@ -672,15 +741,24 @@ func BuildEnv(rootConfigFile, configDir, svcName string, sm *secrets.Manager) (m
 		}
 	}
 
-	// 5. Database connection vars (when service declares DB deps)
-	if rootCfg != nil && svcCfg != nil {
-		rootDB, err := rootCfg.RootDatabases()
-		if err == nil && rootDB != nil {
-			svcDB, err := svcCfg.ServiceDatabases()
-			if err == nil && svcDB != nil {
-				if err := injectDBEnv(env, rootDB, svcDB, svcName, sm); err != nil {
-					errs = append(errs, err)
-				}
+	// 5. Database connection vars (when the service declares DB deps).
+	//
+	// The root `databases:` section is optional and most installs have none, so
+	// a nil rootDB must still inject — DBHost/DBPort resolve it to the shared
+	// containers and their default ports. Gating this block on rootDB != nil
+	// meant every DB-backed service silently started with an empty
+	// DATABASE_URL / DB_HOSTNAME / REDIS_HOSTNAME.
+	if svcCfg != nil {
+		var rootDB *DatabaseConfig
+		if rootCfg != nil {
+			if dc, err := rootCfg.RootDatabases(); err == nil {
+				rootDB = dc
+			}
+		}
+		svcDB, err := svcCfg.ServiceDatabases()
+		if err == nil && svcDB != nil {
+			if err := injectDBEnv(env, rootDB, svcDB, svcName, sm); err != nil {
+				errs = append(errs, err)
 			}
 		}
 	}
@@ -733,7 +811,8 @@ func injectDBEnv(env map[string]string, rootDB *DatabaseConfig, svcDB ServiceDat
 		rootPassword = pw
 	}
 
-	for _, entry := range svcDB {
+	for i := range svcDB {
+		entry := &svcDB[i]
 		// Resolve host: explicit host overrides root config
 		host := entry.Host
 		if host == "" {

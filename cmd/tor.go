@@ -3,17 +3,17 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 
-	"github.com/groot/homelab/internal/run"
+	"github.com/groot/homelab/internal/network"
+	"github.com/groot/homelab/internal/network/tor"
 	"github.com/groot/homelab/internal/tui/styles"
 	"github.com/spf13/cobra"
 )
 
 const torContainer = "tor"
-const torHiddenServiceDir = "/var/lib/tor/hidden_service"
 
 var torCmd = &cobra.Command{
 	Use:   torContainer,
@@ -29,22 +29,7 @@ var torStatusCmd = &cobra.Command{
 	Short:   "Show Tor container and onion service status",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		root := configDir()
-
-		fmt.Printf("\n%s\n\n", styles.Header.Render("Tor Onion Service Proxy"))
-
-		if !extEnabled(root, "tor") {
-			fmt.Printf("  %s  Tor not enabled.\n", styles.Warning.Render("!"))
-			fmt.Printf("  Run %s to enable.\n\n",
-				styles.Primary.Render("homelab ext enable tor"))
-			return nil
-		}
-
-		state := containerStatus(torContainer)
-		if state == containerStateRunning {
-			fmt.Printf("  %s  tor  %s\n", styles.Success.Render("✓"), styles.StateTag(state))
-		} else {
-			fmt.Printf("  %s  tor  %s\n", styles.Err.Render("✗"), styles.StateTag(state))
-			fmt.Printf("\n  Start with: %s\n\n", styles.Primary.Render("homelab start"))
+		if !extStatusHeader(root, "tor", torContainer, "Tor Onion Service Proxy") {
 			return nil
 		}
 
@@ -63,18 +48,15 @@ var torStatusCmd = &cobra.Command{
 				continue
 			}
 			name := strings.TrimSuffix(e.Name(), ".conf")
-			onion, err := exec.Command( // nosec G204 -- binary is "docker", paths are programmatic
-				"docker", "exec", torContainer,
-				"cat", filepath.Join(torHiddenServiceDir, name, "hostname"),
-			).Output()
-			if err != nil {
+			onion := torOnionAddress(name)
+			if onion == "" {
 				continue
 			}
 			found = true
 			fmt.Printf("  %s  %s → %s",
 				styles.Muted.Render("↳"),
 				styles.Bold.Render(name),
-				styles.Primary.Render(strings.TrimSpace(string(onion))),
+				styles.Primary.Render(onion),
 			)
 			fmt.Println()
 		}
@@ -90,19 +72,8 @@ var torStatusCmd = &cobra.Command{
 
 // ── logs ──────────────────────────────────────────────────────────────────────
 
-var torLogsCmd = &cobra.Command{
-	Use:   "logs",
-	Short: "Stream tor container logs",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		root := configDir()
-		env := buildEnv(root, "")
-		return run.Default().DockerComposeEnv(
-			run.CoreComposeFile(root),
-			env,
-			withProfiles(root, "logs", "-f", torContainer)...,
-		)
-	},
-}
+var torLogsCmd = containerLogsCmd(torContainer,
+	"Stream tor container logs")
 
 // ── list ──────────────────────────────────────────────────────────────────────
 
@@ -125,11 +96,8 @@ var torListCmd = &cobra.Command{
 				continue
 			}
 			name := strings.TrimSuffix(e.Name(), ".conf")
-			onion, err := exec.Command( // nosec G204 -- binary is "docker", paths are programmatic
-				"docker", "exec", torContainer,
-				"cat", filepath.Join(torHiddenServiceDir, name, "hostname"),
-			).Output()
-			if err != nil {
+			onion := torOnionAddress(name)
+			if onion == "" {
 				fmt.Printf("  %s  %s  %s\n",
 					styles.Warning.Render("!"), styles.Bold.Render(name),
 					styles.Muted.Render("(container not running or service not yet ready)"))
@@ -139,7 +107,7 @@ var torListCmd = &cobra.Command{
 			fmt.Printf("  %s  %s → %s\n",
 				styles.Dot(true, true),
 				styles.Bold.Render(name),
-				styles.Primary.Render(strings.TrimSpace(string(onion))),
+				styles.Primary.Render(onion),
 			)
 		}
 		if !found {
@@ -179,41 +147,36 @@ Use --port to override the port detected from caddy.conf.`,
 			}
 		}
 
-		// Write config snippet to torrc.d/<name>.conf
-		confDir := filepath.Join(root, "tor", "torrc.d")
-		if err := os.MkdirAll(confDir, 0o750); err != nil {
-			return fmt.Errorf("creating torrc.d: %w", err)
+		portNum, err := strconv.Atoi(port)
+		if err != nil {
+			return fmt.Errorf("invalid port %q: %w", port, err)
 		}
-		confPath := filepath.Join(confDir, name+".conf")
-		content := fmt.Sprintf("HiddenServiceDir %s/%s\nHiddenServicePort 80 %s:%s\n",
-			torHiddenServiceDir, name, name, port)
 
-		if err := os.WriteFile(confPath, []byte(content), 0o600); err != nil {
-			return fmt.Errorf("writing %s: %w", confPath, err)
+		l, err := torLayer()
+		if err != nil {
+			return err
 		}
-		fmt.Printf("  %s  %s written\n", styles.Success.Render("✓"), confPath)
-
-		// Reload tor config
-		if err := ReloadTor(); err != nil {
-			return fmt.Errorf("reloading tor: %w", err)
+		// Same call path as `homelab enable <svc> --tor`: this command used to
+		// keep its own copy of the torrc.d writer and the reload, which is how
+		// the two came to disagree about whether a missing config is an error.
+		if err := l.Enable(name, name, network.ServiceInfo{},
+			[]network.PortSelection{{Name: "default", Port: portNum, Protocol: "tcp"}}); err != nil {
+			return err
 		}
-		fmt.Printf("  %s  Tor config reloaded\n", styles.Success.Render("✓"))
+		fmt.Printf("  %s  Hidden service configured and tor reloaded\n", styles.Success.Render("✓"))
 
 		// Show .onion address if available
-		onion, _ := exec.Command(
-			"docker", "exec", torContainer,
-			"cat", filepath.Join(torHiddenServiceDir, name, "hostname"),
-		).Output()
-		if len(onion) > 0 {
+		if onion := torOnionAddress(name); onion != "" {
 			fmt.Printf("  %s  Onion address: %s\n",
 				styles.Primary.Render("→"),
-				styles.Bold.Render(strings.TrimSpace(string(onion))))
+				styles.Bold.Render(onion))
 		} else {
 			fmt.Printf("  %s  Onion address will appear after first connection — run %s\n",
 				styles.Muted.Render("!"),
 				styles.Primary.Render("homelab tor list"))
 		}
 		fmt.Println()
+
 		return nil
 	},
 }
@@ -233,60 +196,33 @@ var torDisableCmd = &cobra.Command{
 	ValidArgsFunction: completeServiceNames,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := args[0]
-		root := configDir()
-		confPath := filepath.Join(root, "tor", "torrc.d", name+".conf")
 
-		if _, err := os.Stat(confPath); os.IsNotExist(err) {
-			return fmt.Errorf("no onion service config found for %q", name)
+		l, err := torLayer()
+		if err != nil {
+			return err
 		}
-		if err := os.Remove(confPath); err != nil {
-			return fmt.Errorf("removing %s: %w", confPath, err)
+		if err := l.Disable(name); err != nil {
+			return err
 		}
-		fmt.Printf("  %s  %s removed\n", styles.Warning.Render("→"), confPath)
-
-		if err := ReloadTor(); err != nil {
-			return fmt.Errorf("reloading tor: %w", err)
-		}
-		fmt.Printf("  %s  Tor config reloaded\n", styles.Success.Render("✓"))
-		fmt.Println()
+		fmt.Printf("  %s  %s removed and tor reloaded\n\n",
+			styles.Warning.Render("→"), styles.Bold.Render(name))
 		return nil
 	},
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-// ReloadTor sends SIGHUP to the tor process inside the container.
-func ReloadTor() error {
-	return run.Default().DockerExec(torContainer,
-		"sh", "-c", "kill -HUP $(pidof tor)")
-}
-
-// TorServicePath returns the torrc.d config path for a service.
-func TorServicePath(root, name string) string {
-	return filepath.Join(root, "tor", "torrc.d", name+".conf")
-}
-
-// AppendTorService writes a torrc.d config for a service.
-// The virtual port is always 80 for HTTP — Tor remaps it to the actual backend port.
-func AppendTorService(root, name, port string) error {
-	confDir := filepath.Join(root, "tor", "torrc.d")
-	if err := os.MkdirAll(confDir, 0o750); err != nil {
-		return fmt.Errorf("creating torrc.d: %w", err)
+// torLayer returns the registered Tor layer.
+func torLayer() (*tor.Layer, error) {
+	layer, ok := extRegistry().Get("tor")
+	if !ok {
+		return nil, fmt.Errorf("tor extension not registered")
 	}
-	confPath := TorServicePath(root, name)
-	content := fmt.Sprintf("HiddenServiceDir %s/%s\nHiddenServicePort 80 %s:%s\n",
-		torHiddenServiceDir, name, name, port)
-	return os.WriteFile(confPath, []byte(content), 0o600)
-}
-
-// RemoveTorService removes a torrc.d config for a service.
-func RemoveTorService(root, name string) error {
-	confPath := TorServicePath(root, name)
-	err := os.Remove(confPath)
-	if os.IsNotExist(err) {
-		return nil
+	l, ok := layer.(*tor.Layer)
+	if !ok {
+		return nil, fmt.Errorf("unexpected tor layer type %T", layer)
 	}
-	return err
+	return l, nil
 }
 
 func init() {

@@ -13,7 +13,7 @@ networks:
 
 services:
   nextcloud:
-    image: nextcloud:latest
+    image: nextcloud:${NEXTCLOUD_VERSION:-latest}
     container_name: nextcloud
     user: "${PUID:-1000}:${PGID:-1000}"
     restart: unless-stopped

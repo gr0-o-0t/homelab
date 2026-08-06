@@ -20,4 +20,4 @@ databases:
         database: F_DB_NAME
 ports:
   - 3000
-  - ssh:22
+  - 22:22

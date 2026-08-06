@@ -1,14 +1,32 @@
 // Package network defines the NetworkLayer interface and Registry for managing
 // homelab's network extension layers (tailscale, cloudflared, tor, i2p,
-// yggdrasil, ipfs). Each layer implements NetworkLayer and registers with
+// yggdrasil). Each layer implements NetworkLayer and registers with
 // the Registry, providing uniform lifecycle (Start/Stop/Status) and service
 // exposure (Enable/Disable) regardless of the underlying implementation.
 package network
+
+import (
+	"sync"
+	"time"
+)
 
 // Status represents the current operational state of a network layer.
 type Status struct {
 	ContainerState string // "running", "stopped", "not found"
 }
+
+// EnvFunc supplies the environment for a layer's docker compose calls: root
+// vars plus keyring secrets, i.e. cmd's buildEnv.
+//
+// A function rather than a map because it is called only when a layer actually
+// shells out to compose. Building the map reads the system keyring, which can
+// prompt for an unlock — not something `homelab ygg list` should trigger.
+//
+// Layers used to hardcode an empty map here. Compose then substituted "" for
+// every variable, so `Layer.Start()` — a bare `--profile X up -d`, which
+// targets the whole file — would recreate the tailscale container with a blank
+// TS_AUTHKEY and drop the host off the tailnet.
+type EnvFunc func() map[string]string
 
 // ServiceInfo holds parsed service configuration for Enable/Disable operations.
 // Layers use this to generate Caddy blocks and tunnel configs.
@@ -21,8 +39,9 @@ type ServiceInfo struct {
 
 // PortSelection describes a single exposed port for a service.
 type PortSelection struct {
-	Name     string // "web", "ssh", or "default"
+	Name     string // declaration key: "default", a listen port, or a subdomain
 	Port     int    // container port number
+	Listen   int    // site port clients connect on; 0 = the layer's default
 	Protocol string // "tcp" or "udp"
 }
 
@@ -70,11 +89,42 @@ type NetworkLayer interface {
 	// Removes Caddy config from CaddyConfigDir() AND extension-specific config.
 	Disable(svcName string) error
 
+	// ── Addressing ───────────────────────────────────────────────────────
+
+	// ServiceAddresses returns every address a service answers on for this
+	// layer, most canonical first, or nil when it is not exposed here.
+	//
+	// This lives on the layer because only the layer knows how its network
+	// names things: tor reads the generated hostname file, i2p derives a b32
+	// from the tunnel's destination key, ygg pairs the node address with the
+	// allocated port, and the tailnet/Cloudflare layers template a hostname
+	// out of env. Callers render what they get.
+	//
+	// It was previously a string-templating function in configgen shared by
+	// nobody in particular, which is how `homelab status` came to advertise a
+	// <name>.i2p host that resolves for no one and a ygg placeholder that
+	// disagreed with `homelab ygg status`.
+	//
+	// Resolving may shell into a container, so callers listing many services
+	// should expect it to be slow and cache per command, not per row.
+	ServiceAddresses(svcName string, env map[string]string) []ServiceAddress
+
 	// ── Config ───────────────────────────────────────────────────────────
 
 	// CaddyConfigDir returns the conf.d-<ext> directory path for Caddy config
 	// placement (e.g. "caddy/conf.d-tor" for tor).
 	CaddyConfigDir(configRoot string) string
+}
+
+// ServiceAddress is one way to reach a service on a layer.
+type ServiceAddress struct {
+	// URL is what a client opens, e.g. "https://gitea.home.example.com" or
+	// "http://abcd…xyz.b32.i2p".
+	URL string
+
+	// Note qualifies the URL when it needs qualifying — "needs an addressbook
+	// entry", "node not running". Empty means the URL stands on its own.
+	Note string
 }
 
 // ── Registry ──────────────────────────────────────────────────────────────────
@@ -138,3 +188,40 @@ func (r *Registry) Has(name string) bool {
 // Layer packages use this in their own compilation unit:
 //
 //	var _ network.NetworkLayer = (*Layer)(nil)
+
+// ── Address caching ───────────────────────────────────────────────────────────
+
+// AddressCache memoizes a slow address lookup.
+//
+// Resolving a tor/i2p/ygg address means shelling into a container, and the TUI
+// asks for addresses on every render. Without this, opening a service's detail
+// pane would run a `docker exec` per frame. The values it guards barely change:
+// an onion address and an eepsite b32 are fixed for the life of the key, and a
+// mesh address for the life of the node key.
+//
+// Zero value is ready to use. Safe for concurrent use: the TUI resolves from
+// its render goroutine and its refresh commands.
+type AddressCache struct {
+	mu       sync.Mutex
+	value    string
+	resolved time.Time
+}
+
+// AddressCacheTTL is short enough that a container coming up is noticed within
+// a few seconds, long enough that a redraw storm costs one lookup.
+const AddressCacheTTL = 15 * time.Second
+
+// Get returns the cached value, calling resolve when the cache is empty or
+// stale. An empty result is not cached: it usually means "container not up
+// yet", and that is precisely the state the caller wants to see change.
+func (c *AddressCache) Get(resolve func() string) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.value != "" && time.Since(c.resolved) < AddressCacheTTL {
+		return c.value
+	}
+	c.value = resolve()
+	c.resolved = time.Now()
+	return c.value
+}

@@ -3,11 +3,21 @@
 Each `.forward` file defines one socat TCP6→TCP4 forwarder.
 Format: shell variables sourced by the entrypoint script.
 
-  PORT=<port-to-listen-on-over-yggdrasil>
-  TARGET=<container-name>:<port>
+  PORT=<port to listen on over yggdrasil>
+  TARGET=tailscale:<same port>
 
-Example (Jellyfin):
-  PORT=8096
-  TARGET=jellyfin:8096
+TARGET is always Caddy, reached as `tailscale:<port>` because Caddy shares the
+tailscale container's network namespace. Caddy gets a matching `:<port>` site
+block in caddy/conf.d-ygg/. Forwarding straight at a service container instead
+would bypass Caddy entirely.
+
+The mesh has no naming, so a service is addressable only as
+[<node address>]:<port>, and two services cannot share a port. Ports are
+allocated from 9000 up — not from the service's own port, which would let a
+service on 80 or 443 collide with Caddy's own listeners.
+
+Example (Jellyfin, listening on 8096 in its container):
+  PORT=9000
+  TARGET=tailscale:9000
 
 Managed by: homelab ygg enable/disable

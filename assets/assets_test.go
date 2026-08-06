@@ -50,7 +50,7 @@ func TestCatalogFS_ContainsServices(t *testing.T) {
 
 func TestCatalogService_HasRequiredFiles(t *testing.T) {
 	services := []string{"immich", "jellyfin", "uptime-kuma", "vaultwarden"}
-	requiredFiles := []string{"docker-compose.yml", "caddy.conf", "caddy.cf.conf", "config.yaml"}
+	requiredFiles := []string{"docker-compose.yml", "config.yaml"}
 
 	for _, svc := range services {
 		for _, file := range requiredFiles {
@@ -58,6 +58,52 @@ func TestCatalogService_HasRequiredFiles(t *testing.T) {
 			_, err := assets.CatalogFS.Open(path)
 			require.NoError(t, err, "service %s should have %s", svc, file)
 		}
+	}
+}
+
+// Routing comes in shapes, and a service must not mix them: the per-layer pair
+// (caddy.conf + caddy.cf.conf) for a single host → upstream, or a
+// layer-agnostic caddy.routes.conf that configgen wraps for every layer.
+// Shipping both means the private layer is served from caddy.routes.conf while
+// caddy.conf quietly rots — two copies of the same routes, one of them a lie.
+//
+// Shipping *neither* is also valid, and this test used to reject it: a service
+// that declares ports gets its blocks generated, and a headless service
+// (mariadb, postgres, redis — no web interface at all) has nothing to route.
+// Those three used to satisfy the old rule with comment-only files, which is
+// how `homelab enable postgres` came to report success for a route that
+// routed nothing.
+func TestCatalogServices_ShipExactlyOneRoutingShape(t *testing.T) {
+	entries, err := assets.CatalogFS.ReadDir("services")
+	require.NoError(t, err)
+
+	has := func(svc, file string) bool {
+		f, err := assets.CatalogFS.Open("services/" + svc + "/" + file)
+		if err != nil {
+			return false
+		}
+		_ = f.Close()
+		return true
+	}
+
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		svc := e.Name()
+		routes := has(svc, "caddy.routes.conf")
+		priv, pub := has(svc, "caddy.conf"), has(svc, "caddy.cf.conf")
+
+		if routes {
+			assert.False(t, priv || pub,
+				"service %q ships caddy.routes.conf, so caddy.conf/caddy.cf.conf must be removed", svc)
+			continue
+		}
+		// The static pair is all-or-nothing: shipping one half means one layer
+		// routes by hand and the other falls back to generation, from a
+		// different definition of the same service.
+		assert.Equal(t, priv, pub,
+			"service %q ships only one of caddy.conf/caddy.cf.conf", svc)
 	}
 }
 

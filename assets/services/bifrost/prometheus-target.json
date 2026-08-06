@@ -1,0 +1,6 @@
+[
+  {
+    "targets": ["bifrost:8080"],
+    "labels": { "job": "bifrost" }
+  }
+]

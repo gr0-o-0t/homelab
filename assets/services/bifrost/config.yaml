@@ -1,0 +1,21 @@
+vars:
+  BIFROST_LOG_LEVEL:
+    value: "info"
+    required: false
+    description: "Log level: debug, info, warn, error"
+
+secrets: {}
+
+databases:
+  - postgres:
+      database: bifrost
+      user: bifrost
+      env:
+        host: BIFROST_PG_HOST
+        port: BIFROST_PG_PORT
+        user: BIFROST_PG_USER
+        password: BIFROST_PG_PASSWORD
+        database: BIFROST_PG_DB
+
+ports:
+  - 8080

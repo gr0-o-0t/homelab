@@ -1,27 +1,37 @@
 vars:
-  DB_USERNAME:
-    value: "immich"
-    required: true
-  DB_DATABASE_NAME:
-    value: "immich"
-    required: false
   IMMICH_VERSION:
     value: "release"
     required: false
+    description: "Immich image tag"
 
-secrets:
-  DB_PASSWORD:
-    required: true
+secrets: {}
 
+# Both on the shared instances. DB_PASSWORD is no longer a keyring secret you
+# set by hand — the provisioner generates it and injects it below.
+#
+# superuser: Immich verifies and upgrades its vector extensions on every start,
+# and its backup job shells out to pg_dumpall; neither works for a plain owner
+# role. Upstream documents this as the supported way to run against an existing
+# Postgres: https://docs.immich.app/administration/postgres-standalone/
+#
+# Extension order matters — earthdistance depends on cube, and the provisioner
+# creates them in the order listed without CASCADE.
 databases:
   - postgres:
-      host: immich-postgres
-      port: 5432
       database: immich
       user: immich
+      superuser: true
+      extensions:
+        - vector
+        - vchord
+        - cube
+        - earthdistance
       env:
         host: DB_HOSTNAME
         port: DB_PORT
+        user: DB_USERNAME
+        password: DB_PASSWORD
+        database: DB_DATABASE_NAME
   - redis:
       env:
         host: REDIS_HOSTNAME

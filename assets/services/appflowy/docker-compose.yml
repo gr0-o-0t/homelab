@@ -1,0 +1,237 @@
+# Service: AppFlowy (self-hosted Notion alternative — notes, docs, databases)
+# https://github.com/AppFlowy-IO/AppFlowy-Cloud
+# Adapted from upstream docker-compose.yml + deploy.env.
+#
+# Differences from upstream, all deliberate:
+#   - No nginx. Caddy is the only reverse proxy in this homelab, so upstream's
+#     nginx.conf becomes caddy.conf / caddy.cf.conf.
+#   - No postgres container. Uses shared homelab-postgres, which ships pgvector
+#     — see config.yaml `databases:`. The database, role, password and the
+#     `vector`/`uuid-ossp`/`pgcrypto` extensions are all created by
+#     `homelab setup appflowy`.
+#   - Redis is the shared homelab-redis.
+#   - No `ai` service and AI_ENABLED=false: it needs an OpenAI key to do
+#     anything. To turn AI on, add appflowyinc/appflowy_ai, flip AI_ENABLED,
+#     and set AI_OPENAI_API_KEY (an OpenAI-compatible base URL can point at
+#     litellm/bifrost).
+#   - No SMTP and no OAuth providers. Mail is off, so the admin account is
+#     created from GOTRUE_ADMIN_* at startup and further users are invited
+#     from the /console admin portal.
+#
+# First run:  homelab setup appflowy && homelab up appflowy && homelab enable appflowy
+# Then sign in to https://appflowy.<home>.<domain>/console with APPFLOWY_ADMIN_*.
+
+x-base-url: &base-url "https://appflowy.${HOME_SUBDOMAIN}.${DOMAIN}"
+
+# GoTrue keeps its tables in an `auth` schema inside the same database, so its
+# DSN is the shared one plus a search_path. Both are assembled from the parts
+# injected by config.yaml `databases:` rather than hardcoded.
+x-db-url: &db-url "postgres://${APPFLOWY_DB_USER}:${APPFLOWY_DB_PASSWORD}@${APPFLOWY_DB_HOST}:${APPFLOWY_DB_PORT}/${APPFLOWY_DB_NAME}"
+
+# Shared by every container that reads or writes user files. MinIO is addressed
+# by its internal host here; presigned URLs get signed against it, which is why
+# caddy.conf has to rewrite Host on /minio-api.
+x-s3-env: &s3-env
+  APPFLOWY_S3_USE_MINIO: "true"
+  APPFLOWY_S3_MINIO_URL: "http://appflowy-minio:9000"
+  APPFLOWY_S3_ACCESS_KEY: ${APPFLOWY_S3_ACCESS_KEY}
+  APPFLOWY_S3_SECRET_KEY: ${APPFLOWY_S3_SECRET_KEY}
+  APPFLOWY_S3_BUCKET: appflowy
+
+networks:
+  # Shared network — Caddy (via the Tailscale namespace) reaches services here,
+  # and it is also how these containers reach homelab-postgres and homelab-redis.
+  home-services:
+    name: home-services
+    external: true
+
+services:
+  # Web frontend — the "/" route. Named `appflowy` so caddy.conf reads
+  # `reverse_proxy appflowy:80`.
+  appflowy-web:
+    image: appflowyinc/appflowy_web:latest
+    container_name: appflowy
+    restart: unless-stopped
+    environment:
+      APPFLOWY_BASE_URL: *base-url
+      APPFLOWY_GOTRUE_BASE_URL: "https://appflowy.${HOME_SUBDOMAIN}.${DOMAIN}/gotrue"
+      APPFLOWY_WS_BASE_URL: "wss://appflowy.${HOME_SUBDOMAIN}.${DOMAIN}/ws/v2"
+    depends_on:
+      appflowy-cloud:
+        condition: service_healthy
+    networks:
+      - home-services
+
+  # Main backend: REST API, realtime collaboration websocket.
+  appflowy-cloud:
+    image: appflowyinc/appflowy_cloud:latest
+    container_name: appflowy-cloud
+    restart: unless-stopped
+    environment:
+      <<: *s3-env
+      RUST_LOG: ${RUST_LOG:-info}
+      APPFLOWY_ENVIRONMENT: production
+      APPFLOWY_BASE_URL: *base-url
+      APPFLOWY_WEB_URL: *base-url
+      APPFLOWY_DATABASE_URL: *db-url
+      APPFLOWY_DATABASE_MAX_CONNECTIONS: "40"
+      APPFLOWY_REDIS_URI: ${APPFLOWY_REDIS_URI}
+      APPFLOWY_GOTRUE_BASE_URL: "http://appflowy-gotrue:9999"
+      APPFLOWY_GOTRUE_JWT_SECRET: ${APPFLOWY_GOTRUE_JWT_SECRET}
+      APPFLOWY_ACCESS_CONTROL: "true"
+      APPFLOWY_S3_CREATE_BUCKET: "true"
+      APPFLOWY_S3_PRESIGNED_URL_ENDPOINT: "https://appflowy.${HOME_SUBDOMAIN}.${DOMAIN}/minio-api"
+      APPFLOWY_SEARCH_SERVICE_URL: "http://appflowy-search:4002"
+      AI_ENABLED: "false"
+    depends_on:
+      appflowy-gotrue:
+        condition: service_healthy
+    networks:
+      - home-services
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail http://127.0.0.1:8000/api/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s # first boot runs the schema migrations
+
+  # Auth (Supabase GoTrue fork). Creates the admin account on first start.
+  appflowy-gotrue:
+    image: appflowyinc/gotrue:latest
+    container_name: appflowy-gotrue
+    restart: unless-stopped
+    environment:
+      GOTRUE_DB_DRIVER: postgres
+      DATABASE_URL: "postgres://${APPFLOWY_DB_USER}:${APPFLOWY_DB_PASSWORD}@${APPFLOWY_DB_HOST}:${APPFLOWY_DB_PORT}/${APPFLOWY_DB_NAME}?search_path=auth"
+      PORT: "9999"
+      API_EXTERNAL_URL: "https://appflowy.${HOME_SUBDOMAIN}.${DOMAIN}/gotrue"
+      GOTRUE_ADMIN_EMAIL: ${APPFLOWY_ADMIN_EMAIL}
+      GOTRUE_ADMIN_PASSWORD: ${APPFLOWY_ADMIN_PASSWORD}
+      # Without this the admin is created with the plain `admin` role instead
+      # of `supabase_admin` and can't administer the instance.
+      GOTRUE_JWT_ADMIN_GROUP_NAME: supabase_admin
+      GOTRUE_JWT_SECRET: ${APPFLOWY_GOTRUE_JWT_SECRET}
+      GOTRUE_JWT_EXP: "604800"
+      GOTRUE_DISABLE_SIGNUP: ${APPFLOWY_DISABLE_SIGNUP:-true}
+      # No SMTP configured, so confirmation mail can never arrive — new users
+      # have to be auto-confirmed or they could never log in.
+      GOTRUE_MAILER_AUTOCONFIRM: "true"
+      GOTRUE_MAILER_URLPATHS_CONFIRMATION: /gotrue/verify
+      GOTRUE_MAILER_URLPATHS_INVITE: /gotrue/verify
+      GOTRUE_MAILER_URLPATHS_RECOVERY: /gotrue/verify
+      GOTRUE_MAILER_URLPATHS_EMAIL_CHANGE: /gotrue/verify
+      # Deep link back into the AppFlowy desktop/mobile app after login.
+      GOTRUE_SITE_URL: "appflowy-flutter://"
+      GOTRUE_URI_ALLOW_LIST: "**"
+    networks:
+      - home-services
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail http://127.0.0.1:9999/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
+
+  # Admin portal at /console — user management, workspace admin.
+  appflowy-admin:
+    image: appflowyinc/admin_frontend:latest
+    container_name: appflowy-admin
+    restart: unless-stopped
+    environment:
+      APPFLOWY_BASE_URL: *base-url
+      APPFLOWY_GOTRUE_BASE_URL: "http://appflowy-gotrue:9999"
+    depends_on:
+      appflowy-cloud:
+        condition: service_healthy
+    networks:
+      - home-services
+
+  # Background jobs: workspace import/export.
+  appflowy-worker:
+    image: appflowyinc/appflowy_worker:latest
+    container_name: appflowy-worker
+    restart: unless-stopped
+    environment:
+      <<: *s3-env
+      RUST_LOG: ${RUST_LOG:-info}
+      APPFLOWY_ENVIRONMENT: production
+      APPFLOWY_WORKER_ENVIRONMENT: production
+      APPFLOWY_WORKER_DATABASE_URL: *db-url
+      APPFLOWY_WORKER_DATABASE_NAME: ${APPFLOWY_DB_NAME}
+      APPFLOWY_WORKER_REDIS_URL: ${APPFLOWY_REDIS_URI}
+      APPFLOWY_WORKER_IMPORT_TICK_INTERVAL: "30"
+    depends_on:
+      appflowy-cloud:
+        condition: service_healthy
+    networks:
+      - home-services
+
+  # Full-text search. Keyword indexing only — semantic search needs embeddings,
+  # which needs an OpenAI key, so the background (embedding) indexer is off.
+  appflowy-search:
+    image: appflowyinc/appflowy_search:latest
+    container_name: appflowy-search
+    restart: unless-stopped
+    environment:
+      <<: *s3-env
+      RUST_LOG: ${RUST_LOG:-info}
+      APPFLOWY_SEARCH_HOST: "[::]"
+      APPFLOWY_SEARCH_PORT: "4002"
+      APPFLOWY_SEARCH_DATABASE_URL: *db-url
+      APPFLOWY_SEARCH_REDIS_URL: ${APPFLOWY_REDIS_URI}
+      APPFLOWY_GOTRUE_JWT_SECRET: ${APPFLOWY_GOTRUE_JWT_SECRET}
+      APPFLOWY_KEYWORD_SEARCH_ENABLED: "true"
+      APPFLOWY_KEYWORD_WORKER_ENABLED: "true"
+      APPFLOWY_KEYWORD_INDEX_DIR: /var/lib/appflowy/keyword_index
+      APPFLOWY_BACKGROUND_INDEXER_ENABLED: "false"
+      APPFLOWY_INDEXER_DATABASE_ENABLED: "false"
+    volumes:
+      - appflowy-keyword-index:/var/lib/appflowy/keyword_index
+    networks:
+      - home-services
+    healthcheck:
+      # The runtime image ships neither curl nor wget; bash's /dev/tcp keeps
+      # this an HTTP-level check without adding an image dependency.
+      test:
+        - CMD
+        - bash
+        - -ec
+        - |
+          exec 3<>/dev/tcp/127.0.0.1/4002
+          printf 'GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3
+          read -r _ status _ <&3
+          [ "$$status" = 200 ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
+
+  # S3-compatible object storage for uploads, attachments and collab blobs.
+  appflowy-minio:
+    # Pinned: MinIO dropped the web console from community releases after this
+    # tag. The /minio-api route (uploads) works on any version — only the
+    # /minio console route depends on the pin.
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    container_name: appflowy-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${APPFLOWY_S3_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${APPFLOWY_S3_SECRET_KEY}
+      MINIO_BROWSER_REDIRECT_URL: "https://appflowy.${HOME_SUBDOMAIN}.${DOMAIN}/minio"
+    volumes:
+      - appflowy-minio-data:/data
+    networks:
+      - home-services
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  appflowy-minio-data:
+    name: appflowy_minio_data
+  appflowy-keyword-index:
+    name: appflowy_keyword_index

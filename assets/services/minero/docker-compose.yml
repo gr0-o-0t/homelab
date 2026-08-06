@@ -13,6 +13,10 @@ networks:
 services:
   monerod:
     image: ghcr.io/gr0-o-0t/minero-monerod:latest
+    # caddy.conf proxies to `monerod`/`p2pool`; without container_name those
+    # resolve only via the compose service alias, and `homelab status` has no
+    # stable name to show. Every other service in the catalog sets this.
+    container_name: monerod
     user: 1000:1000
     restart: unless-stopped
     tty: true
@@ -55,6 +59,7 @@ services:
 
   p2pool:
     image: ghcr.io/gr0-o-0t/minero-p2pool:latest
+    container_name: p2pool
     user: 1000:1000
     restart: unless-stopped
     tty: true
@@ -85,6 +90,7 @@ services:
 
   xmrig:
     image: ghcr.io/gr0-o-0t/minero-xmrig:latest
+    container_name: xmrig
     restart: unless-stopped
     tty: true
     stdin_open: true
@@ -121,10 +127,13 @@ services:
       --donate-level 0
       -o ${P2POOL_HOST:-p2pool}:3333
 
+# Explicit names, like the rest of the catalog. Without `name:` Docker prefixes
+# them with the compose project, which both breaks the catalog's global
+# volume-uniqueness guard and makes the volumes hard to find by hand.
 volumes:
   p2pool_data:
-    external: false
+    name: minero_p2pool_data
   xmrig_data:
-    external: false
+    name: minero_xmrig_data
   bitmonero:
-    external: false
+    name: minero_bitmonero

@@ -1,16 +1,22 @@
 # Build a custom Yggdrasil image that includes socat for port-forwarding.
 # The upstream image is minimal and does not ship socat.
 #
+# Source the binaries from GHCR, not Docker Hub: yggdrasilnetwork/yggdrasil-go
+# on Docker Hub was last pushed in 2021 (v0.4), and v0.5 changed the wire
+# protocol — a v0.4 node cannot peer with anything on today's network. Pinned
+# to the 0.5 line so the next protocol break has to be opted into rather than
+# arriving on a `docker compose build --pull`.
+#
 # Uses multi-stage build:
-#   stage 1 — yggdrasil binary from upstream
-#   stage 2 — alpine + socat + yggdrasil binary
+#   stage 1 — yggdrasil binaries from upstream
+#   stage 2 — alpine + socat + openssl (node key generation) + the binaries
 
-FROM yggdrasilnetwork/yggdrasil-go:latest AS yggdrasil
+FROM ghcr.io/yggdrasil-network/yggdrasil-go:0.5 AS yggdrasil
 
 # ── Final image ──────────────────────────────────────────────
 FROM alpine:latest
 
-RUN apk add --no-cache socat
+RUN apk add --no-cache socat openssl
 
 COPY --from=yggdrasil /usr/bin/yggdrasil /usr/bin/yggdrasil
 COPY --from=yggdrasil /usr/bin/yggdrasilctl /usr/bin/yggdrasilctl

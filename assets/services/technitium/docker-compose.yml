@@ -2,8 +2,13 @@
 # Service: Technitium DNS Server (authoritative and recursive DNS server)
 # https://technitium.com/dns/
 # ─────────────────────────────────────────────────────────────────────────────
-# NOTE: DNS port 53 (TCP+UDP) needs host-level exposure to function as a DNS
-# server. Uncomment the ports section below to enable DNS functionality.
+# A DNS server needs host port 53 to answer queries, so it is bound below rather
+# than left commented out — the web UI alone is not the point of this service.
+#
+# That makes technitium mutually exclusive with adguardhome and pihole: whichever
+# starts second fails with "port is already allocated". Pick one resolver. The
+# catalog test TestCatalogServices_HostPortConflictsAreKnown records all three as
+# deliberate alternatives.
 
 networks:
   home-services:
@@ -22,9 +27,9 @@ services:
       - technitium-config:/etc/dns
     networks:
       - home-services
-    #ports:
-    #  - "53:53/tcp"
-    #  - "53:53/udp"
+    ports:
+      - "53:53/tcp"
+      - "53:53/udp"
     healthcheck:
       test:
         [

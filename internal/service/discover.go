@@ -22,10 +22,9 @@ type Service struct {
 
 	// Network extension layer exposure — detected from caddy/conf.d-<ext>/ file existence.
 	// These are always regular files (written by configgen.WriteFile), not symlinks.
-	HasTor  bool // caddy/conf.d-tor/<name>.conf exists
-	HasI2P  bool // caddy/conf.d-i2p/<name>.conf exists
-	HasYgg  bool // caddy/conf.d-ygg/<name>.conf exists
-	HasIPFS bool // caddy/conf.d-ipfs/<name>.conf exists
+	HasTor bool // caddy/conf.d-tor/<name>.conf exists
+	HasI2P bool // caddy/conf.d-i2p/<name>.conf exists
+	HasYgg bool // caddy/conf.d-ygg/<name>.conf exists
 
 	Installed bool // true = exists on disk; false = catalog-only (not yet added)
 
@@ -201,17 +200,19 @@ func discover(repoRoot string) ([]Service, error) {
 		dir := filepath.Join(servicesDir, name)
 
 		services = append(services, Service{
-			Name:               name,
-			Dir:                dir,
-			HasCaddyConf:       fileExists(filepath.Join(dir, "caddy.conf")),
-			HasPublicCaddyConf: fileExists(filepath.Join(dir, "caddy.cf.conf")),
-			Enabled:            fileExists(filepath.Join(repoRoot, "caddy", "conf.d", name+".conf")),
-			PublicEnabled:      fileExists(filepath.Join(repoRoot, "caddy", "conf.d-cf", name+".conf")),
-			HasTor:             fileExists(filepath.Join(repoRoot, "caddy", "conf.d-tor", name+".conf")),
-			HasI2P:             fileExists(filepath.Join(repoRoot, "caddy", "conf.d-i2p", name+".conf")),
-			HasYgg:             fileExists(filepath.Join(repoRoot, "caddy", "conf.d-ygg", name+".conf")),
-			HasIPFS:            fileExists(filepath.Join(repoRoot, "caddy", "conf.d-ipfs", name+".conf")),
-			Installed:          true,
+			Name:         name,
+			Dir:          dir,
+			HasCaddyConf: fileExists(filepath.Join(dir, "caddy.conf")),
+			// A caddy.routes.conf covers every layer including cf, so it also
+			// means "public exposure is available for this service".
+			HasPublicCaddyConf: fileExists(filepath.Join(dir, "caddy.cf.conf")) ||
+				fileExists(filepath.Join(dir, "caddy.routes.conf")),
+			Enabled:       fileExists(filepath.Join(repoRoot, "caddy", "conf.d", name+".conf")),
+			PublicEnabled: fileExists(filepath.Join(repoRoot, "caddy", "conf.d-cf", name+".conf")),
+			HasTor:        fileExists(filepath.Join(repoRoot, "caddy", "conf.d-tor", name+".conf")),
+			HasI2P:        fileExists(filepath.Join(repoRoot, "caddy", "conf.d-i2p", name+".conf")),
+			HasYgg:        fileExists(filepath.Join(repoRoot, "caddy", "conf.d-ygg", name+".conf")),
+			Installed:     true,
 		})
 	}
 
@@ -224,4 +225,36 @@ func discover(repoRoot string) ([]Service, error) {
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+// ── Layer exposure ────────────────────────────────────────────────────────────
+
+// LayerName is a network layer's short name, matching network.Registry keys.
+type LayerName = string
+
+// ActiveLayers returns the layers this service is currently exposed on, in
+// display order.
+//
+// Discovery records exposure as one bool per layer, so every caller that wants
+// to iterate them re-derives the same flag→name mapping — and they drifted:
+// `homelab status` printed a real Tor address while the TUI printed a
+// name-templated fake, and neither knew ygg had moved to port addressing. One
+// mapping, one order, both renderers.
+func (s Service) ActiveLayers() []LayerName {
+	var names []LayerName
+	for _, l := range []struct {
+		name    LayerName
+		exposed bool
+	}{
+		{"ts", s.Enabled},
+		{"cf", s.PublicEnabled},
+		{"tor", s.HasTor},
+		{"i2p", s.HasI2P},
+		{"ygg", s.HasYgg},
+	} {
+		if l.exposed {
+			names = append(names, l.name)
+		}
+	}
+	return names
 }

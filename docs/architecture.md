@@ -39,8 +39,7 @@
                  │   │         │  ┌─────────────▼───┐         │  │
                  │   │         │  │  Tor / I2P /    │         │  │
                  │   │         │  │  Yggdrasil /    │         │  │
-                 │   │         │  │  IPFS (profiles)│         │  │
-                 │   │         │  └──────┬──────────┘         │  │
+                                  │   │         │  └──────┬──────────┘         │  │
                  │   │         │ home-services network         │  │
                  │   │  ┌──────────┐  ┌────────┴──┐         │  │
                  │   │  │  immich  │  │ jellyfin  │  ...    │  │
@@ -115,9 +114,8 @@ For alternative network extensions:
 | Tor onion service | torrc.d configs, SIGHUP reload | `--tor` |
 | I2P eepsite | i2ptunnel config, container restart | `--i2p` |
 | Yggdrasil mesh | socat TCP6→TCP4 forwarder | `--ygg` |
-| IPFS Gateway | Caddy reverse proxy to Kubo API | `ext ipfs gateway` |
 
-`homelab disable <name>` removes any exposure. Extension containers (Tor, I2P, Yggdrasil, IPFS) are managed via `homelab ext` subcommands.
+`homelab disable <name>` removes any exposure. Extension containers (Tor, I2P, Yggdrasil) are managed via `homelab ext` subcommands.
 
 ## Network traffic flow (per request)
 
@@ -164,7 +162,8 @@ Tor client (anywhere)
 
 ```
 I2P client
-  └─► I2P network: <name>.i2p
+  └─► I2P network: <b32>.b32.i2p  (Host header <name>.<home>.i2p)
+  └─► Tor network: <onion>       (HTTP via Caddy; non-HTTP ports direct)
         └─► I2P container (eepsite router)
               └─► i2ptunnel: HTTP proxy to service
                     └─► Docker home-services network

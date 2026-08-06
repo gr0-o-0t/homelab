@@ -1,4 +1,8 @@
 vars:
+  NEXTCLOUD_VERSION:
+    value: "latest"
+    required: false
+    description: "Nextcloud image tag. Pin a major (e.g. 31-apache) before a big upgrade - Nextcloud refuses to start on a downgrade, so never pin below the running version"
   ADMIN_USER:
     value: "admin"
     required: false
@@ -6,6 +10,7 @@ vars:
 secrets:
   ADMIN_PASSWORD:
     required: true
+    description: "Password for the admin account created on first start"
 
 databases:
   - mariadb:

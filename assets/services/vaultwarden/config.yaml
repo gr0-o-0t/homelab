@@ -1,4 +1,8 @@
 vars:
+  VAULTWARDEN_VERSION:
+    value: "latest"
+    required: false
+    description: "Vaultwarden image tag. Pin a version to control upgrade timing"
   SIGNUPS_ALLOWED:
     value: "false"
     required: false
@@ -24,7 +28,9 @@ vars:
 secrets:
   ADMIN_TOKEN:
     required: true
+    description: "Argon2 hash or plain token guarding /admin - leave unset to disable the admin panel entirely"
   SMTP_PASSWORD:
     required: false
+    description: "Password for the SMTP account, only needed if mail is configured"
 ports:
-  - 80
+  - vault:80

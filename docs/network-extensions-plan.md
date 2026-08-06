@@ -12,7 +12,6 @@
 | **4a** | `homelab tor` command | ✅ Implemented — `cmd/tor.go` |
 | **4b** | `homelab i2p` command | ✅ Implemented — `cmd/i2p.go` |
 | **4c** | `homelab ygg` command | ✅ Implemented — `cmd/yggdrasil.go` |
-| **4d** | `homelab ipfs` command | ✅ Implemented — `cmd/ipfs.go` |
 | **5** | Asset templates | ✅ Implemented |
 | **6** | Service routing (Caddy) | ✅ Implemented |
 | **7** | Setup wizard updates | ✅ Implemented |
@@ -25,7 +24,7 @@
 
 ## Overview
 
-Add Tor, I2P, Yggdrasil, and IPFS as optional core stack extensions following
+Add Tor, I2P and Yggdrasil as optional core stack extensions following
 the same modular `profile` pattern as `cloudflared`. Each extension starts as a
 Docker Compose profile in `assets/core/docker-compose.yml`, activated when its
 config is set, and provides per-service `enable`/`disable` commands.
@@ -42,7 +41,6 @@ config is set, and provides per-service `enable`/`disable` commands.
   │  tor          (profile: tor)        │  ← NEW                     │
   │  i2p          (profile: i2p)        │  ← NEW                     │
   │  yggdrasil    (profile: yggdrasil)  │  ← NEW                     │
-  │  ipfs         (profile: ipfs)       │  ← NEW                     │
   └──────────────┬───────────────────────────────────────────────────┘
                  │ home-services Docker network
   ┌──────────────▼───────────────────────────────────────────────────┐
@@ -58,17 +56,6 @@ config is set, and provides per-service `enable`/`disable` commands.
 | Tor       | `xyz.onion`   | HiddenServicePort in torrc | Directory of `.onion` service configs |
 | I2P       | `xyz.i2p`     | I2P tunnel (eepsite) | i2ptunnel config per service |
 | Yggdrasil | `[200:…]:port` | socat TCP6→TCP4 forwarder | socat instance per service |
-| IPFS      | `ipfs.home.*` | Caddy reverse proxy | Standard `caddy.cf.conf` |
-
-### Why IPFS is different
-
-IPFS is a content-addressed P2P filesystem, not a "service exposure" network.
-It belongs here as a **storage infrastructure** extension — services can pin
-content to it, and its HTTP Gateway can be fronted by Caddy at
-`ipfs.{$HOME_SUBDOMAIN}.{$DOMAIN}`. It does **not** get a per-service
-`enable`/`disable` mechanism.
-
----
 
 ## Phase 1: Core docker-compose.yml additions
 
@@ -160,30 +147,6 @@ yggdrasil:
       condition: service_healthy
 ```
 
-### IPFS service
-
-```yaml
-# ── IPFS Kubo node ──────────────────────────────────────────────────
-# Activated when IPFS_ENABLED=true.
-# Provides content-addressed P2P storage + HTTP Gateway.
-# Gateway is fronted by Caddy at ipfs.{$HOME_SUBDOMAIN}.{$DOMAIN}.
-ipfs:
-  image: ipfs/kubo:latest
-  container_name: ipfs
-  profiles: ["ipfs"]
-  restart: unless-stopped
-  environment:
-    IPFS_PROFILE: ${IPFS_PROFILE:-server}
-  volumes:
-    - ipfs-data:/data/ipfs
-    - ipfs-staging:/export
-  networks:
-    - home-services
-  depends_on:
-    tailscale:
-      condition: service_healthy
-  # Note: RPC API (5001) is NOT exposed — Caddy talks to Gateway (8080) only
-```
 
 ### New volumes
 
@@ -194,10 +157,6 @@ Add to the `volumes:` block at the bottom of `docker-compose.yml`:
     name: core_tor-data
   i2p-config:
     name: core_i2p-config
-  ipfs-data:
-    name: core_ipfs-data
-  ipfs-staging:
-    name: core_ipfs-staging
 ```
 
 ---
@@ -225,9 +184,6 @@ func withProfiles(env map[string]string, args ...string) []string {
     if env["YGGDRASIL_ENABLED"] == "true" {
         profiles = append(profiles, "yggdrasil")
     }
-    if env["IPFS_ENABLED"] == "true" {
-        profiles = append(profiles, "ipfs")
-    }
     if len(profiles) == 0 {
         return args
     }
@@ -254,8 +210,6 @@ Replace all `withTunnelProfile` calls with `withProfiles`.
 | `I2P_JVM_XMX` | `512m` | No | I2P JVM heap limit |
 | `I2P_EXT_PORT` | `45678` | No | I2P external port for I2NP |
 | `YGGDRASIL_ENABLED` | `false` | No | Enable Yggdrasil mesh node |
-| `IPFS_ENABLED` | `false` | No | Enable IPFS Kubo node |
-| `IPFS_PROFILE` | `server` | No | IPFS configuration profile |
 
 ### New keyring secrets (none for phase 1 — extensions are optional and don't require tokens by default)
 
@@ -267,7 +221,6 @@ The setup wizard should ask about each extension:
 Enable Tor onion service proxy? [y/N]:
 Enable I2P router + eepsite proxy? [y/N]:
 Enable Yggdrasil mesh node? [y/N]:
-Enable IPFS Kubo node? [y/N]:
 ```
 
 ---
@@ -353,18 +306,6 @@ config or adds a supervisor entry running:
 socat TCP6-LISTEN:<port>,fork,reuseaddr TCP4:<name>:<port>
 ```
 
-### IPFS-specific
-
-```
-homelab ipfs status              # Show IPFS node info + peer count
-homelab ipfs logs                # Stream logs
-homelab ipfs gateway enable      # Expose IPFS gateway via Caddy
-homelab ipfs gateway disable     # Remove Caddy route
-homelab ipfs add <file>          # Add file to IPFS (via docker exec)
-```
-
----
-
 ## Phase 5: New asset files
 
 ### `assets/tor/`
@@ -430,38 +371,7 @@ assets/yggdrasil/
 }
 ```
 
-### `assets/ipfs/`
-
-```
-assets/ipfs/
-├── README
-```
-
-IPFS needs no template files — it configures via `IPFS_*` env vars.
-
----
-
 ## Phase 6: Service routing (Caddy integration)
-
-### IPFS Caddy config
-
-`assets/services/ipfs/` (if added as a catalog service) or handled via CLI:
-
-`caddy.conf`:
-```caddyfile
-ipfs.{$HOME_SUBDOMAIN}.{$DOMAIN} {
-    import wildcard_tls
-    reverse_proxy ipfs:8080
-}
-```
-
-`caddy.cf.conf`:
-```caddyfile
-ipfs.{$PUB_SUBDOMAIN}.{$DOMAIN} {
-    import wildcard_tls
-    reverse_proxy ipfs:8080
-}
-```
 
 ### Tor/I2P/Yggdrasil routing
 
@@ -493,9 +403,6 @@ yggEnabled := cfg.Vars["YGGDRASIL_ENABLED"]
 yggEnabled.Value = promptStr(sc, "Enable Yggdrasil mesh node? (true/false)", yggEnabled.Value)
 cfg.Vars["YGGDRASIL_ENABLED"] = yggEnabled
 
-ipfsEnabled := cfg.Vars["IPFS_ENABLED"]
-ipfsEnabled.Value = promptStr(sc, "Enable IPFS Kubo node? (true/false)", ipfsEnabled.Value)
-cfg.Vars["IPFS_ENABLED"] = ipfsEnabled
 ```
 
 ---
@@ -532,7 +439,6 @@ Either extend `installAssets()` to also walk `assets/tor/`, `assets/i2p/`,
 - **Tor**: `containerStatus("tor")` when config has `TOR_ENABLED=true`
 - **I2P**: `containerStatus("i2p")` when config has `I2P_ENABLED=true`
 - **Yggdrasil**: `containerStatus("yggdrasil")` when config has `YGGDRASIL_ENABLED=true`
-- **IPFS**: `containerStatus("ipfs")` when config has `IPFS_ENABLED=true`
 
 Also add `/dev/net/tun` check is already present — relevant for yggdrasil.
 
@@ -548,9 +454,7 @@ Also add `/dev/net/tun` check is already present — relevant for yggdrasil.
 | **4a** | `homelab tor` command | `cmd/tor.go` (new) | 3h |
 | **4b** | `homelab i2p` command | `cmd/i2p.go` (new) | 3h |
 | **4c** | `homelab ygg` command | `cmd/yggdrasil.go` (new) | 3h |
-| **4d** | `homelab ipfs` command | `cmd/ipfs.go` (new) | 2h |
 | **5** | Asset templates | `assets/tor/`, `assets/i2p/`, `assets/yggdrasil/` | 1.5h |
-| **6** | IPFS Caddy config | `assets/caddy/conf.d/` + `cmd/ipfs.go` | 1h |
 | **7** | Setup wizard updates | `cmd/setup.go` | 30min |
 | **8** | Asset installation | `cmd/setup.go` + `assets/assets.go` | 30min |
 | **9** | Doctor checks | `cmd/doctor.go` | 30min |
@@ -581,7 +485,6 @@ Also add `/dev/net/tun` check is already present — relevant for yggdrasil.
    Plex), yggdrasil needs one socat per port. Start with single-port, add
    multi-port support as needed.
 
-5. **Caddy wildcard TLS + IPFS** — IPFS Gateway works over HTTP by default.
    Caddy handles TLS termination. Standard `import wildcard_tls` pattern
    applies.
 

@@ -10,9 +10,9 @@ import (
 
 	"github.com/groot/homelab/internal/caddy"
 	"github.com/groot/homelab/internal/config"
-	"github.com/groot/homelab/internal/configgen"
 	"github.com/groot/homelab/internal/diagnostics"
 	"github.com/groot/homelab/internal/docker"
+	"github.com/groot/homelab/internal/routing"
 	"github.com/groot/homelab/internal/run"
 	"github.com/groot/homelab/internal/service"
 	"github.com/groot/homelab/internal/tui/spinner"
@@ -304,12 +304,9 @@ func runServiceDoctorFor(dir, name string, fix bool) bool {
 		mgr := caddy.New(dir)
 		enabled, _ := mgr.IsEnabled(name)
 		if !enabled {
-			info, err := configgen.LoadServiceInfo(dir, name)
-			if err == nil {
-				if err := enablePrivate(dir, name, info); err == nil {
-					fmt.Printf("  %s  private route re-enabled\n", styles.Success.Render("✓"))
-					pass = true
-				}
+			if err := routing.EnablePrivate(dir, name, "", nil, nil); err == nil {
+				fmt.Printf("  %s  private route re-enabled\n", styles.Success.Render("✓"))
+				pass = true
 			}
 		}
 	}

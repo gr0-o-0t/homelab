@@ -1,0 +1,58 @@
+vars:
+  APPFLOWY_ADMIN_EMAIL:
+    value: "admin@example.com"
+    required: true
+    description: "First admin account, created by GoTrue on first start — sign in at /console"
+  APPFLOWY_DISABLE_SIGNUP:
+    value: "true"
+    required: false
+    description: "Keep true and invite users from /console; set false to allow self-service signup"
+  RUST_LOG:
+    value: "info"
+    required: false
+    description: "Log level for appflowy-cloud/worker/search: error, warn, info, debug, trace"
+
+secrets:
+  APPFLOWY_ADMIN_PASSWORD:
+    required: true
+    description: "Password for the first admin account"
+  APPFLOWY_GOTRUE_JWT_SECRET:
+    required: true
+    description: "Signs every auth token — changing it invalidates all sessions"
+  APPFLOWY_S3_ACCESS_KEY:
+    required: true
+    description: "MinIO root user (3+ chars)"
+  APPFLOWY_S3_SECRET_KEY:
+    required: true
+    description: "MinIO root password (8+ chars)"
+
+# Both on the shared instances. The connection parts are injected separately
+# rather than as a single dsn because GoTrue needs the same database with
+# `?search_path=auth` appended — see docker-compose.yml.
+#
+# Extensions are pre-created by the provisioner as the postgres superuser, so
+# AppFlowy's own `CREATE EXTENSION IF NOT EXISTS` calls become no-ops and its
+# unprivileged role never needs to create one:
+#   vector    — AppFlowy-Cloud migrations (embeddings columns)
+#   uuid-ossp — AppFlowy-Cloud migrations
+#   pgcrypto  — GoTrue's auth schema migrations
+databases:
+  - postgres:
+      database: appflowy
+      user: appflowy
+      extensions:
+        - vector
+        - uuid-ossp
+        - pgcrypto
+      env:
+        host: APPFLOWY_DB_HOST
+        port: APPFLOWY_DB_PORT
+        user: APPFLOWY_DB_USER
+        password: APPFLOWY_DB_PASSWORD
+        database: APPFLOWY_DB_NAME
+  - redis:
+      env:
+        dsn: APPFLOWY_REDIS_URI
+
+ports:
+  - 80

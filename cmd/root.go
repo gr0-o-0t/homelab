@@ -93,7 +93,7 @@ func init() {
 	rootCmd.AddCommand(validateCmd)
 
 	// Register root-level commands for layers without full cmd trees.
-	// cf/tor/i2p/ygg/ipfs register their own full commands via ext.go init().
+	// cf/tor/i2p/ygg register their own full commands via ext.go init().
 	// extCommandFor builds this command's shell from a static label and
 	// defers all registry/layer access to its RunE closures — see
 	// extRegistry() in ext_registry.go for why that matters.

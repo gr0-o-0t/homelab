@@ -4,10 +4,13 @@ package cmd
 // (formatUptime, truncate, buildServiceHint).
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/groot/homelab/internal/service"
 	"github.com/groot/homelab/internal/tui/styles"
@@ -117,4 +120,50 @@ func TestStateTag_KnownValues(t *testing.T) {
 		result := styles.StateTag(state)
 		assert.NotEmpty(t, result, "StateTag(%q) should not be empty", state)
 	}
+}
+
+// ── detectServicePort ─────────────────────────────────────────────────────────
+
+func writeSvc(t *testing.T, root, name string, files map[string]string) {
+	t.Helper()
+	dir := filepath.Join(root, "services", name)
+	require.NoError(t, os.MkdirAll(dir, 0o750))
+	for f, content := range files {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, f), []byte(content), 0o600))
+	}
+}
+
+// config.yaml is the source of truth: it is the same declaration `homelab
+// enable` reads, so the standalone `tor enable`/`ygg enable` commands cannot
+// pick a different port for the same service.
+func TestDetectServicePort_PrefersDeclaredPorts(t *testing.T) {
+	root := t.TempDir()
+	writeSvc(t, root, "gitea", map[string]string{
+		"config.yaml": "ports:\n  - web:3000\n",
+		// A stale generated file that disagrees — the declaration wins.
+		"caddy.conf": "gitea.home {\n    reverse_proxy gitea:9999\n}\n",
+	})
+
+	port, err := detectServicePort(root, "gitea")
+	require.NoError(t, err)
+	assert.Equal(t, "3000", port)
+}
+
+// Legacy services ship a static caddy.conf and declare no ports.
+func TestDetectServicePort_FallsBackToCaddyConf(t *testing.T) {
+	root := t.TempDir()
+	writeSvc(t, root, "legacy", map[string]string{
+		"caddy.conf": "legacy.home {\n    reverse_proxy legacy:8080\n}\n",
+	})
+
+	port, err := detectServicePort(root, "legacy")
+	require.NoError(t, err)
+	assert.Equal(t, "8080", port)
+}
+
+func TestDetectServicePort_NeitherSource(t *testing.T) {
+	root := t.TempDir()
+	writeSvc(t, root, "empty", map[string]string{})
+	_, err := detectServicePort(root, "empty")
+	assert.ErrorContains(t, err, "no ports declared in config.yaml")
 }

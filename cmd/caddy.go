@@ -42,19 +42,8 @@ var caddyStatusCmd = &cobra.Command{
 	},
 }
 
-var caddyLogsCmd = &cobra.Command{
-	Use:   "logs",
-	Short: "Stream Caddy container logs",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		root := configDir()
-		env := buildEnv(root, "")
-		return run.Default().DockerComposeEnv(
-			run.CoreComposeFile(root),
-			env,
-			withProfiles(root, "logs", "-f", caddyContainerName)...,
-		)
-	},
-}
+var caddyLogsCmd = containerLogsCmd(caddyContainerName,
+	"Stream Caddy container logs")
 
 func init() {
 	caddyCmd.AddCommand(caddyStatusCmd)

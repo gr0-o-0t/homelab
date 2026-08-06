@@ -2,15 +2,13 @@ package cmd
 
 import (
 	"fmt"
-	"os"
 	"sort"
-	"strconv"
-	"strings"
 
 	"github.com/groot/homelab/internal/caddy"
 	"github.com/groot/homelab/internal/config"
 	"github.com/groot/homelab/internal/configgen"
 	"github.com/groot/homelab/internal/network"
+	"github.com/groot/homelab/internal/routing"
 	"github.com/groot/homelab/internal/tui/styles"
 	"github.com/spf13/cobra"
 )
@@ -95,7 +93,7 @@ func runEnable(cmd *cobra.Command, args []string) error {
 	}
 
 	// ── Private tailnet (always enabled) ───────────────────────────────
-	if err := enablePrivate(root, svcName, info); err != nil {
+	if err := routing.EnablePrivate(root, svcName, enableName, enablePorts, nil); err != nil {
 		return err
 	}
 	fmt.Printf("  %s  Private: %s.%s.%s\n",
@@ -124,78 +122,67 @@ func runEnable(cmd *cobra.Command, args []string) error {
 	return caddyReload()
 }
 
-func enablePrivate(root, svcName string, info configgen.ServiceInfo) error {
-	// Check if custom caddy.conf exists → use symlink (legacy compatibility)
-	customPath := root + "/services/" + svcName + "/caddy.conf"
-	if _, err := os.Stat(customPath); err == nil {
-		return caddy.New(root).Enable(svcName)
-	}
-
-	if len(info.Ports) == 0 {
-		return fmt.Errorf("no ports defined in config.yaml and no caddy.conf found for %s", svcName)
-	}
-
-	req := configgen.Request{
-		ServiceName: svcName,
-		DisplayName: enableName,
-		Extensions:  []string{"private"},
-		PortNames:   enablePorts,
-		ConfigDir:   root,
-	}
-	blocks, err := configgen.Generate(req)
-	if err != nil {
-		return err
-	}
-	for _, b := range blocks {
-		if err := configgen.WriteFile(root, b.Extension, svcName, b.PortName, b.Content); err != nil {
-			return fmt.Errorf("writing private config: %w", err)
-		}
-	}
-	return nil
-}
-
+// enableExtension configures one layer for a service: the layer's own config
+// (tunnel, hidden service, forwarder) first, then the Caddy blocks.
+//
+// That order is deliberate. The layer is the half that can fail on
+// environment — a root-owned tor key directory, a stopped daemon — and doing
+// it second used to leave a Caddy block behind for a layer that was never
+// configured, which `homelab status` then reported as an active exposure.
 func enableExtension(root, svcName, displayName, ext string) error {
-	req := configgen.Request{
+	blocks, err := configgen.Generate(configgen.Request{
 		ServiceName: svcName,
 		DisplayName: displayName,
 		Extensions:  []string{ext},
 		PortNames:   enablePorts,
 		ConfigDir:   root,
-	}
-	blocks, err := configgen.Generate(req)
+	})
 	if err != nil {
 		return err
 	}
+
+	if layer, ok := extRegistry().Get(config.ResolveExtension(ext)); ok {
+		if err := layer.Enable(svcName, displayName, layerServiceInfo(root, svcName), layerPorts(blocks)); err != nil {
+			return err
+		}
+	}
+
 	for _, b := range blocks {
+		// Empty content means the network layer writes its own Caddy config
+		// (ygg: the site address depends on a port only the layer knows), or
+		// the port is not routable there (udp, or an explicit listen port on a
+		// mesh layer).
+		if b.Content == "" {
+			continue
+		}
 		if err := configgen.WriteFile(root, b.Extension, svcName, b.PortName, b.Content); err != nil {
 			return fmt.Errorf("writing %s config: %w", ext, err)
 		}
 	}
-
-	// Network extension-specific config via registry
-	resolved := config.ResolveExtension(ext)
-	if layer, ok := extRegistry().Get(resolved); ok {
-		ports := make([]network.PortSelection, len(blocks))
-		for i, b := range blocks {
-			portNum, _ := strconv.Atoi(extractPortFromBlock(b.Content, displayName))
-			ports[i] = network.PortSelection{
-				Name:     b.PortName,
-				Port:     portNum,
-				Protocol: "tcp",
-			}
-		}
-		cfgInfo, _ := configgen.LoadServiceInfo(root, svcName)
-		layersvcInfo := network.ServiceInfo{
-			Name:    svcName,
-			Ports:   make(map[string]int, len(cfgInfo.Ports)),
-			HasVars: cfgInfo.HasVars,
-		}
-		for k, v := range cfgInfo.Ports {
-			layersvcInfo.Ports[k] = v.Port
-		}
-		return layer.Enable(svcName, displayName, layersvcInfo, ports)
-	}
 	return nil
+}
+
+// layerPorts converts generated blocks into the port list a layer records.
+func layerPorts(blocks []configgen.CaddyBlock) []network.PortSelection {
+	ports := make([]network.PortSelection, len(blocks))
+	for i, b := range blocks {
+		ports[i] = network.PortSelection{Name: b.PortName, Port: b.Port, Listen: b.Listen, Protocol: "tcp"}
+	}
+	return ports
+}
+
+// layerServiceInfo is the service's declared ports in the shape layers expect.
+func layerServiceInfo(root, svcName string) network.ServiceInfo {
+	cfgInfo, _ := configgen.LoadServiceInfo(root, svcName)
+	info := network.ServiceInfo{
+		Name:    svcName,
+		Ports:   make(map[string]int, len(cfgInfo.Ports)),
+		HasVars: cfgInfo.HasVars,
+	}
+	for k, v := range cfgInfo.Ports {
+		info.Ports[k] = v.Port
+	}
+	return info
 }
 
 func buildExtensionList() []string {
@@ -225,19 +212,3 @@ func caddyReload() error {
 }
 
 // ── Extension-specific enable helpers ───────────────────────────────────────
-
-// extractPortFromBlock parses a generated Caddy config to find the target port.
-// Looks for the first "reverse_proxy <name>:<N>" pattern in the block content.
-func extractPortFromBlock(content, svcName string) string {
-	prefix := "reverse_proxy " + svcName + ":"
-	idx := strings.Index(content, prefix)
-	if idx < 0 {
-		return ""
-	}
-	rest := content[idx+len(prefix):]
-	end := strings.IndexAny(rest, " \t\n\r}")
-	if end < 0 {
-		return rest
-	}
-	return rest[:end]
-}

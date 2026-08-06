@@ -6,5 +6,6 @@ vars:
 secrets:
   WEB_PASSWORD:
     required: true
+    description: "Password for the Pi-hole admin web interface"
 ports:
   - 80

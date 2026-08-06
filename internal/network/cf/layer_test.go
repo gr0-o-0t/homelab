@@ -10,19 +10,19 @@ import (
 func noopReload() error { return nil }
 
 func TestLayer_Identity(t *testing.T) {
-	l := New("/test/repo", nil)
+	l := New("/test/repo", nil, nil)
 	assert.Equal(t, "cf", l.Name())
 	assert.Equal(t, "Cloudflare Tunnel", l.Label())
 	assert.Equal(t, "cloudflared", l.ContainerName())
 }
 
 func TestLayer_InterfaceImplementation(t *testing.T) {
-	var l network.NetworkLayer = New("/test/repo", nil)
+	var l network.NetworkLayer = New("/test/repo", nil, nil)
 	assert.NotNil(t, l)
 }
 
 func TestLayer_CaddyConfigDir(t *testing.T) {
-	l := New("/test/repo", nil)
+	l := New("/test/repo", nil, nil)
 	assert.Equal(t, "/home/user/.config/homelab/caddy/conf.d-cf", l.CaddyConfigDir("/home/user/.config/homelab"))
 }
 

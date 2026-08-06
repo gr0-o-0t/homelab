@@ -402,20 +402,19 @@ func Test_ContainerDetailMsg_StaleIgnored(t *testing.T) {
 	assert.Nil(t, m2.containerDetails, "detail for non-selected service should be ignored")
 }
 
-func Test_CoreStatusMsg_TorI2pYggIpfsPreserved(t *testing.T) {
+func Test_CoreStatusMsg_TorI2pYggPreserved(t *testing.T) {
 	m := newTestModel(stubServices())
 	m.width, m.height = 120, 40
 
 	upd, _ := m.Update(coreStatusMsg{
 		ts: "running", caddy: "running",
 		tor: "running", i2p: "exited",
-		yggdrasil: "running", ipfs: "",
+		yggdrasil: "running",
 	})
 	m2 := upd.(Model)
 	assert.Equal(t, "running", m2.core.tor)
 	assert.Equal(t, "exited", m2.core.i2p)
 	assert.Equal(t, "running", m2.core.yggdrasil)
-	assert.Equal(t, "", m2.core.ipfs)
 }
 
 // ── clip ──────────────────────────────────────────────────────────────────────

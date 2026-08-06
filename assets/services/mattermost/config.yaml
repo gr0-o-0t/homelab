@@ -1,4 +1,8 @@
 vars:
+  MATTERMOST_VERSION:
+    value: "latest"
+    required: false
+    description: "Mattermost image tag. Pin a version to control upgrade timing; schema migrations are one-way"
   TZ:
     value: "UTC"
     required: false

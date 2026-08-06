@@ -17,5 +17,6 @@ secrets:
     required: false
     # Get your claim token from https://plex.tv/claim (valid for 4 minutes).
     # Only needed on first run to link the server to your Plex account.
+    description: "One-time claim token from https://plex.tv/claim, valid 4 minutes - links this server to your account on first start"
 ports:
   - 32400

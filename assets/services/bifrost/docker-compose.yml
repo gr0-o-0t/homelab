@@ -1,0 +1,44 @@
+# Service: Bifrost (OpenAI-compatible AI gateway + web UI)
+# https://github.com/maximhq/bifrost
+#
+# Database: uses shared PostgreSQL (homelab-postgres) for both config_store
+# and logs_store. Bifrost takes DB settings from config.json rather than env
+# vars, so bifrost-config.json (mounted at $APP_DIR/config.json) references
+# them with the "env." prefix; the BIFROST_PG_* values are generated at
+# `homelab setup bifrost` and injected at runtime.
+#
+# /app/data still holds the logs dir and local caches, hence the volume.
+# Metrics are scraped by the shared Prometheus instance via
+# prometheus-target.json (see that file).
+#
+# ponytail: no healthcheck block — the image already ships one
+# (wget -q -O /dev/null http://127.0.0.1:${APP_PORT}/health, 30s/10s/3),
+# which Compose inherits. APP_HOST/APP_PORT are likewise already
+# 0.0.0.0:8080 in the image, so they need no override either.
+
+networks:
+  home-services:
+    name: home-services
+    external: true
+
+services:
+  bifrost:
+    image: maximhq/bifrost:latest
+    container_name: bifrost
+    restart: unless-stopped
+    environment:
+      LOG_LEVEL: ${BIFROST_LOG_LEVEL:-info}
+      BIFROST_PG_HOST: ${BIFROST_PG_HOST}
+      BIFROST_PG_PORT: ${BIFROST_PG_PORT}
+      BIFROST_PG_USER: ${BIFROST_PG_USER}
+      BIFROST_PG_PASSWORD: ${BIFROST_PG_PASSWORD}
+      BIFROST_PG_DB: ${BIFROST_PG_DB}
+    volumes:
+      - ./bifrost-config.json:/app/data/config.json:ro
+      - bifrost-data:/app/data
+    networks:
+      - home-services
+
+volumes:
+  bifrost-data:
+    name: bifrost_data

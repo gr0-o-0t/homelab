@@ -62,9 +62,56 @@ func newForTest(repoRoot string, reloadFn func() error) *Manager {
 
 // ── Private routing (tailnet) ─────────────────────────────────────────────────
 
+// hasRoutes reports whether a service ships a caddy.routes.conf. Such services
+// have no caddy.conf / caddy.cf.conf to symlink — their config for every layer
+// is generated — so each symlink operation below has to defer to configgen.
+// Without this, the TUI's enable/disable actions (which call this package
+// directly rather than going through `homelab enable`) fail on them.
+func (m *Manager) hasRoutes(name string) bool {
+	info, err := configgen.LoadServiceInfo(m.RepoRoot, name)
+	return err == nil && info.Routes != ""
+}
+
+// writeRoutesLayer generates and writes one layer's config for a routes-driven
+// service, then reloads Caddy.
+func (m *Manager) writeRoutesLayer(name, ext string) error {
+	blocks, err := configgen.Generate(configgen.Request{
+		ServiceName: name,
+		Extensions:  []string{ext},
+		ConfigDir:   m.RepoRoot,
+	})
+	if err != nil {
+		return err
+	}
+	for _, b := range blocks {
+		if err := configgen.WriteFile(m.RepoRoot, ext, name, b.PortName, b.Content); err != nil {
+			return fmt.Errorf("writing %s config: %w", ext, err)
+		}
+	}
+	return m.Reload()
+}
+
+// generatedExists reports whether a routes-driven service's generated config for
+// a layer is in place. Generated config is a regular file, not a symlink, so
+// isSymlink would always say "disabled".
+func (m *Manager) generatedExists(name, ext string) (bool, error) {
+	_, err := os.Stat(configgen.GeneratedFilePath(m.RepoRoot, ext, name, ""))
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // Enable symlinks services/<name>/caddy.conf into caddy/conf.d/<name>.conf
-// and triggers a graceful Caddy reload.
+// and triggers a graceful Caddy reload. Routes-driven services get their
+// private block generated instead.
 func (m *Manager) Enable(name string) error {
+	if m.hasRoutes(name) {
+		return m.writeRoutesLayer(name, "private")
+	}
 	src := filepath.Join(m.RepoRoot, "services", name, "caddy.conf")
 	dest := filepath.Join(m.RepoRoot, "caddy", "conf.d", name+".conf")
 	relTarget := filepath.Join("..", "..", "services", name, "caddy.conf")
@@ -73,12 +120,21 @@ func (m *Manager) Enable(name string) error {
 
 // Disable removes the caddy/conf.d/<name>.conf symlink and reloads Caddy.
 func (m *Manager) Disable(name string) error {
+	if m.hasRoutes(name) {
+		if err := configgen.RemoveAllPortFiles(m.RepoRoot, "private", name); err != nil {
+			return err
+		}
+		return m.Reload()
+	}
 	dest := filepath.Join(m.RepoRoot, "caddy", "conf.d", name+".conf")
 	return m.unlink(dest, name, "private")
 }
 
-// IsEnabled reports whether the private route symlink is active.
+// IsEnabled reports whether the private route is active.
 func (m *Manager) IsEnabled(name string) (bool, error) {
+	if m.hasRoutes(name) {
+		return m.generatedExists(name, "private")
+	}
 	dest := filepath.Join(m.RepoRoot, "caddy", "conf.d", name+".conf")
 	return isSymlink(dest)
 }
@@ -88,6 +144,9 @@ func (m *Manager) IsEnabled(name string) (bool, error) {
 // EnablePublic symlinks services/<name>/caddy.cf.conf into
 // caddy/conf.d-cf/<name>.conf and triggers a graceful Caddy reload.
 func (m *Manager) EnablePublic(name string) error {
+	if m.hasRoutes(name) {
+		return m.writeRoutesLayer(name, "cf")
+	}
 	src := filepath.Join(m.RepoRoot, "services", name, "caddy.cf.conf")
 	dest := filepath.Join(m.RepoRoot, "caddy", "conf.d-cf", name+".conf")
 	relTarget := filepath.Join("..", "..", "services", name, "caddy.cf.conf")
@@ -96,12 +155,21 @@ func (m *Manager) EnablePublic(name string) error {
 
 // DisablePublic removes the caddy/conf.d-cf/<name>.conf symlink and reloads Caddy.
 func (m *Manager) DisablePublic(name string) error {
+	if m.hasRoutes(name) {
+		if err := configgen.RemoveAllPortFiles(m.RepoRoot, "cf", name); err != nil {
+			return err
+		}
+		return m.Reload()
+	}
 	dest := filepath.Join(m.RepoRoot, "caddy", "conf.d-cf", name+".conf")
 	return m.unlink(dest, name, "public")
 }
 
-// IsPublicEnabled reports whether the public route symlink is active.
+// IsPublicEnabled reports whether the public route is active.
 func (m *Manager) IsPublicEnabled(name string) (bool, error) {
+	if m.hasRoutes(name) {
+		return m.generatedExists(name, "cf")
+	}
 	dest := filepath.Join(m.RepoRoot, "caddy", "conf.d-cf", name+".conf")
 	return isSymlink(dest)
 }
@@ -148,6 +216,30 @@ func (m *Manager) DisableBoth(name string) error {
 // service and reloads Caddy. Missing config files are silently skipped so the
 // command is safe to run on any service regardless of which routes are active.
 func (m *Manager) ReloadService(name string) error {
+	// Routes-driven services have nothing to re-link: regenerate instead. Only
+	// layers already in place are rewritten, so a reload never switches a layer
+	// on that the user had not enabled.
+	if m.hasRoutes(name) {
+		reloaded := false
+		for _, ext := range []string{"private", "cf"} {
+			active, err := m.generatedExists(name, ext)
+			if err != nil {
+				return err
+			}
+			if !active {
+				continue
+			}
+			if err := m.writeRoutesLayer(name, ext); err != nil {
+				return err
+			}
+			reloaded = true
+		}
+		if !reloaded {
+			return fmt.Errorf("service %q has no active routes to reload", name)
+		}
+		return nil
+	}
+
 	linked := false
 
 	privateSrc := filepath.Join(m.RepoRoot, "services", name, "caddy.conf")

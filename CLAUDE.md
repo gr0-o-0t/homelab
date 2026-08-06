@@ -49,9 +49,52 @@ homelab caddy status                               # Caddy container status
 homelab caddy logs                                 # stream Caddy container logs individually
 homelab doctor [service] [--fix] [--all]           # health check with optional auto-repair
 homelab validate                                   # validate Caddyfile syntax
+homelab config [service]                           # show resolved docker compose configuration
+homelab images [service]                           # list Docker images used by services
+homelab port <service> <private-port>              # print the public port for a binding
+homelab version                                    # print the homelab version
 homelab service list                               # list services + exposure status (legacy, hidden)
 homelab service ps <name>                          # container status (legacy, hidden)
 ```
+
+### Container access
+
+```bash
+homelab exec <service> <command> [args...]         # run a command in a running service container
+homelab pull [service]                             # pull latest images without restarting
+```
+
+### Backup, restore, prune
+
+```bash
+homelab backup [service]                           # volumes + DB dumps + config (--all, --group)
+homelab backup [service] --out /mnt/nas            # destination (default <config-dir>/backups)
+homelab backup [service] --live                    # don't stop the service (risks torn files)
+
+homelab restore <backup-dir> [service]             # replace volumes + databases
+homelab restore <backup-dir> --config              # also overwrite config.yaml / compose
+
+homelab prune [service]                            # down + remove containers, images, volumes
+homelab prune [service] --keep-volumes             # reclaim images only, no data loss
+homelab prune --dangling                           # unreferenced images + build cache only
+```
+
+`backup` writes a timestamped directory with a `manifest.json` listing every
+volume, dump and config file, so a backup is inspectable and restorable per
+service. Each service is stopped for the duration of its own snapshot unless
+`--live` is given — tarring a volume under a running process can capture a torn
+file.
+
+Secrets are deliberately **not** in backups; they stay in the system keyring.
+After restoring onto a new machine run `homelab setup <service>`, which re-enters
+them and re-syncs the database role password (`ALTER USER … PASSWORD`).
+
+Redis is never dumped: in this catalog it is only ever a cache or job queue, and
+a stale restored queue is worse than an empty one.
+
+`restore` and `prune` are destructive and both confirm first. `prune` requires
+typing the service name when volumes will be deleted, and refuses outright
+without a TTY unless `--yes` is passed.
 
 ### Network exposure
 
@@ -96,14 +139,12 @@ homelab ext start [ext]                            # start extension container(s
 homelab ext stop [ext]                             # stop extension container(s)
 ```
 
-Extension-specific management (DNS routes, IPFS gateway, per-layer status/logs)
+Extension-specific management (DNS routes, per-layer status/logs)
 lives under each extension's own top-level command, not under `ext`:
 
 ```bash
 homelab cf route add <service>                     # add Cloudflare DNS route
 homelab cf route rm <service>                      # remove Cloudflare DNS route
-homelab ipfs gateway enable                        # enable IPFS Gateway Caddy route
-homelab ipfs gateway disable                       # disable IPFS Gateway Caddy route
 homelab i2p <status|logs|list>                     # i2pd router management
 homelab tor <status|logs|list>                      # Tor onion service management
 homelab ygg <status|logs|list>                      # Yggdrasil mesh management
@@ -181,9 +222,43 @@ gitignored export (`make catalog`) for local browsing only.
 
 Each service directory contains:
 - `docker-compose.yml` — UI container joins `home-services`; databases use `internal: true` network
-- `caddy.conf` — private reverse proxy snippet (tailnet)
-- `caddy.cf.conf` — public reverse proxy snippet (Cloudflare Tunnel)
-- `config.yaml` — vars + secrets schema with sensible defaults
+- `config.yaml` — vars + secrets + the ports the service exposes
+- optional routing overrides (most services need none)
+
+**Port declarations** drive routing. One line per exposed port:
+
+```yaml
+ports:
+  - 3000          # forgejo.home.<domain>          → container :3000
+  - 22:22         # forgejo.home.<domain>:22       → container :22
+  - vault:80      # vault.home.<domain>            → container :80
+  - 53:53/udp     # protocol suffix; both tcp+udp when omitted
+```
+
+The token left of the colon decides the form: all digits means "listen on this
+port", anything else names a subdomain, and a subdomain *replaces* the service
+name rather than prefixing it. Caddy only serves the tcp half — a udp
+declaration is recorded for compose but gets no site block, because nothing in
+this stack proxies datagrams.
+
+From these, `homelab enable` generates the site blocks for every layer. Most
+services need nothing else. Two overrides exist:
+
+- `caddy.routes.conf` — the *body* of a site block: directives only, no site
+  address and no `import wildcard_tls`. For services whose routing is more than
+  one host → one upstream (websocket paths, header rewrites, path fan-out).
+  `homelab enable` wraps it in whichever site address each layer needs, so
+  private, `--cf`, `--i2p`, `--tor` and `--ygg` all get the same route set. Its
+  leading comment block is treated as file-level documentation and stripped from
+  generated output.
+- `caddy.conf` + `caddy.cf.conf` — hand-written per-layer site blocks, the
+  original scheme. Only for routing the grammar cannot express: `adguardhome`
+  (seven ports under a different subdomain) and `minero` (several upstream
+  containers behind one host). A test enumerates them; anything else shipping
+  one is a regression.
+
+Shipping both shapes is a test failure — `caddy.routes.conf` wins at enable
+time, which would leave `caddy.conf` as a second, silently stale copy.
 
 ### Config Schema — Groups
 

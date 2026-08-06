@@ -107,6 +107,33 @@ func (c *Commander) Output(name string, args ...string) ([]byte, error) {
 	return cmd.Output()
 }
 
+// RunTo executes a command streaming its stdout into w. Use it instead of
+// Output when the payload can be large — a database dump must not be buffered
+// in memory in its entirety just to be written to a file.
+func (c *Commander) RunTo(w io.Writer, name string, args ...string) error {
+	cmd := exec.Command(name, args...)
+	cmd.Stdout = w
+	cmd.Stderr = c.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("%s: %w", name, err)
+	}
+	return nil
+}
+
+// RunFrom executes a command feeding r to its stdin, streamed rather than
+// buffered. The counterpart to RunTo: restoring a dump pipes a file into
+// `docker exec -i … pg_restore`.
+func (c *Commander) RunFrom(r io.Reader, name string, args ...string) error {
+	cmd := exec.Command(name, args...)
+	cmd.Stdin = r
+	cmd.Stdout = c.Stdout
+	cmd.Stderr = c.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("%s: %w", name, err)
+	}
+	return nil
+}
+
 // MergeEnv returns a new env slice starting from base, with each entry in
 // overrides replacing any same-named key. Our vars always win.
 func MergeEnv(base []string, overrides map[string]string) []string {

@@ -1,5 +1,5 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# Core stack: Tailscale + Caddy [+ cloudflared] [+ tor] [+ i2p] [+ yggdrasil] [+ ipfs]
+# Core stack: Tailscale + Caddy [+ cloudflared] [+ tor] [+ i2p] [+ yggdrasil]
 #
 # Architecture
 # ────────────
@@ -29,10 +29,6 @@
 #   yggdrasil    → optional; profile "yggdrasil". IPv6 mesh node with
 #                  socat port-forwarders for per-service exposure.
 #                  Auto-activated when YGGDRASIL_ENABLED=true.
-#
-#   ipfs         → optional; profile "ipfs". IPFS Kubo node for
-#                  content-addressed P2P storage. Gateway fronted by Caddy.
-#                  Auto-activated when IPFS_ENABLED=true.
 #
 # External network `home-services` must be created before starting this stack:
 #   docker network create home-services
@@ -114,11 +110,17 @@ services:
     volumes:
       # Main Caddyfile
       - ../caddy/Caddyfile:/etc/caddy/Caddyfile:ro
-      # conf.d, conf.d-cf, and services are mounted under a shared /homelab/
-      # prefix so that relative symlinks (../../services/…) from conf.d/ resolve
-      # to /homelab/services/… in the container — matching the host repo layout.
+      # Every conf.d* dir the Caddyfile imports must be mounted here, plus
+      # services, under a shared /homelab/ prefix so that relative symlinks
+      # (../../services/…) from conf.d/ resolve to /homelab/services/… in the
+      # container — matching the host repo layout. A missing mount is silent:
+      # Caddy treats an import glob that matches nothing as a no-op, so the
+      # layer just never routes.
       - ../caddy/conf.d:/homelab/caddy/conf.d:ro
       - ../caddy/conf.d-cf:/homelab/caddy/conf.d-cf:ro
+      - ../caddy/conf.d-i2p:/homelab/caddy/conf.d-i2p:ro
+      - ../caddy/conf.d-tor:/homelab/caddy/conf.d-tor:ro
+      - ../caddy/conf.d-ygg:/homelab/caddy/conf.d-ygg:ro
       - ../services:/homelab/services:ro
       # Persistent ACME certs and Caddy state — never delete this volume!
       - caddy-data:/data
@@ -167,7 +169,7 @@ services:
   # Uses i2pd (C++ implementation) — lighter than Java I2P.
   # Eepsite tunnels configured via tunnels.conf.
   # Manage tunnels: homelab i2p enable <service>
-  # Web Console: http://i2p:7070
+  # Web Console: http://127.0.0.1:7070 (published to loopback below)
   i2p:
     build:
       context: .
@@ -183,6 +185,11 @@ services:
     ports:
       - "${I2P_EXT_PORT:-45678}:45678"
       - "${I2P_EXT_PORT:-45678}:45678/udp"
+      # Web console, loopback only. It is i2pd's admin surface — tunnel
+      # management, and the "Address registration line" generator you need to
+      # register a name on reg.i2p. Bound to 127.0.0.1 so it stays off both the
+      # LAN and the tailnet; reach it at http://127.0.0.1:7070 on this host.
+      - "127.0.0.1:${I2P_CONSOLE_PORT:-7070}:7070"
     depends_on:
       tailscale:
         condition: service_healthy
@@ -205,28 +212,11 @@ services:
     volumes:
       - ../yggdrasil/yggdrasil.conf:/etc/yggdrasil.conf:ro
       - ../yggdrasil/socat.d:/etc/socat.d:ro
+      # Node key — generated on first run. The mesh IPv6 address is derived
+      # from it, so losing this volume changes the address of every service.
+      - yggdrasil-state:/var/lib/yggdrasil
     sysctls:
       - net.ipv6.conf.all.disable_ipv6=0
-    networks:
-      - home-services
-    depends_on:
-      tailscale:
-        condition: service_healthy
-
-  # ── IPFS Kubo node (optional) ──────────────────────────────────────
-  # Activated when IPFS_ENABLED=true.
-  # Content-addressed P2P storage. Gateway HTTP port exposed to
-  # home-services for Caddy reverse proxy.
-  ipfs:
-    image: ipfs/kubo:latest
-    container_name: ipfs
-    profiles: ["ipfs"]
-    restart: unless-stopped
-    environment:
-      IPFS_PROFILE: ${IPFS_PROFILE:-server}
-    volumes:
-      - ipfs-data:/data/ipfs
-      - ipfs-staging:/export
     networks:
       - home-services
     depends_on:
@@ -243,7 +233,5 @@ volumes:
   # tor-data removed — replaced with bind mount
   i2p-config:
     name: core_i2p-config
-  ipfs-data:
-    name: core_ipfs-data
-  ipfs-staging:
-    name: core_ipfs-staging
+  yggdrasil-state:
+    name: core_yggdrasil-state

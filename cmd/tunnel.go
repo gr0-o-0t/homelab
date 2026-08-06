@@ -68,19 +68,8 @@ var tunnelStatusCmd = &cobra.Command{
 
 // ── logs ──────────────────────────────────────────────────────────────────────
 
-var tunnelLogsCmd = &cobra.Command{
-	Use:   "logs",
-	Short: "Stream cloudflared logs",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		root := configDir()
-		env := buildEnv(root, "")
-		return run.Default().DockerComposeEnv(
-			run.CoreComposeFile(root),
-			env,
-			withProfiles(root, "logs", "-f", "cloudflared")...,
-		)
-	},
-}
+var tunnelLogsCmd = containerLogsCmd("cloudflared",
+	"Stream cloudflared logs")
 
 // ── route ─────────────────────────────────────────────────────────────────────
 

@@ -28,6 +28,9 @@ func (f *fakeLayer) Enable(_, _ string, _ network.ServiceInfo, _ []network.PortS
 	return nil
 }
 func (f *fakeLayer) Disable(_ string) error { return nil }
+func (f *fakeLayer) ServiceAddresses(_ string, _ map[string]string) []network.ServiceAddress {
+	return nil
+}
 func (f *fakeLayer) CaddyConfigDir(_ string) string {
 	return "caddy/conf.d-" + f.name
 }
@@ -91,4 +94,26 @@ func TestRegistry_Empty(t *testing.T) {
 	assert.Empty(t, r.All())
 	assert.Empty(t, r.Names())
 	assert.False(t, r.Has("anything"))
+}
+
+// ── AddressCache ──────────────────────────────────────────────────────────────
+
+func TestAddressCache_ResolvesOnceWhileFresh(t *testing.T) {
+	var c network.AddressCache
+	calls := 0
+	resolve := func() string { calls++; return "200:abcd::1" }
+
+	assert.Equal(t, "200:abcd::1", c.Get(resolve))
+	assert.Equal(t, "200:abcd::1", c.Get(resolve))
+	assert.Equal(t, 1, calls, "a fresh value must not re-shell into the container")
+}
+
+// An empty result means "container isn't up yet" — exactly the state the caller
+// is waiting to see change, so it must not be cached.
+func TestAddressCache_DoesNotCacheEmpty(t *testing.T) {
+	var c network.AddressCache
+	calls := 0
+	c.Get(func() string { calls++; return "" })
+	c.Get(func() string { calls++; return "" })
+	assert.Equal(t, 2, calls)
 }

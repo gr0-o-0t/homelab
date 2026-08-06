@@ -6,6 +6,7 @@ vars:
 secrets:
   SECRET_KEY:
     required: true
+    description: "Django secret key - signs sessions and tokens; changing it logs everyone out"
 
 databases:
   - postgres:

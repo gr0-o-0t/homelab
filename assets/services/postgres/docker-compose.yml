@@ -1,10 +1,42 @@
 # ─────────────────────────────────────────────────────────────────
 # Shared PostgreSQL for homelab services
 # ─────────────────────────────────────────────────────────────────
-# Install:   homelab service add postgres && homelab service setup postgres
-# Start:     homelab service up postgres
-# Services that need a database declare `databases: { postgres: ... }`
-# in their config.yaml. The CLI auto-creates databases and users.
+# Install:   homelab add postgres && homelab setup postgres
+# Start:     homelab up postgres
+# Services that need a database declare `databases: - postgres: ...`
+# in their config.yaml. The CLI auto-creates databases, roles and
+# extensions.
+# ─────────────────────────────────────────────────────────────────
+# Image is the VectorChord build rather than plain postgres so that ONE
+# shared instance covers every service in the catalog, including the
+# vector-search ones (immich, appflowy) that would otherwise each need
+# their own container:
+#   - pgvector    0.8.2  (`vector`)  — appflowy; immich's base type
+#   - VectorChord 1.1.1  (`vchord`)  — immich's ANN index
+#   - stock contrib (`cube`, `earthdistance`, `pgcrypto`, `uuid-ossp`, …)
+# Same PG major (18) as the previous postgres:18-alpine, so no
+# dump/restore is needed.
+#
+# VectorChord requires shared_preload_libraries=vchord,vector, which this
+# image's default CMD already sets — do not add a `command:` override
+# without re-adding it, or immich refuses to start.
+# ─────────────────────────────────────────────────────────────────
+# Upgrading an existing install — two one-time chores:
+#
+# 1. The volume mount moved to /var/lib/postgresql. PG18 images put
+#    PGDATA at /var/lib/postgresql/18/docker and declare
+#    VOLUME /var/lib/postgresql, so the old
+#    `- postgres-data:/var/lib/postgresql/data` line mounted a directory
+#    Postgres never wrote to: the real data landed in an anonymous
+#    volume, and homelab_postgres_data stayed empty. Locate it with
+#    `docker volume ls -f dangling=true` and copy 18/docker/ into
+#    homelab_postgres_data before starting, or start fresh and re-run
+#    `homelab setup <service>` for each service that had a database.
+#
+# 2. This image is Debian/glibc where postgres:18-alpine was musl. Text
+#    collation differs between the two C libraries, so indexes built
+#    under musl are not guaranteed to sort correctly under glibc. After
+#    the first start, run `REINDEX DATABASE <name>;` for each database.
 # ─────────────────────────────────────────────────────────────────
 
 networks:
@@ -14,14 +46,15 @@ networks:
 
 services:
   postgres:
-    image: postgres:18-alpine
+    image: ${POSTGRES_IMAGE:-ghcr.io/tensorchord/vchord-postgres:pg18-v1.1.1}
     container_name: homelab-postgres
     restart: unless-stopped
     environment:
       POSTGRES_PASSWORD: ${POSTGRES_ROOT_PASSWORD}
       POSTGRES_DB: homelab
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      # Mount the parent, not /data — PGDATA is /var/lib/postgresql/18/docker.
+      - postgres-data:/var/lib/postgresql
     networks:
       - home-services
     healthcheck:

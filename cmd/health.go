@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/groot/homelab/internal/network/tor"
 	"github.com/groot/homelab/internal/tui/styles"
 )
 
@@ -60,14 +61,15 @@ func tailscaleIP() (string, bool) {
 // torOnionAddress returns the real .onion address for a Tor hidden service.
 // Falls back to empty string if Tor container not running or service not ready.
 func torOnionAddress(name string) string {
-	out, err := exec.Command( // nosec G204 -- binary is "docker", paths are programmatic
-		"docker", "exec", "tor",
-		"cat", "/var/lib/tor/hidden_service/"+name+"/hostname",
-	).Output()
-	if err != nil {
+	layer, ok := extRegistry().Get("tor")
+	if !ok {
 		return ""
 	}
-	return strings.TrimSpace(string(out))
+	l, ok := layer.(*tor.Layer)
+	if !ok {
+		return ""
+	}
+	return l.OnionAddress(name)
 }
 
 // removeBrokenSymlinks scans dir for symlinks whose targets no longer exist.

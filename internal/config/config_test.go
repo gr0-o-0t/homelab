@@ -278,17 +278,21 @@ ports:
 	assert.Equal(t, "tcp", cfg.Ports["web"].Protocol)
 }
 
-func TestPortEntries_NewFormat_Named(t *testing.T) {
+// A non-numeric token left of the colon names a subdomain, which replaces the
+// service name in the site address — it does not prefix it, and it is not just
+// a label for the default port.
+func TestPortEntries_NewFormat_Subdomain(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "config.yaml", `ports:
-  - web:8080
+  - vault:80
 `)
 	cfg, err := config.Load(filepath.Join(dir, "config.yaml"))
 	require.NoError(t, err)
 	require.NotNil(t, cfg)
 	require.NotNil(t, cfg.Ports)
-	assert.Equal(t, 8080, cfg.Ports["web"].Port)
-	assert.Equal(t, "tcp", cfg.Ports["web"].Protocol)
+	assert.Equal(t, 80, cfg.Ports["vault"].Port)
+	assert.Equal(t, "vault", cfg.Ports["vault"].Subdomain)
+	assert.Zero(t, cfg.Ports["vault"].Listen, "no explicit listen port was given")
 }
 
 func TestPortEntries_NewFormat_Unnamed(t *testing.T) {
@@ -365,7 +369,7 @@ func TestPortEntries_DuplicateDefault(t *testing.T) {
   - 4000
 `)
 	cfg, err := config.Load(filepath.Join(dir, "config.yaml"))
-	assert.ErrorContains(t, err, "at most one unnamed/mapped port allowed")
+	assert.ErrorContains(t, err, `"default" is declared twice`)
 	assert.Nil(t, cfg)
 }
 
@@ -432,6 +436,69 @@ databases:
 
 // ── databases: malformed entries fail loudly ─────────────────────────────────
 
+// The root `databases:` section is optional and `homelab setup` never writes
+// one, so this is the shape a real install has. Every other DB test here
+// supplies a root section, which is why a nil rootDB silently skipping
+// injection went unnoticed: services came up with an empty DATABASE_URL.
+func TestBuildEnv_DBInjection_WithoutRootDatabasesSection(t *testing.T) {
+	dir := t.TempDir()
+	rootPath := filepath.Join(dir, "config.yaml")
+	writeFile(t, dir, "config.yaml", `
+vars:
+  DOMAIN:
+    value: example.com
+`)
+	writeFile(t, dir, "services/myapp/config.yaml", `
+databases:
+  - postgres:
+      database: mydb
+      user: myuser
+      env:
+        dsn: DATABASE_URL
+        host: DB_HOST
+        port: DB_PORT
+  - redis:
+      env:
+        host: REDIS_HOST
+        port: REDIS_PORT
+`)
+	env, err := config.BuildEnv(rootPath, dir, "myapp", nil)
+	require.NoError(t, err)
+
+	assert.Equal(t, "homelab-postgres", env["DB_HOST"], "should default to the shared postgres container")
+	assert.Equal(t, "5432", env["DB_PORT"])
+	assert.Equal(t, "postgres://myuser:@homelab-postgres:5432/mydb", env["DATABASE_URL"])
+	assert.Equal(t, "homelab-redis", env["REDIS_HOST"], "should default to the shared redis container")
+	assert.Equal(t, "6379", env["REDIS_PORT"])
+}
+
+// A root section that names one engine must not suppress the others.
+func TestBuildEnv_DBInjection_PartialRootDatabasesSection(t *testing.T) {
+	dir := t.TempDir()
+	rootPath := filepath.Join(dir, "config.yaml")
+	writeFile(t, dir, "config.yaml", `
+databases:
+  postgres:
+    host: my-pg
+`)
+	writeFile(t, dir, "services/myapp/config.yaml", `
+databases:
+  - postgres:
+      env:
+        host: DB_HOST
+        port: DB_PORT
+  - redis:
+      env:
+        host: REDIS_HOST
+`)
+	env, err := config.BuildEnv(rootPath, dir, "myapp", nil)
+	require.NoError(t, err)
+
+	assert.Equal(t, "my-pg", env["DB_HOST"], "explicit root override wins")
+	assert.Equal(t, "5432", env["DB_PORT"], "a root host without a port still gets the engine default")
+	assert.Equal(t, "homelab-redis", env["REDIS_HOST"], "an undeclared engine still falls back to its shared container")
+}
+
 func TestServiceDatabases_MalformedEntry_Errors(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "config.yaml", `databases:
@@ -497,4 +564,51 @@ databases:
 `)
 	_, err := config.BuildEnv(rootPath, dir, "myapp", erroringSecretsManager())
 	assert.Error(t, err)
+}
+
+// ── port grammar ──────────────────────────────────────────────────────────────
+
+func TestParsePortString_Grammar(t *testing.T) {
+	for _, tc := range []struct {
+		spec   string
+		key    string
+		port   int
+		listen int
+		sub    string
+		protos []string
+	}{
+		{"8080", "default", 8080, 0, "", []string{"tcp", "udp"}},
+		{"80:8080", "80", 8080, 80, "", []string{"tcp", "udp"}},
+		{"vault:80", "vault", 80, 0, "vault", []string{"tcp", "udp"}},
+		{"22:22/tcp", "22", 22, 22, "", []string{"tcp"}},
+		{"53:53/udp", "53", 53, 53, "", []string{"udp"}},
+		{"8080/tcp/udp", "default", 8080, 0, "", []string{"tcp", "udp"}},
+	} {
+		key, entry, err := config.ParsePortString(tc.spec)
+		require.NoError(t, err, tc.spec)
+		assert.Equal(t, tc.key, key, tc.spec)
+		assert.Equal(t, tc.port, entry.Port, tc.spec)
+		assert.Equal(t, tc.listen, entry.Listen, tc.spec)
+		assert.Equal(t, tc.sub, entry.Subdomain, tc.spec)
+		assert.Equal(t, tc.protos, entry.Protocols, tc.spec)
+	}
+}
+
+// Unspecified means both protocols, and only the TCP half is routable by Caddy.
+func TestPortEntry_HasTCP(t *testing.T) {
+	_, both, _ := config.ParsePortString("8080")
+	assert.True(t, both.HasTCP())
+
+	_, udpOnly, _ := config.ParsePortString("53:53/udp")
+	assert.False(t, udpOnly.HasTCP(), "a udp-only port has nothing for Caddy to serve")
+
+	_, tcpOnly, _ := config.ParsePortString("22:22/tcp")
+	assert.True(t, tcpOnly.HasTCP())
+}
+
+func TestParsePortString_Rejects(t *testing.T) {
+	for _, spec := range []string{"", "a:b:c", "vault:", ":80", "0", "70000", "80:8080/sctp"} {
+		_, _, err := config.ParsePortString(spec)
+		assert.Error(t, err, spec)
+	}
 }

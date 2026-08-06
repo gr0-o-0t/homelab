@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/groot/homelab/internal/config"
 	"github.com/groot/homelab/internal/run"
@@ -32,6 +33,9 @@ type Provisioner struct {
 	ConfigDir string
 	SM        secretsManager
 	RC        executor
+	// PollInterval overrides WaitHealthy's re-inspect delay. Zero means the
+	// default; tests set it small so they need not sleep.
+	PollInterval time.Duration
 }
 
 // New creates a Provisioner.
@@ -103,6 +107,66 @@ func (p *Provisioner) EnsureRunning(ctx context.Context, dbType config.DBType) e
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
+// healthPollInterval is how often WaitHealthy re-inspects the container.
+// Overridable so tests need not sleep.
+const healthPollInterval = time.Second
+
+// WaitHealthy blocks until the shared DB container for dbType reports healthy,
+// or until timeout elapses.
+//
+// `docker compose up -d` returns as soon as the container is created, long
+// before Postgres has finished recovery and is accepting connections. Starting a
+// dependent service in that window gives it connection-refused errors that look
+// like misconfiguration, so callers that auto-start a dependency must wait here
+// first.
+//
+// A container with no healthcheck reports no health state at all; for those,
+// "running" is the best signal available and is accepted.
+func (p *Provisioner) WaitHealthy(ctx context.Context, dbType config.DBType, timeout time.Duration) error {
+	container := p.containerName(dbType)
+	if container == "" {
+		return fmt.Errorf("unknown database type: %s", dbType)
+	}
+
+	interval := p.PollInterval
+	if interval <= 0 {
+		interval = healthPollInterval
+	}
+
+	deadline := time.Now().Add(timeout)
+	var last string
+	for {
+		out, err := p.RC.Output("docker", "inspect",
+			"--format={{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}", container)
+		if err == nil {
+			switch last = strings.TrimSpace(string(out)); last {
+			case "healthy", "running":
+				return nil
+			case "unhealthy":
+				// Keep waiting: an unhealthy report during start_period is normal.
+			}
+		}
+
+		if !time.Now().Before(deadline) {
+			if last == "" {
+				last = "no status reported"
+			}
+			return fmt.Errorf("%s container %q did not become healthy within %s (last status: %s)\n"+
+				"  Check: homelab logs %s\n"+
+				"  If it never starts, confirm `homelab setup %s` has been run — "+
+				"the image needs its root password to initialise",
+				dbType, container, timeout, last,
+				config.SharedDBName(dbType), config.SharedDBName(dbType))
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(interval):
+		}
+	}
+}
+
 func (p *Provisioner) containerName(dbType config.DBType) string {
 	switch dbType {
 	case config.DBPostgres:
@@ -153,33 +217,68 @@ func (p *Provisioner) execPSQL(container, db, user string, args ...string) ([]by
 func (p *Provisioner) provisionPostgres(ctx context.Context, svcName string, decl config.ServiceDBDecl, password string) error {
 	container := p.containerName(config.DBPostgres)
 
-	// 1. Check if database exists, create if not.
-	out, _ := p.execPSQL(container, "postgres", "postgres",
-		"-c", fmt.Sprintf("SELECT 1 FROM pg_database WHERE datname='%s'", decl.Database))
-	if strings.TrimSpace(string(out)) == "" {
-		if err := p.RC.Run("docker", "exec", container, "psql", "-U", "postgres",
-			"-c", fmt.Sprintf("CREATE DATABASE %s", escID(decl.Database))); err != nil {
-			return fmt.Errorf("creating database %s: %w", decl.Database, err)
-		}
-	}
+	// Ownership model: one database per service, owned outright by that
+	// service's role. Every database here is single-tenant, so an owner role is
+	// both simpler and closer to what upstream images expect than the
+	// grant-only setup this replaced: the service can create its own schemas,
+	// types and extensions without further privileges, and pg_dump/pg_restore
+	// round-trip without --no-owner. The role is therefore created before the
+	// database, so CREATE DATABASE can name it as OWNER.
 
-	// 2. Create user if not exists (PG 15+).
+	// 1. Create the role, or reset its password if it is already there.
+	// PostgreSQL has no CREATE USER IF NOT EXISTS — unlike MySQL, that spelling
+	// is a plain syntax error (see the CREATE ROLE grammar), so the role has to
+	// be looked up first. ALTER on the existing-role path also re-syncs the
+	// password with the keyring, making a repeated `homelab setup` idempotent.
+	out, _ := p.execPSQL(container, "postgres", "postgres",
+		"-c", fmt.Sprintf("SELECT 1 FROM pg_roles WHERE rolname=%s", escLit(decl.User)))
+	verb := "CREATE"
+	if strings.TrimSpace(string(out)) != "" {
+		verb = "ALTER"
+	}
 	if err := p.RC.Run("docker", "exec", container, "psql", "-U", "postgres",
-		"-c", fmt.Sprintf("CREATE USER IF NOT EXISTS %s WITH PASSWORD '%s'", escID(decl.User), password)); err != nil {
+		"-c", fmt.Sprintf("%s USER %s WITH LOGIN PASSWORD %s",
+			verb, escID(decl.User), escLit(password))); err != nil {
 		return fmt.Errorf("creating user %s: %w", decl.User, err)
 	}
 
-	// 3. Grant privileges.
-	if err := p.RC.Run("docker", "exec", container, "psql", "-U", "postgres",
-		"-c", fmt.Sprintf("GRANT ALL PRIVILEGES ON DATABASE %s TO %s", escID(decl.Database), escID(decl.User))); err != nil {
-		return fmt.Errorf("granting db privileges: %w", err)
-	}
-	if err := p.RC.Run("docker", "exec", container, "psql", "-U", "postgres", "-d", decl.Database,
-		"-c", fmt.Sprintf("GRANT ALL ON SCHEMA public TO %s", escID(decl.User))); err != nil {
-		return fmt.Errorf("granting schema privileges: %w", err)
+	// 2. Optionally promote to superuser. Ownership covers schema and extension
+	// creation; this is only for services that go further — upgrading an
+	// extension in place, or backing up with pg_dumpall.
+	if decl.Superuser {
+		if err := p.RC.Run("docker", "exec", container, "psql", "-U", "postgres",
+			"-c", fmt.Sprintf("ALTER USER %s WITH SUPERUSER", escID(decl.User))); err != nil {
+			return fmt.Errorf("granting superuser to %s: %w", decl.User, err)
+		}
 	}
 
-	// 4. Extensions.
+	// 3. Create the database owned by that role, or transfer an existing one.
+	out, _ = p.execPSQL(container, "postgres", "postgres",
+		"-c", fmt.Sprintf("SELECT 1 FROM pg_database WHERE datname=%s", escLit(decl.Database)))
+	if strings.TrimSpace(string(out)) == "" {
+		if err := p.RC.Run("docker", "exec", container, "psql", "-U", "postgres",
+			"-c", fmt.Sprintf("CREATE DATABASE %s OWNER %s",
+				escID(decl.Database), escID(decl.User))); err != nil {
+			return fmt.Errorf("creating database %s: %w", decl.Database, err)
+		}
+	} else if err := p.RC.Run("docker", "exec", container, "psql", "-U", "postgres",
+		"-c", fmt.Sprintf("ALTER DATABASE %s OWNER TO %s",
+			escID(decl.Database), escID(decl.User))); err != nil {
+		return fmt.Errorf("setting owner of database %s: %w", decl.Database, err)
+	}
+
+	// 4. Hand over the public schema too. Since PG 15 it is owned by
+	// pg_database_owner and no longer world-writable, so a database transferred
+	// by the ALTER above still needs this to let the service create tables.
+	if err := p.RC.Run("docker", "exec", container, "psql", "-U", "postgres", "-d", decl.Database,
+		"-c", fmt.Sprintf("ALTER SCHEMA public OWNER TO %s", escID(decl.User))); err != nil {
+		return fmt.Errorf("setting owner of schema public in %s: %w", decl.Database, err)
+	}
+
+	// 5. Extensions. Created as the superuser so services whose own role is
+	// unprivileged still find them present; ordering is preserved so a
+	// dependency can be listed before the extension that needs it
+	// (e.g. cube before earthdistance).
 	for _, ext := range decl.Extensions {
 		if err := p.RC.Run("docker", "exec", container, "psql", "-U", "postgres", "-d", decl.Database,
 			"-c", fmt.Sprintf("CREATE EXTENSION IF NOT EXISTS %q", ext)); err != nil {
@@ -196,20 +295,38 @@ func (p *Provisioner) deprovisionPostgres(ctx context.Context, decl config.Servi
 	return p.execSQL(container, "postgres", sql)
 }
 
+// mariaAnyHost is MariaDB's "connect from anywhere" host pattern. Provision and
+// deprovision must spell it identically: the host is stored verbatim as part of
+// the account identity, so creating user@'%%' and later dropping user@'%' leaves
+// the account (and its grants) behind. Keeping it in one constant is what stops
+// the two from drifting again — the previous code wrote '%%%%' in one Sprintf
+// format and '%%' in the other, which render as '%%' and '%'.
+const mariaAnyHost = "%"
+
 func (p *Provisioner) provisionMariaDB(ctx context.Context, svcName string, decl config.ServiceDBDecl, password string) error {
 	container := p.containerName(config.DBMariaDB)
 	sql := fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s`; "+
-		"CREATE USER IF NOT EXISTS '%s'@'%%%%' IDENTIFIED BY '%s'; "+
-		"GRANT ALL PRIVILEGES ON `%s`.* TO '%s'@'%%%%'; "+
+		"CREATE USER IF NOT EXISTS '%s'@'%s' IDENTIFIED BY '%s'; "+
+		"GRANT ALL PRIVILEGES ON `%s`.* TO '%s'@'%s'; "+
 		"FLUSH PRIVILEGES;",
-		decl.Database, decl.User, password, decl.Database, decl.User)
+		decl.Database, decl.User, mariaAnyHost, password,
+		decl.Database, decl.User, mariaAnyHost)
 	return p.execSQL(container, "root", sql)
 }
 
 func (p *Provisioner) deprovisionMariaDB(ctx context.Context, decl config.ServiceDBDecl) error {
 	container := p.containerName(config.DBMariaDB)
-	sql := fmt.Sprintf(`DROP USER IF EXISTS '%s'@'%%';`, decl.User)
+	sql := fmt.Sprintf(`DROP USER IF EXISTS '%s'@'%s';`, decl.User, mariaAnyHost)
 	return p.execSQL(container, "root", sql)
+}
+
+// escLit renders a value as a single-quoted SQL string literal, doubling any
+// embedded quote. Use it for values — WHERE comparisons and passwords — where
+// escID's double quotes would be wrong. Generated passwords are alphanumeric,
+// but database and role names come from a service's config.yaml, so neither
+// should be pasted in raw.
+func escLit(s string) string {
+	return `'` + strings.ReplaceAll(s, `'`, `''`) + `'`
 }
 
 // escID wraps an identifier in double quotes, doubling any internal quotes.

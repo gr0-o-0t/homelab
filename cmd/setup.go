@@ -113,7 +113,6 @@ func runSetup(_ *cobra.Command, _ []string) error {
 		{torContainer, "Tor onion service proxy (.onion addresses)"},
 		{i2pContainer, "I2P router + eepsite proxy (.i2p addresses)"},
 		{yggContainer, "Yggdrasil IPv6 mesh node (socat port forwarding)"},
-		{ipfsContainer, "IPFS Kubo node (content-addressed P2P storage)"},
 	}
 	for _, ext := range extNames {
 		added := cfg.HasExtension(ext.Name)
@@ -320,7 +319,8 @@ func runServiceSetup(_ *cobra.Command, args []string) error {
 		}
 		if len(svcDB) > 0 {
 			fmt.Printf("\n  %s\n\n", styles.Accent.Render("─── Database Setup ──────────────────────────────────"))
-			for _, entry := range svcDB {
+			for i := range svcDB {
+				entry := &svcDB[i]
 				if err := p.EnsureRunning(ctx, entry.Type); err != nil {
 					step(styles.Warning.Render("!"), fmt.Sprintf("%s container not running — install and start first:", entry.Type))
 					fmt.Printf("    homelab add %s && homelab up %s\n", entry.Type, entry.Type)

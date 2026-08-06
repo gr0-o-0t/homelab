@@ -24,7 +24,7 @@ networks:
 
 services:
   netbox:
-    image: lscr.io/linuxserver/netbox:latest
+    image: lscr.io/linuxserver/netbox:${NETBOX_VERSION:-latest}
     container_name: netbox
     user: "${PUID:-1000}:${PGID:-1000}"
     restart: unless-stopped
@@ -45,11 +45,14 @@ services:
       DB_NAME: ${NB_DB_NAME}
       DB_USER: ${NB_DB_USER}
       DB_PASSWORD: ${NB_DB_PASS}
-      REDIS_HOST: ${NB_REDIS_HOST}
-      REDIS_PORT: ${NB_REDIS_PORT}
+      # Local to this stack (see netbox-internal below), so these are constants
+      # rather than injected from config.yaml `databases:` — declaring them there
+      # would make `homelab up netbox` demand the shared homelab-redis container.
+      REDIS_HOST: netbox-redis
+      REDIS_PORT: "6379"
       REDIS_PASSWORD: ""
-      REDIS_CACHE_HOST: ${NB_REDIS_CACHE_HOST}
-      REDIS_CACHE_PORT: ${NB_REDIS_CACHE_PORT}
+      REDIS_CACHE_HOST: netbox-redis-cache
+      REDIS_CACHE_PORT: "6380"
       REDIS_CACHE_PASSWORD: ""
       SECRET_KEY: ${SECRET_KEY}
     volumes:

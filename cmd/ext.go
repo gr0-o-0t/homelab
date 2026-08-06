@@ -18,16 +18,14 @@ var extContainer = map[string]string{
 	"i2p":       i2pContainer,
 	"ygg":       yggContainer,
 	"yggdrasil": yggContainer,
-	"ipfs":      ipfsContainer,
 }
 
 // extProfile maps extension names to their Docker Compose profile name.
 var extProfile = map[string]string{
-	"cf":   "tunnel",
-	"tor":  "tor",
-	"i2p":  "i2p",
-	"ygg":  "yggdrasil",
-	"ipfs": "ipfs",
+	"cf":  "tunnel",
+	"tor": "tor",
+	"i2p": "i2p",
+	"ygg": "yggdrasil",
 }
 
 var extCmd = &cobra.Command{
@@ -40,7 +38,6 @@ Extensions:
   tor  Tor onion service  (.onion addresses)
   i2p  I2P eepsite proxy  (.i2p addresses)
   ygg  Yggdrasil mesh     (IPv6 mesh)
-  ipfs IPFS Kubo node     (content-addressed storage)
 
 Commands:
   ext list                 List extensions and their enabled/disabled status
@@ -49,11 +46,9 @@ Commands:
   ext start [ext]          Start extension containers
   ext stop [ext]           Stop extension containers
 
-Extension-specific management (Cloudflare DNS routes, IPFS gateway, per-layer
-status/logs) lives under each extension's own top-level command, not under
-"ext":
+Extension-specific management (Cloudflare DNS routes, per-layer status/logs)
+lives under each extension's own top-level command, not under "ext":
   homelab cf route add <svc>     Add a Cloudflare DNS route
-  homelab ipfs gateway enable    Enable the IPFS Gateway Caddy route
   homelab tor status             Tor-specific status
   homelab i2p status             I2P-specific status
   homelab ygg status             Yggdrasil-specific status
@@ -68,7 +63,7 @@ Service-level exposure is managed via the root enable/disable command:
 // ── valid extensions ─────────────────────────────────────────────────────────
 
 func validExtNames() []string {
-	return []string{"cf", "tor", "i2p", "ygg", "yggdrasil", "ipfs"}
+	return []string{"cf", "tor", "i2p", "ygg", "yggdrasil"}
 }
 
 func completeExtNames(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
@@ -163,9 +158,6 @@ With an extension name, shows logs for that specific extension.`,
 	Args:              cobra.MaximumNArgs(1),
 	ValidArgsFunction: completeExtNames,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		dir := configDir()
-		env := buildEnv(dir, "")
-
 		targets, err := resolveExtTargets(args)
 		if err != nil {
 			return err
@@ -181,11 +173,7 @@ With an extension name, shows logs for that specific extension.`,
 				logArgs = append(logArgs, container)
 			}
 		}
-		return run.Default().DockerComposeEnv(
-			run.CoreComposeFile(dir),
-			env,
-			withProfiles(dir, logArgs...)...,
-		)
+		return coreCompose(logArgs...)
 	},
 }
 
@@ -314,5 +302,4 @@ func init() {
 	rootCmd.AddCommand(torCmd)
 	rootCmd.AddCommand(i2pCmd)
 	rootCmd.AddCommand(yggCmd)
-	rootCmd.AddCommand(ipfsCmd)
 }

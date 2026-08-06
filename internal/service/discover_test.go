@@ -23,7 +23,6 @@ func newRepo(t *testing.T) string {
 		"caddy/conf.d-tor",
 		"caddy/conf.d-i2p",
 		"caddy/conf.d-ygg",
-		"caddy/conf.d-ipfs",
 		"services",
 	} {
 		require.NoError(t, os.MkdirAll(filepath.Join(dir, d), 0o755))
@@ -89,14 +88,6 @@ func enableYgg(t *testing.T, repo, name string) {
 	dir := filepath.Join(repo, "caddy", "conf.d-ygg")
 	require.NoError(t, os.MkdirAll(dir, 0o755))
 	write(t, filepath.Join(dir, name+".conf"), "# ygg config\n")
-}
-
-// enableIPFS writes a generated config file into caddy/conf.d-ipfs/<name>.conf.
-func enableIPFS(t *testing.T, repo, name string) {
-	t.Helper()
-	dir := filepath.Join(repo, "caddy", "conf.d-ipfs")
-	require.NoError(t, os.MkdirAll(dir, 0o755))
-	write(t, filepath.Join(dir, name+".conf"), "# ipfs config\n")
 }
 
 // ── Discover ──────────────────────────────────────────────────────────────────
@@ -247,7 +238,6 @@ func TestDiscover_TorLayer(t *testing.T) {
 	assert.True(t, svcs[0].HasTor, "generated file in conf.d-tor → HasTor=true")
 	assert.False(t, svcs[0].HasI2P)
 	assert.False(t, svcs[0].HasYgg)
-	assert.False(t, svcs[0].HasIPFS)
 }
 
 func TestDiscover_I2PLayer(t *testing.T) {
@@ -261,7 +251,6 @@ func TestDiscover_I2PLayer(t *testing.T) {
 	assert.True(t, svcs[0].HasI2P, "generated file in conf.d-i2p → HasI2P=true")
 	assert.False(t, svcs[0].HasTor)
 	assert.False(t, svcs[0].HasYgg)
-	assert.False(t, svcs[0].HasIPFS)
 }
 
 func TestDiscover_YggLayer(t *testing.T) {
@@ -275,21 +264,6 @@ func TestDiscover_YggLayer(t *testing.T) {
 	assert.True(t, svcs[0].HasYgg, "generated file in conf.d-ygg → HasYgg=true")
 	assert.False(t, svcs[0].HasTor)
 	assert.False(t, svcs[0].HasI2P)
-	assert.False(t, svcs[0].HasIPFS)
-}
-
-func TestDiscover_IPFSLayer(t *testing.T) {
-	repo := newRepo(t)
-	addService(t, repo, "myapp")
-	enableIPFS(t, repo, "myapp")
-
-	svcs, err := service.Discover(repo)
-	require.NoError(t, err)
-	require.Len(t, svcs, 1)
-	assert.True(t, svcs[0].HasIPFS, "generated file in conf.d-ipfs → HasIPFS=true")
-	assert.False(t, svcs[0].HasTor)
-	assert.False(t, svcs[0].HasI2P)
-	assert.False(t, svcs[0].HasYgg)
 }
 
 func TestDiscover_AllExtensionLayers(t *testing.T) {
@@ -298,7 +272,6 @@ func TestDiscover_AllExtensionLayers(t *testing.T) {
 	enableTor(t, repo, "myapp")
 	enableI2P(t, repo, "myapp")
 	enableYgg(t, repo, "myapp")
-	enableIPFS(t, repo, "myapp")
 
 	svcs, err := service.Discover(repo)
 	require.NoError(t, err)
@@ -306,7 +279,6 @@ func TestDiscover_AllExtensionLayers(t *testing.T) {
 	assert.True(t, svcs[0].HasTor)
 	assert.True(t, svcs[0].HasI2P)
 	assert.True(t, svcs[0].HasYgg)
-	assert.True(t, svcs[0].HasIPFS)
 }
 
 func TestDiscover_ExtensionLayerWithoutService(t *testing.T) {

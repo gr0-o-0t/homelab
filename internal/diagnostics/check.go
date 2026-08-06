@@ -4,6 +4,7 @@ package diagnostics
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -144,7 +145,60 @@ func RunInfraChecks(dc *docker.Client) CheckGroup {
 		})
 	}
 
+	results = append(results, checkLogRotation(dockerDaemonConfig))
+
 	return CheckGroup{Title: "Infrastructure", Results: results}
+}
+
+// dockerDaemonConfig is the daemon-wide Docker configuration file. Split out so
+// the check is testable.
+const dockerDaemonConfig = "/etc/docker/daemon.json"
+
+// checkLogRotation warns when the Docker daemon has no container log cap.
+//
+// The default json-file driver grows without bound, so one crash-looping
+// container can fill the disk and take down every service on the host. Nothing
+// surfaces this until the disk is full — hence a check rather than a comment.
+// Capping it at the daemon covers all ~70 containers at once, which is why this
+// is not a per-service `logging:` block in every compose file.
+func checkLogRotation(path string) CheckResult {
+	const name = "container log rotation"
+	advice := fmt.Sprintf("no log cap in %s — a crash-looping container can fill the disk. "+
+		`Add {"log-driver":"json-file","log-opts":{"max-size":"10m","max-file":"3"}} `+
+		"and restart Docker", path)
+
+	data, err := os.ReadFile(path) // #nosec G304 -- path is the daemon.json location, not user input
+	if err != nil {
+		return CheckResult{Name: name, Status: StatusWarn, Message: advice}
+	}
+
+	var daemon struct {
+		LogDriver string            `json:"log-driver"`
+		LogOpts   map[string]string `json:"log-opts"`
+	}
+	if err := json.Unmarshal(data, &daemon); err != nil {
+		return CheckResult{
+			Name: name, Status: StatusWarn,
+			Message: fmt.Sprintf("%s is not valid JSON: %v", path, err),
+		}
+	}
+
+	// A cap can come from max-size (json-file) or from a driver that rotates
+	// elsewhere, e.g. journald / local, which are bounded by default.
+	switch daemon.LogDriver {
+	case "journald", "local":
+		return CheckResult{
+			Name: name, Status: StatusPass,
+			Message: fmt.Sprintf("log driver %q rotates by default", daemon.LogDriver),
+		}
+	}
+	if daemon.LogOpts["max-size"] != "" {
+		return CheckResult{
+			Name: name, Status: StatusPass,
+			Message: fmt.Sprintf("logs capped at %s", daemon.LogOpts["max-size"]),
+		}
+	}
+	return CheckResult{Name: name, Status: StatusWarn, Message: advice}
 }
 
 // RunCoreStackChecks checks the core infrastructure containers.

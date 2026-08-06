@@ -1,4 +1,8 @@
 vars:
+  NETBOX_VERSION:
+    value: "latest"
+    required: false
+    description: "NetBox image tag. Pin a version before upgrading - NetBox migrations are one-way, so never pin below the running version"
   PUID:
     value: "1000"
     required: false
@@ -15,8 +19,10 @@ vars:
 secrets:
   SECRET_KEY:
     required: true
+    description: "Django secret key - signs sessions and tokens; changing it logs everyone out"
   SUPERUSER_PASSWORD:
     required: true
+    description: "Password for the initial superuser account"
 
 databases:
   - postgres:
@@ -28,17 +34,14 @@ databases:
         user: NB_DB_USER
         password: NB_DB_PASS
         database: NB_DB_NAME
-  - redis:
-      host: netbox-redis
-      port: 6379
-      env:
-        host: NB_REDIS_HOST
-        port: NB_REDIS_PORT
-  - redis:
-      host: netbox-redis-cache
-      port: 6380
-      env:
-        host: NB_REDIS_CACHE_HOST
-        port: NB_REDIS_CACHE_PORT
+# NetBox's two Valkey instances are local to this stack (netbox-internal), so
+# they are deliberately NOT declared here: ensureDBDependencies checks the
+# *shared* container for every declared type, which made `homelab up netbox`
+# fail unless homelab-redis was running even though NetBox never touches it.
+# Their hostnames are constants in docker-compose.yml instead.
+#
+# Consolidating them onto shared homelab-redis would need REDIS_DB /
+# REDIS_CACHE_DB support in the LinuxServer image confirmed first — NetBox wants
+# two separate Redis databases, not two hosts.
 ports:
   - 8080

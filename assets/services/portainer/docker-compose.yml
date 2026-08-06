@@ -16,6 +16,11 @@ services:
     restart: unless-stopped
     volumes:
       - portainer-data:/data
+      # Read-WRITE Docker socket, unlike the :ro mounts in dozzle/homepage/
+      # homarr/uptime-kuma. Portainer needs it to create and destroy
+      # containers, but write access to the socket is equivalent to root on
+      # the host: anyone who reaches this UI can mount / into a new container.
+      # Keep it off the --cf/public layers and behind the tailnet.
       - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - home-services

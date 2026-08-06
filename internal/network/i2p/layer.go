@@ -4,17 +4,29 @@
 package i2p
 
 import (
+	"crypto/sha256"
+	"encoding/base32"
+	"encoding/base64"
+	"encoding/binary"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 
+	"github.com/groot/homelab/internal/configgen"
 	"github.com/groot/homelab/internal/network"
 	"github.com/groot/homelab/internal/run"
 )
 
-const containerName = "i2p"
+const (
+	containerName = "i2p"
+
+	// dataDir is i2pd's DATA_DIR inside the container, where tunnel keys live.
+	// Set by the upstream image; our wrapper Dockerfile matches it.
+	dataDir = "/home/i2pd/data"
+)
 
 // TunnelSection is a parsed eepsite tunnel from tunnels.conf.
 type TunnelSection struct {
@@ -29,12 +41,17 @@ type TunnelSection struct {
 type Layer struct {
 	repoRoot   string
 	runner     *run.Commander
+	envFn      network.EnvFunc
 	reloadHook func() error
+
+	// b32Cache memoizes per-tunnel b32 lookups; see network.AddressCache.
+	cacheMu  sync.Mutex
+	b32Cache map[string]*network.AddressCache
 }
 
 // New creates a new I2P layer.
-func New(repoRoot string, runner *run.Commander) *Layer {
-	return &Layer{repoRoot: repoRoot, runner: runner}
+func New(repoRoot string, runner *run.Commander, envFn network.EnvFunc) *Layer {
+	return &Layer{repoRoot: repoRoot, runner: runner, envFn: envFn}
 }
 
 // newForTest creates an I2P layer with injected reload hook for testing.
@@ -102,6 +119,120 @@ func (l *Layer) CaddyConfigDir(configRoot string) string {
 	return filepath.Join(configRoot, "caddy", "conf.d-i2p")
 }
 
+// ── Addressing ────────────────────────────────────────────────────────────────
+
+// ServiceAddresses returns the eepsite's b32 destination, plus the host it
+// answers on.
+//
+// The b32 is the address: it is derived from the tunnel's key and any I2P
+// client can open it unassisted. The <service>.<home>.i2p host is only the
+// value i2pd puts in the Host header (hostoverride) so Caddy can vhost.
+// Nothing about hosting an eepsite publishes a name — listing that host as
+// *the* address, as this code used to, sent a browser to a stranger's site.
+func (l *Layer) ServiceAddresses(svcName string, _ map[string]string) []network.ServiceAddress {
+	var addrs []network.ServiceAddress
+	if b32 := l.B32Address(svcName); b32 != "" {
+		addrs = append(addrs, network.ServiceAddress{URL: "http://" + b32})
+	}
+	addrs = append(addrs, network.ServiceAddress{
+		URL:  "http://" + l.hostFor(svcName),
+		Note: "name, not an address — register it with the addresshelper URL from `homelab i2p list`",
+	})
+	return addrs
+}
+
+// B32Address returns the tunnel's <52 chars>.b32.i2p destination, or "" when
+// i2pd has not built the tunnel yet or is not running.
+//
+// Derived from the key rather than scraped from the web console: the b32 is by
+// definition base32(sha256(destination)), so reading the key gives the exact
+// answer with no dependency on console markup or on the console being enabled.
+func (l *Layer) B32Address(svcName string) string {
+	return l.cacheFor(svcName).Get(func() string {
+		dest, err := l.destination(svcName)
+		if err != nil {
+			return ""
+		}
+		sum := sha256.Sum256(dest)
+		return strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).
+			EncodeToString(sum[:])) + ".b32.i2p"
+	})
+}
+
+// Base64Destination returns the tunnel's full destination in I2P's base64
+// alphabet — the form an addressbook entry stores and a jump link carries.
+func (l *Layer) Base64Destination(svcName string) string {
+	dest, err := l.destination(svcName)
+	if err != nil {
+		return ""
+	}
+	return i2pBase64.EncodeToString(dest)
+}
+
+// AddressHelperURL is a one-click registration link for the eepsite's name.
+//
+// Opened through the router's HTTP proxy, it makes i2pd store
+// <host> → <destination> in its addressbook, after which the plain name works
+// in that browser. This is I2P's standard jump mechanism and the only way a
+// name resolves for anybody.
+func (l *Layer) AddressHelperURL(svcName string) string {
+	b64 := l.Base64Destination(svcName)
+	if b64 == "" {
+		return ""
+	}
+	return fmt.Sprintf("http://%s/?i2paddresshelper=%s", l.hostFor(svcName), b64)
+}
+
+// i2pBase64 is base64 with I2P's alphabet: '+' and '/' become '-' and '~'.
+var i2pBase64 = base64.NewEncoding(
+	"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-~")
+
+// destination reads the tunnel's key file and returns just the Destination
+// prefix, which every address is derived from.
+//
+// The layout is fixed by I2P's common-structures spec: 384 bytes of keys, then
+// a certificate whose 2-byte length sits at offsets 385-386. The spec is
+// explicit that the total is "387 bytes plus the certificate length ... which
+// may be non-zero", so it is read rather than assumed. Everything after that
+// is private key material we never touch.
+func (l *Layer) destination(svcName string) ([]byte, error) {
+	if l.runner == nil {
+		return nil, fmt.Errorf("no runner configured")
+	}
+	data, err := l.runner.Output("docker", "exec", containerName,
+		"cat", dataDir+"/"+svcName+".dat")
+	if err != nil {
+		return nil, fmt.Errorf("reading %s.dat: %w", svcName, err)
+	}
+	return parseDestination(data, svcName)
+}
+
+func parseDestination(data []byte, svcName string) ([]byte, error) {
+	const keysLen = 384 // public key + padding + signing key
+	if len(data) < keysLen+3 {
+		return nil, fmt.Errorf("%s.dat is too short to hold a destination", svcName)
+	}
+	total := keysLen + 3 + int(binary.BigEndian.Uint16(data[keysLen+1:keysLen+3]))
+	if len(data) < total {
+		return nil, fmt.Errorf("%s.dat truncated: destination needs %d bytes, file has %d",
+			svcName, total, len(data))
+	}
+	return data[:total], nil
+}
+
+// cacheFor returns this tunnel's address cache, creating it on first use.
+func (l *Layer) cacheFor(svcName string) *network.AddressCache {
+	l.cacheMu.Lock()
+	defer l.cacheMu.Unlock()
+	if l.b32Cache == nil {
+		l.b32Cache = map[string]*network.AddressCache{}
+	}
+	if l.b32Cache[svcName] == nil {
+		l.b32Cache[svcName] = &network.AddressCache{}
+	}
+	return l.b32Cache[svcName]
+}
+
 // ── I2P-specific helpers ─────────────────────────────────────────────────────
 //
 // Exported so cmd/i2p.go (the standalone `homelab i2p enable/disable/list`
@@ -117,7 +248,7 @@ func (l *Layer) TunnelsPath() string {
 }
 
 // AppendTunnel appends an HTTP tunnel section to tunnels.conf, routing
-// <name>.i2p traffic through caddy:80 with hostoverride so Caddy can route
+// <name>.i2p traffic through tailscale:80 with hostoverride so Caddy can route
 // by Host header. Idempotent: a tunnel with the same name already present
 // is left as-is rather than erroring, since enabling i2p for a service twice
 // (e.g. once via `homelab i2p enable`, once via `homelab enable --i2p`) is a
@@ -134,9 +265,20 @@ func (l *Layer) AppendTunnel(name string, port int) error {
 		return fmt.Errorf("reading tunnels.conf: %w", err)
 	}
 	for _, t := range existing {
-		if t.Name == name {
+		if t.Name != name {
+			continue
+		}
+		if t.HostOverride == l.hostFor(name) {
 			return nil // already configured
 		}
+		// The host changed — a renamed service, or the home subdomain moved.
+		// Leaving the old section would keep i2pd stamping a Host header that
+		// no longer matches any Caddy site block, i.e. a silent 404 on an
+		// eepsite that looks configured.
+		if err := l.RemoveTunnel(name); err != nil {
+			return fmt.Errorf("replacing stale tunnel: %w", err)
+		}
+		break
 	}
 
 	f, err := os.OpenFile(tunPath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o600)
@@ -145,12 +287,25 @@ func (l *Layer) AppendTunnel(name string, port int) error {
 	}
 	defer func() { _ = f.Close() }()
 
-	section := fmt.Sprintf("\n[%s]\ntype = http\nhost = caddy\nport = 80\nhostoverride = %s.i2p\nkeys = %s.dat\n",
-		name, name, name)
+	// Upstream is "tailscale", not "caddy": Caddy runs with
+	// network_mode: service:tailscale, so it has no identity of its own on the
+	// home-services network and Docker DNS has no "caddy" record. Everything
+	// off-namespace reaches Caddy through the tailscale container (cloudflared
+	// does the same). hostoverride sets the Host: header i2pd forwards, which
+	// is what Caddy's site block matches on — so it must be byte-identical to
+	// what configgen generates, which is why both call I2PHost.
+	section := fmt.Sprintf("\n[%s]\ntype = http\nhost = tailscale\nport = 80\nhostoverride = %s\nkeys = %s.dat\n",
+		name, l.hostFor(name), name)
 	if _, err := f.WriteString(section); err != nil {
 		return fmt.Errorf("writing tunnels.conf: %w", err)
 	}
 	return nil
+}
+
+// hostFor is the Host header this tunnel stamps: <service>.<home>.i2p, with
+// the home subdomain resolved — i2pd does no environment expansion.
+func (l *Layer) hostFor(name string) string {
+	return configgen.I2PHost(name, l.env()["HOME_SUBDOMAIN"])
 }
 
 // RemoveTunnel removes a named tunnel section from tunnels.conf.
@@ -271,14 +426,32 @@ func sectionRange(lines []string, name string) (int, int, bool) {
 	return start, end, true
 }
 
-// Reload sends SIGHUP to i2pd so it re-reads tunnels.conf.
+// Reload restarts i2pd so it picks up tunnels.conf.
+//
+// Not SIGHUP, despite i2pd documenting "HUP — reload tunnels configuration
+// files": the container reads $DATA_DIR/tunnels.conf, which docker-entrypoint.i2p.sh
+// copies from the read-only /config-host mount *once at startup*. A HUP would
+// faithfully re-read that stale copy and report success, which is how tunnel
+// changes silently did nothing before. (Upstream HUP handling is also flaky —
+// PurpleI2P/i2pd#1532, #1294.)
+//
+// ponytail: a restart costs the router a few minutes of netdb reintegration.
+// If that becomes annoying, point `tunconf` at the live /config-host file in
+// i2pd.conf and go back to SIGHUP.
 func (l *Layer) Reload() error {
 	if l.reloadHook != nil {
 		return l.reloadHook()
 	}
-	return l.runner.DockerExec(containerName, "kill", "-HUP", "1")
+	return l.runner.DockerComposeEnv(
+		run.CoreComposeFile(l.repoRoot),
+		l.env(),
+		"--profile", "i2p", "restart", containerName,
+	)
 }
 
 func (l *Layer) env() map[string]string {
-	return map[string]string{}
+	if l.envFn == nil {
+		return map[string]string{}
+	}
+	return l.envFn()
 }

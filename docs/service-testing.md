@@ -33,7 +33,6 @@ This document tracks which services and network combinations have been tested an
 | homebox | [ ] | [ ] | [ ] | [ ] | [ ] |
 | homepage | [ ] | [ ] | [ ] | [ ] | [ ] |
 | immich | [ ] | [ ] | [ ] | [ ] | [ ] |
-| ipfs | [ ] | [ ] | [ ] | [ ] | [ ] |
 | it-tools | [ ] | [ ] | [ ] | [ ] | [ ] |
 | jellyfin | [ ] | [ ] | [ ] | [ ] | [ ] |
 | kavita | [ ] | [ ] | [ ] | [ ] | [ ] |
@@ -73,7 +72,12 @@ This document tracks which services and network combinations have been tested an
    - **Tailnet**: `homelab enable <name>` → access via `<name>.home.<domain>`
    - **Cloudflare Tunnel**: `homelab enable <name> --cf` → access via `<name>.pub.<domain>`
    - **Tor**: `homelab enable <name> --tor` → access via `.onion` address (`homelab ps <name>`)
-   - **I2P**: `homelab enable <name> --i2p` → access via `<name>.i2p`
+   - **Tor**: `homelab enable <name> --tor` → access via the .onion from
+     `homelab tor list`. HTTP is routed through Caddy; a port declared with
+     its own listen port (22:22) reaches the container directly.
+   - **I2P**: `homelab enable <name> --i2p` → access via the b32 from
+     `homelab i2p list`. The `<name>.<home>.i2p` host is only the Host
+     header i2pd sets so Caddy can vhost; nothing publishes it.
    - **Yggdrasil**: `homelab enable <name> --ygg` → access via Yggdrasil IPv6
 3. Open a PR updating this table with your results — mark verified cells as `[v]`, failures as `[x]`
 4. For failed tests, include reproduction steps, `homelab doctor` output, and relevant logs in the PR description or a linked issue.

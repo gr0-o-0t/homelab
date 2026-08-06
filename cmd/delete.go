@@ -7,6 +7,7 @@ import (
 
 	"github.com/groot/homelab/internal/caddy"
 	"github.com/groot/homelab/internal/configgen"
+	"github.com/groot/homelab/internal/routing"
 	"github.com/groot/homelab/internal/tui/styles"
 	"github.com/spf13/cobra"
 )
@@ -42,9 +43,8 @@ func runDelete(_ *cobra.Command, args []string) error {
 	// 1. Disable all network exposure
 	fmt.Printf("  %s  Removing network config…\n", styles.Muted.Render("→"))
 
-	// Private tailnet
-	_ = configgen.RemoveAllPortFiles(root, "private", svcName)
-	_ = caddy.New(root).Disable(svcName)
+	// Private tailnet (symlinked or generated — routing knows which)
+	_ = routing.DisablePrivate(root, svcName, nil)
 
 	// Extension layers
 	_ = configgen.RemoveAllPortFiles(root, "cf", svcName)
@@ -56,10 +56,18 @@ func runDelete(_ *cobra.Command, args []string) error {
 	if l, err := i2pLayer(); err == nil {
 		_ = l.RemoveTunnel(svcName)
 	}
-	// Remove Tor service
-	_ = RemoveTorService(root, svcName)
-	// Remove Ygg forwarder
-	_ = RemoveYggForwarder(root, svcName)
+	// Remove Tor service (also reloads tor)
+	if containerStatus(torContainer) == containerStateRunning {
+		if l, err := torLayer(); err == nil {
+			_ = l.Disable(svcName)
+		}
+	}
+	// Remove Ygg forwarders + generated Caddy blocks (also restarts the node)
+	if containerStatus(yggContainer) == containerStateRunning {
+		if l, err := yggLayer(); err == nil {
+			_ = l.Disable(svcName)
+		}
+	}
 
 	// Reload Caddy
 	if err := caddy.New(root).Reload(); err != nil {
@@ -71,12 +79,6 @@ func runDelete(_ *cobra.Command, args []string) error {
 		if l, err := i2pLayer(); err == nil {
 			_ = l.Reload()
 		}
-	}
-	if containerStatus(torContainer) == containerStateRunning {
-		_ = ReloadTor()
-	}
-	if containerStatus(yggContainer) == containerStateRunning {
-		_ = RestartYgg()
 	}
 
 	// 2. Stop service containers

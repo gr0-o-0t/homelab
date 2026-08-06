@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
-	"github.com/groot/homelab/internal/run"
+	"github.com/groot/homelab/internal/network"
+	"github.com/groot/homelab/internal/network/ygg"
 	"github.com/groot/homelab/internal/tui/styles"
 	"github.com/spf13/cobra"
 )
@@ -28,54 +30,20 @@ var yggStatusCmd = &cobra.Command{
 	Short:   "Show Yggdrasil node and forwarding status",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		root := configDir()
-
-		fmt.Printf("\n%s\n\n", styles.Header.Render("Yggdrasil Mesh Node"))
-
-		if !extEnabled(root, "yggdrasil") {
-			fmt.Printf("  %s  Yggdrasil not enabled.\n", styles.Warning.Render("!"))
-			fmt.Printf("  Run %s to enable.\n\n",
-				styles.Primary.Render("homelab ext enable yggdrasil"))
+		if !extStatusHeader(root, "yggdrasil", yggContainer, "Yggdrasil Mesh Node") {
 			return nil
 		}
 
-		state := containerStatus(yggContainer)
-		if state == containerStateRunning {
-			fmt.Printf("  %s  yggdrasil  %s\n", styles.Success.Render("✓"), styles.StateTag(state))
-		} else {
-			fmt.Printf("  %s  yggdrasil  %s\n", styles.Err.Render("✗"), styles.StateTag(state))
-			fmt.Printf("\n  Start with: %s\n\n", styles.Primary.Render("homelab start"))
-			return nil
+		addr := yggNodeAddress()
+		if addr != "" {
+			fmt.Printf("  %s  Address:  %s\n", styles.Muted.Render("↳"), styles.Bold.Render(addr))
 		}
 
-		// Show active socat forwarders
-		socatDir := filepath.Join(root, "yggdrasil", "socat.d")
-		entries, err := os.ReadDir(socatDir)
-		if err != nil {
-			fmt.Printf("  %s  Could not read %s\n", styles.Warning.Render("!"), socatDir)
-		} else {
-			fmt.Printf("\n  %s\n", styles.Bold.Render("Active forwarders"))
-			found := false
-			for _, e := range entries {
-				if !strings.HasSuffix(e.Name(), ".forward") {
-					continue
-				}
-				name := strings.TrimSuffix(e.Name(), ".forward")
-				data, _ := os.ReadFile(filepath.Join(socatDir, e.Name()))
-				port := extractVar(string(data), "PORT")
-				target := extractVar(string(data), "TARGET")
-				fmt.Printf("  %s  %s → %s (TCP6:%s)\n",
-					styles.Muted.Render("↳"),
-					styles.Bold.Render(name),
-					styles.Primary.Render(target),
-					port,
-				)
-				found = true
-			}
-			if !found {
-				fmt.Printf("  %s  (none — run %s)\n",
-					styles.Muted.Render("!"),
-					styles.Primary.Render("homelab ygg enable <service>"))
-			}
+		fmt.Printf("\n  %s\n", styles.Bold.Render("Active forwarders"))
+		if !printYggForwarders(root, addr) {
+			fmt.Printf("  %s  (none — run %s)\n",
+				styles.Muted.Render("!"),
+				styles.Primary.Render("homelab ygg enable <service>"))
 		}
 		fmt.Println()
 		return nil
@@ -84,19 +52,8 @@ var yggStatusCmd = &cobra.Command{
 
 // ── logs ──────────────────────────────────────────────────────────────────────
 
-var yggLogsCmd = &cobra.Command{
-	Use:   "logs",
-	Short: "Stream yggdrasil container logs",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		root := configDir()
-		env := buildEnv(root, "")
-		return run.Default().DockerComposeEnv(
-			run.CoreComposeFile(root),
-			env,
-			withProfiles(root, "logs", "-f", yggContainer)...,
-		)
-	},
-}
+var yggLogsCmd = containerLogsCmd(yggContainer,
+	"Stream yggdrasil container logs")
 
 // ── enable ────────────────────────────────────────────────────────────────────
 
@@ -107,10 +64,14 @@ var yggEnableCmd = &cobra.Command{
 	Short: "Expose a service via Yggdrasil mesh node",
 	Long: `Create a socat TCP6→TCP4 port forwarder on the Yggdrasil node.
 
-Other Yggdrasil peers can reach the service at:
-  [<yggdrasil-ipv6>]:<port>
+The forwarder relays to Caddy, which gets a matching :<port> site block, so
+mesh peers reach the service at:
+  http://[<yggdrasil-ipv6>]:<port>
 
-Use --port to override the port detected from caddy.conf.`,
+The mesh port is allocated from 9000 up and stays put across re-enables — the
+mesh has no naming, so a service is only addressable by port and two services
+cannot share one. Use --port to override the service's own port (the upstream
+Caddy proxies to), normally detected from caddy.conf.`,
 	Args:              cobra.ExactArgs(1),
 	ValidArgsFunction: completeServiceNames,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -125,24 +86,29 @@ Use --port to override the port detected from caddy.conf.`,
 				return fmt.Errorf("detecting port for %s: %w\n  Use --port to specify explicitly", name, err)
 			}
 		}
+		portNum, err := strconv.Atoi(port)
+		if err != nil {
+			return fmt.Errorf("invalid port %q: %w", port, err)
+		}
 
-		// Write socat forwarder config
-		socatDir := filepath.Join(root, "yggdrasil", "socat.d")
-		if err := os.MkdirAll(socatDir, 0o750); err != nil {
-			return fmt.Errorf("creating socat.d: %w", err)
+		l, err := yggLayer()
+		if err != nil {
+			return err
 		}
-		fwdPath := filepath.Join(socatDir, name+".forward")
-		content := fmt.Sprintf("PORT=%s\nTARGET=%s:%s\n", port, name, port)
-		if err := os.WriteFile(fwdPath, []byte(content), 0o600); err != nil {
-			return fmt.Errorf("writing %s: %w", fwdPath, err)
+		// Same call path as `homelab enable <svc> --ygg`: this command used to
+		// keep its own copy that wrote a forwarder straight to the service
+		// container and no Caddy block at all.
+		if err := l.Enable(name, name, network.ServiceInfo{},
+			[]network.PortSelection{{Name: "default", Port: portNum, Protocol: "tcp"}}); err != nil {
+			return err
 		}
-		fmt.Printf("  %s  %s written\n", styles.Success.Render("✓"), fwdPath)
+		if err := caddyReload(); err != nil {
+			fmt.Printf("  %s  Caddy reload: %v\n", styles.Warning.Render("!"), err)
+		}
 
-		// Restart yggdrasil container to pick up new forwarders
-		if err := RestartYgg(); err != nil {
-			return fmt.Errorf("restarting yggdrasil: %w", err)
-		}
-		fmt.Printf("  %s  Yggdrasil restarted — forwarder active\n\n", styles.Success.Render("✓"))
+		fmt.Printf("\n%s\n\n", styles.Header.Render("Yggdrasil: "+name))
+		printYggForwarders(root, yggNodeAddress())
+		fmt.Println()
 		return nil
 	},
 }
@@ -156,21 +122,18 @@ var yggDisableCmd = &cobra.Command{
 	ValidArgsFunction: completeServiceNames,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := args[0]
-		root := configDir()
-		fwdPath := filepath.Join(root, "yggdrasil", "socat.d", name+".forward")
 
-		if _, err := os.Stat(fwdPath); os.IsNotExist(err) {
-			return fmt.Errorf("no forwarder found for %q", name)
+		l, err := yggLayer()
+		if err != nil {
+			return err
 		}
-		if err := os.Remove(fwdPath); err != nil {
-			return fmt.Errorf("removing %s: %w", fwdPath, err)
+		if err := l.Disable(name); err != nil {
+			return err
 		}
-		fmt.Printf("  %s  %s removed\n", styles.Warning.Render("→"), fwdPath)
-
-		if err := RestartYgg(); err != nil {
-			return fmt.Errorf("restarting yggdrasil: %w", err)
+		if err := caddyReload(); err != nil {
+			fmt.Printf("  %s  Caddy reload: %v\n", styles.Warning.Render("!"), err)
 		}
-		fmt.Printf("  %s  Yggdrasil restarted — forwarder removed\n\n", styles.Success.Render("✓"))
+		fmt.Printf("  %s  %s removed from the mesh\n\n", styles.Warning.Render("→"), styles.Bold.Render(name))
 		return nil
 	},
 }
@@ -182,32 +145,8 @@ var yggListCmd = &cobra.Command{
 	Short: "List active port forwarders",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		root := configDir()
-		socatDir := filepath.Join(root, "yggdrasil", "socat.d")
-		entries, err := os.ReadDir(socatDir)
-		if err != nil {
-			return fmt.Errorf("reading %s: %w", socatDir, err)
-		}
-
 		fmt.Printf("\n%s\n\n", styles.Header.Render("Yggdrasil Port Forwarders"))
-
-		found := false
-		for _, e := range entries {
-			if !strings.HasSuffix(e.Name(), ".forward") {
-				continue
-			}
-			name := strings.TrimSuffix(e.Name(), ".forward")
-			data, _ := os.ReadFile(filepath.Join(socatDir, e.Name()))
-			port := extractVar(string(data), "PORT")
-			target := extractVar(string(data), "TARGET")
-			fmt.Printf("  %s  %s → %s (TCP6:%s)\n",
-				styles.Dot(true, true),
-				styles.Bold.Render(name),
-				styles.Primary.Render(target),
-				port,
-			)
-			found = true
-		}
-		if !found {
+		if !printYggForwarders(root, yggNodeAddress()) {
 			fmt.Printf("  %s  (none)\n", styles.Muted.Render("!"))
 		}
 		fmt.Println()
@@ -215,41 +154,57 @@ var yggListCmd = &cobra.Command{
 	},
 }
 
-// ── helpers ───────────────────────────────────────────────────────────────────
-
-// AppendYggForwarder writes a socat forwarder config for a service and restarts yggdrasil.
-func AppendYggForwarder(root, name, port string) error {
+// printYggForwarders lists each forwarder as the URL a mesh peer can actually
+// open, and reports whether it found any. addr is the node's mesh address, or
+// "" when the node isn't running — the port is still worth showing.
+func printYggForwarders(root, addr string) bool {
 	socatDir := filepath.Join(root, "yggdrasil", "socat.d")
-	if err := os.MkdirAll(socatDir, 0o750); err != nil {
-		return fmt.Errorf("creating socat.d: %w", err)
+	entries, err := os.ReadDir(socatDir)
+	if err != nil {
+		return false
 	}
-	fwdPath := filepath.Join(socatDir, name+".forward")
-	content := fmt.Sprintf("PORT=%s\nTARGET=%s:%s\n", port, name, port)
-	if err := os.WriteFile(fwdPath, []byte(content), 0o600); err != nil {
-		return fmt.Errorf("writing %s: %w", fwdPath, err)
+	found := false
+	for _, e := range entries {
+		if !strings.HasSuffix(e.Name(), ".forward") {
+			continue
+		}
+		name := strings.TrimSuffix(e.Name(), ".forward")
+		data, _ := os.ReadFile(filepath.Join(socatDir, e.Name())) //nolint:gosec // dir is ours
+		port, _ := strconv.Atoi(extractVar(string(data), "PORT"))
+		fmt.Printf("  %s  %s  %s\n",
+			styles.Muted.Render("↳"),
+			styles.Bold.Render(name),
+			styles.Primary.Render(ygg.ServiceURL(addr, port)),
+		)
+		found = true
 	}
-	return nil
+	return found
 }
 
-// RemoveYggForwarder removes a socat forwarder config and restarts yggdrasil.
-func RemoveYggForwarder(root, name string) error {
-	fwdPath := filepath.Join(root, "yggdrasil", "socat.d", name+".forward")
-	if _, err := os.Stat(fwdPath); os.IsNotExist(err) {
-		return nil
+// yggNodeAddress returns the node's mesh IPv6 address, or "" if the node isn't
+// running or the admin endpoint doesn't answer. Cosmetic — never fatal.
+func yggNodeAddress() string {
+	l, err := yggLayer()
+	if err != nil {
+		return ""
 	}
-	return os.Remove(fwdPath)
+	return l.NodeAddress()
 }
 
-// RestartYgg restarts the yggdrasil container to reload forwarder configs.
-func RestartYgg() error {
-	root := configDir()
-	env := buildEnv(root, "")
-	return run.Default().DockerComposeEnv(
-		run.CoreComposeFile(root),
-		env,
-		withProfiles(root, "restart", yggContainer)...,
-	)
+// yggLayer returns the registered Yggdrasil layer.
+func yggLayer() (*ygg.Layer, error) {
+	layer, ok := extRegistry().Get("ygg")
+	if !ok {
+		return nil, fmt.Errorf("ygg extension not registered")
+	}
+	l, ok := layer.(*ygg.Layer)
+	if !ok {
+		return nil, fmt.Errorf("unexpected ygg layer type %T", layer)
+	}
+	return l, nil
 }
+
+// ── helpers ───────────────────────────────────────────────────────────────────
 
 // extractVar extracts a shell variable value from a .forward file.
 func extractVar(data, key string) string {

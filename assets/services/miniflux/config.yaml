@@ -6,6 +6,7 @@ vars:
 secrets:
   ADMIN_PASSWORD:
     required: true
+    description: "Password for the admin account created on first start"
 
 databases:
   - postgres:

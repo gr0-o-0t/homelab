@@ -6,5 +6,6 @@ vars:
 secrets:
   WEBUI_SECRET_KEY:
     required: true
+    description: "Signs session tokens - changing it logs everyone out"
 ports:
   - 8080

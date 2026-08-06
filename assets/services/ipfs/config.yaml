@@ -1,8 +1,0 @@
-vars:
-  IPFS_PROFILE:
-    value: "server"
-    description: "IPFS configuration profile (server, lowpower, test, default)"
-
-secrets: {}
-ports:
-  - 8080

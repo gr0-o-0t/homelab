@@ -3,11 +3,42 @@
 i2pd is a lightweight C++ I2P router. Replaces Java I2P.
 
 ## Ports
-- 7070 - Web Console (http://i2p:7070)
+- 7070 - Web Console (http://127.0.0.1:7070 from this host; loopback only)
 - 4444 - HTTP proxy (outbound)
 - 4447 - SOCKS proxy (outbound)
 - 7656 - SAM bridge (app access)
 - 45678 - NTCP2/SSU2 transport (external, configurable)
+
+## Addressing
+
+An eepsite is reached at its b32 — a 52-character hash of the tunnel's
+destination key, printed by `homelab i2p list`. That is the only address the
+network resolves for you.
+
+The `<service>.<home-subdomain>.i2p` host in tunnels.conf is *not* an address.
+It is the Host header i2pd stamps on incoming requests (hostoverride) so Caddy
+can tell services apart behind one destination. Nothing publishes it. A bare
+`<service>.i2p` is worse than useless: it is a name in the global I2P namespace
+that anyone can register, and a router whose addressbook holds someone else's
+entry will happily send you there — which is why the home subdomain is in the
+middle.
+
+To make the name work in a browser it has to be registered.
+
+Privately, for your own router: open the addresshelper URL from
+`homelab i2p list` once through the i2p HTTP proxy.
+
+Publicly, so anyone can resolve it: submit a signed registration line to one
+registrar — reg.i2p (http://reg.i2p/add) or stats.i2p, not both. The line is
+`<name>=<base64 destination>#!sign=<signature>`, signed by the destination's
+own key, which is what proves the name is yours to claim.
+
+Note the shape of our names. `searxng.leno.i2p` is a third-level domain, and
+i2pd is explicit that the console generates registration lines for 2LDs only:
+"result string can be used only for registering 2LD domains (example.i2p).
+For registering subdomains please use i2pd-tools." So publishing this scheme
+means registering the parent `leno.i2p` once, then registering each service
+under it with i2pd-tools' regaddr_3ld, which signs with both keys.
 
 ## Eepsite management
 Eepsite tunnels are defined in tunnels.conf.
@@ -16,4 +47,5 @@ Use the CLI:
   homelab i2p disable <service>  # remove eepsite tunnel
   homelab i2p list               # list active tunnels
 
-After changes, i2pd reloads config automatically via SIGHUP.
+After changes, i2pd is restarted automatically to pick them up. SIGHUP is
+not enough: the container reads a copy of tunnels.conf taken at startup.

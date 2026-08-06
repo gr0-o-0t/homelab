@@ -5,6 +5,7 @@ import (
 
 	"github.com/groot/homelab/internal/caddy"
 	"github.com/groot/homelab/internal/configgen"
+	"github.com/groot/homelab/internal/routing"
 	"github.com/groot/homelab/internal/run"
 	"github.com/groot/homelab/internal/tui/styles"
 	"github.com/spf13/cobra"
@@ -75,7 +76,7 @@ func runDisable(cmd *cobra.Command, args []string) error {
 
 	// Private tailnet (removed when no specific ext flags, or always with -a)
 	if !hasSpecific || disableAll {
-		if err := disablePrivate(root, svcName); err != nil {
+		if err := routing.DisablePrivate(root, svcName, nil); err != nil {
 			return err
 		}
 		fmt.Printf("  %s  Private: removed\n", styles.Warning.Render("→"))
@@ -132,17 +133,6 @@ func runDisable(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Println()
-	return nil
-}
-
-func disablePrivate(root, svcName string) error {
-	// Try old symlink removal first (may not exist → generated config fallback)
-	if err := caddy.New(root).Disable(svcName); err != nil {
-		// No symlink — try removing any auto-generated config
-		if err := configgen.RemoveAllPortFiles(root, "private", svcName); err != nil {
-			return fmt.Errorf("service %q has no active private route", svcName)
-		}
-	}
 	return nil
 }
 

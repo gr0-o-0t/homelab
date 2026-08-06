@@ -6,7 +6,6 @@ import (
 	"strconv"
 
 	"github.com/groot/homelab/internal/network/i2p"
-	"github.com/groot/homelab/internal/run"
 	"github.com/groot/homelab/internal/tui/styles"
 	"github.com/spf13/cobra"
 )
@@ -19,7 +18,7 @@ var i2pCmd = &cobra.Command{
 	Long: `Inspect i2pd and manage eepsite tunnels via tunnels.conf.
 
 Tunnels are defined in tunnels.conf as INI sections. After adding
-or removing a tunnel, i2pd reloads config automatically (SIGHUP).
+or removing a tunnel, i2pd is restarted to pick up the change.
 
   homelab i2p enable  <service>   add HTTP eepsite tunnel
   homelab i2p disable <service>   remove eepsite tunnel
@@ -55,48 +54,20 @@ var i2pStatusCmd = &cobra.Command{
 	Aliases: []string{"ps"},
 	Short:   "Show i2pd router status",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		root := configDir()
-
-		fmt.Printf("\n%s\n\n", styles.Header.Render("i2pd Router"))
-
-		if !extEnabled(root, "i2p") {
-			fmt.Printf("  %s  I2P not enabled.\n", styles.Warning.Render("!"))
-			fmt.Printf("  Run %s to enable.\n\n",
-				styles.Primary.Render("homelab ext enable i2p"))
+		if !extStatusHeader(configDir(), "i2p", i2pContainer, "i2pd Router") {
 			return nil
 		}
-
-		state := containerStatus(i2pContainer)
-		if state == containerStateRunning {
-			fmt.Printf("  %s  i2p  %s\n", styles.Success.Render("✓"), styles.StateTag(state))
-			fmt.Printf("\n  %s  Web Console: %s\n",
-				styles.Muted.Render("↳"),
-				styles.Primary.Render("http://i2p:7070"))
-		} else {
-			fmt.Printf("  %s  i2p  %s\n", styles.Err.Render("✗"), styles.StateTag(state))
-			fmt.Printf("\n  Start with: %s\n\n", styles.Primary.Render("homelab start"))
-			return nil
-		}
-		fmt.Println()
+		fmt.Printf("\n  %s  Web Console: %s\n\n",
+			styles.Muted.Render("↳"),
+			styles.Primary.Render("http://127.0.0.1:7070"))
 		return nil
 	},
 }
 
 // ── logs ──────────────────────────────────────────────────────────────────────
 
-var i2pLogsCmd = &cobra.Command{
-	Use:   "logs",
-	Short: "Stream i2pd container logs",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		root := configDir()
-		env := buildEnv(root, "")
-		return run.Default().DockerComposeEnv(
-			run.CoreComposeFile(root),
-			env,
-			withProfiles(root, "logs", "-f", i2pContainer)...,
-		)
-	},
-}
+var i2pLogsCmd = containerLogsCmd(i2pContainer,
+	"Stream i2pd container logs")
 
 // ── enable ────────────────────────────────────────────────────────────────────
 
@@ -105,11 +76,12 @@ var i2pEnablePort string
 var i2pEnableCmd = &cobra.Command{
 	Use:   "enable <service>",
 	Short: "Create an eepsite HTTP tunnel for a service",
-	Long: `Add an HTTP eepsite tunnel to tunnels.conf and reload i2pd.
+	Long: `Add an HTTP eepsite tunnel to tunnels.conf and restart i2pd.
 
-Traffic flows through Caddy:80 with hostoverride, so Caddy handles
-routing by Host header. Use homelab enable <service> --i2p instead
-for the full flow (Caddy route + i2pd tunnel + reload).`,
+Traffic flows to Caddy (via tailscale:80, Caddy's shared network
+namespace) with hostoverride, so Caddy routes by Host header. Use
+homelab enable <service> --i2p instead for the full flow
+(Caddy route + i2pd tunnel + reload).`,
 	Args:              cobra.ExactArgs(1),
 	ValidArgsFunction: completeServiceNames,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -138,9 +110,6 @@ for the full flow (Caddy route + i2pd tunnel + reload).`,
 		}
 
 		fmt.Printf("\n%s\n\n", styles.Header.Render("I2P Eepsite: "+name))
-		fmt.Printf("  %s  Tunnel:  %s → caddy:80 (hostoverride)\n",
-			styles.Primary.Render("→"),
-			styles.Bold.Render(name+".i2p"))
 		fmt.Printf("  %s  Config:  %s\n",
 			styles.Muted.Render("↳"),
 			styles.Muted.Render(l.TunnelsPath()))
@@ -150,9 +119,15 @@ for the full flow (Caddy route + i2pd tunnel + reload).`,
 				fmt.Printf("  %s  Warning: reload failed (%v) — restart i2pd manually\n",
 					styles.Warning.Render("!"), err)
 			} else {
-				fmt.Printf("  %s  i2pd reloaded\n", styles.Success.Render("✓"))
+				fmt.Printf("  %s  i2pd restarted\n", styles.Success.Render("✓"))
 			}
 		}
+
+		// The b32 is the address. Printing the .i2p host as though it were one
+		// is what sent a browser to a stranger's eepsite: nothing publishes
+		// that name, and a router whose addressbook has it goes wherever its
+		// registrant pointed it.
+		printI2PAddress(l, name)
 		fmt.Printf("\n  %s  Also create Caddy route: homelab enable %s --i2p\n\n",
 			styles.Muted.Render("→"), name)
 		return nil
@@ -233,15 +208,36 @@ var i2pListCmd = &cobra.Command{
 		}
 
 		for _, t := range tunnels {
-			target := fmt.Sprintf("%s:%s", t.Host, t.Port)
-			if t.HostOverride != "" {
-				target = fmt.Sprintf("%s:%s (hostoverride %s)", t.Host, t.Port, t.HostOverride)
+			// The b32 is the address: it is derived from the tunnel's key and
+			// any I2P client can open it. The .i2p name is only the Host
+			// header i2pd stamps on incoming requests so Caddy can vhost —
+			// nothing publishes it, and if it resolves for anyone it resolves
+			// to whoever registered that name, not to you.
+			addr := l.B32Address(t.Name)
+			if addr == "" {
+				fmt.Printf("  %s  %s  %s\n",
+					styles.Warning.Render("!"), styles.Bold.Render(t.Name),
+					styles.Muted.Render("(destination not built yet — is i2pd running?)"))
+				continue
 			}
-			fmt.Printf("  %s  %s → %s  [keys: %s]\n",
+			fmt.Printf("  %s  %s  %s\n",
 				styles.Dot(true, true),
-				styles.Bold.Render(t.Name+".i2p"),
-				target, t.Keys,
+				styles.Bold.Render(t.Name),
+				styles.Primary.Render("http://"+addr),
 			)
+			fmt.Printf("      %s → %s:%s   host header %s\n",
+				styles.Muted.Render("via Caddy"),
+				t.Host, t.Port,
+				styles.Muted.Render(t.HostOverride),
+			)
+			// Opening this once through the router's HTTP proxy registers the
+			// name in that router's addressbook, after which the plain host
+			// works in the browser. It is the only way a name resolves.
+			if jump := l.AddressHelperURL(t.Name); jump != "" {
+				fmt.Printf("      %s %s\n",
+					styles.Muted.Render("register the name (open once via the i2p proxy):"),
+					styles.Muted.Render(jump))
+			}
 		}
 
 		fmt.Printf("\n  %s  Config: %s\n",
@@ -260,4 +256,18 @@ func init() {
 	i2pCmd.AddCommand(i2pListCmd)
 
 	i2pEnableCmd.Flags().StringVar(&i2pEnablePort, "port", "", "Override service port")
+}
+
+// printI2PAddress prints the eepsite's real address, plus the Host header it
+// answers on for context.
+func printI2PAddress(l *i2p.Layer, name string) {
+	for _, a := range l.ServiceAddresses(name, nil) {
+		if a.Note == "" {
+			fmt.Printf("  %s  Address: %s\n",
+				styles.Primary.Render("→"), styles.Bold.Render(a.URL))
+			continue
+		}
+		fmt.Printf("  %s  %s  %s\n",
+			styles.Muted.Render("↳"), a.URL, styles.Muted.Render("("+a.Note+")"))
+	}
 }

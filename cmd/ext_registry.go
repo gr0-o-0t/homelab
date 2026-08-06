@@ -11,7 +11,6 @@ import (
 
 	"github.com/groot/homelab/internal/network/cf"
 	"github.com/groot/homelab/internal/network/i2p"
-	"github.com/groot/homelab/internal/network/ipfs"
 	"github.com/groot/homelab/internal/network/tailscale"
 	"github.com/groot/homelab/internal/network/tor"
 	"github.com/groot/homelab/internal/network/ygg"
@@ -33,13 +32,15 @@ func extRegistry() *network.Registry {
 		extRegistryInstance = network.NewRegistry()
 		root := configDir()
 
+		// Evaluated per compose call, not here: buildEnv reads the keyring.
+		env := func() map[string]string { return buildEnv(root, "") }
+
 		// Register layers in display order (default-enabled first)
-		extRegistryInstance.Register(tailscale.New(root, run.Default()))
-		extRegistryInstance.Register(cf.New(root, run.Default()))
-		extRegistryInstance.Register(tor.New(root, run.Default()))
-		extRegistryInstance.Register(i2p.New(root, run.Default()))
-		extRegistryInstance.Register(ygg.New(root, run.Default()))
-		extRegistryInstance.Register(ipfs.New(root, run.Default()))
+		extRegistryInstance.Register(tailscale.New(root, run.Default(), env))
+		extRegistryInstance.Register(cf.New(root, run.Default(), env))
+		extRegistryInstance.Register(tor.New(root, run.Default(), env))
+		extRegistryInstance.Register(i2p.New(root, run.Default(), env))
+		extRegistryInstance.Register(ygg.New(root, run.Default(), env))
 	})
 	return extRegistryInstance
 }
@@ -99,13 +100,7 @@ func extCommandFor(name string) *cobra.Command {
 			if !ok {
 				return fmt.Errorf("extension %q not registered", name)
 			}
-			root := configDir()
-			env := buildEnv(root, "")
-			return run.Default().DockerComposeEnv(
-				run.CoreComposeFile(root),
-				env,
-				withProfiles(root, "logs", "-f", layer.ContainerName())...,
-			)
+			return coreCompose("logs", "-f", layer.ContainerName())
 		},
 	})
 

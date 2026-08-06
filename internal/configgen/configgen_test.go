@@ -41,12 +41,11 @@ func TestLayerDisplayURL_I2P(t *testing.T) {
 
 func TestLayerDisplayURL_Ygg(t *testing.T) {
 	url := LayerDisplayURL("ygg", "gitea", nil)
-	assert.Equal(t, "http://gitea.ygg", url)
-}
-
-func TestLayerDisplayURL_IPFS(t *testing.T) {
-	url := LayerDisplayURL("ipfs", "gitea", nil)
-	assert.Equal(t, "ipfs://gitea", url)
+	// No .ygg naming exists — the URL is the node address and allocated port,
+	// neither of which this function can know. Real callers use
+	// ygg.ServiceURL; this is only the fallback.
+	assert.Contains(t, url, "homelab ygg status")
+	assert.NotContains(t, url, "gitea.ygg")
 }
 
 func TestLayerDisplayURL_Unknown(t *testing.T) {
@@ -101,20 +100,20 @@ func TestResolvePorts_NewFormat(t *testing.T) {
 	assert.Equal(t, 3000, result[1].Port)
 }
 
-func TestPortSubdomain_Default(t *testing.T) {
-	assert.Equal(t, "", portSubdomain("svc", "default"))
-}
+// The three declaration forms, as they appear in a site address. See
+// config.PortEntry for the grammar.
+func TestSiteAddress_DeclarationForms(t *testing.T) {
+	bare := PortSelection{Name: "default", Port: 8080}
+	assert.Equal(t, "gitea.{$HOME_SUBDOMAIN}.{$DOMAIN}", siteAddress("gitea", "private", bare))
 
-func TestPortSubdomain_Web(t *testing.T) {
-	assert.Equal(t, "", portSubdomain("svc", "web"))
-}
+	mapped := PortSelection{Name: "22", Port: 22, Listen: 22}
+	assert.Equal(t, "gitea.{$HOME_SUBDOMAIN}.{$DOMAIN}:22", siteAddress("gitea", "private", mapped))
 
-func TestPortSubdomain_Numeric(t *testing.T) {
-	assert.Equal(t, "", portSubdomain("svc", "8080"))
-}
+	named := PortSelection{Name: "vault", Port: 80, Subdomain: "vault"}
+	assert.Equal(t, "vault.{$HOME_SUBDOMAIN}.{$DOMAIN}", siteAddress("vaultwarden", "private", named),
+		"a declared subdomain replaces the service name, it does not prefix it")
 
-func TestPortSubdomain_Named(t *testing.T) {
-	assert.Equal(t, "admin", portSubdomain("svc", "admin"))
+	assert.Equal(t, "vault.{$DOMAIN}", siteAddress("vaultwarden", "cf", named))
 }
 
 func TestBuildBlock_PrivateDefaultPort(t *testing.T) {
@@ -136,25 +135,48 @@ func TestBuildBlock_CFNamedPort(t *testing.T) {
 	assert.NotContains(t, block.Content, "import wildcard_tls")
 }
 
-func TestBuildBlock_Tor(t *testing.T) {
-	block, err := buildBlock("tor", "mysvc", "mysvc", PortSelection{Name: "default", Port: 80, Protocol: "tcp"})
-	require.NoError(t, err)
-	assert.Contains(t, block.Content, "mysvc.onion")
-	assert.Contains(t, block.Content, "reverse_proxy mysvc:80")
+// Mesh site addresses must carry the http:// scheme. Without it Caddy turns on
+// automatic HTTPS for .i2p/.onion/.ygg: it binds :443, serves a redirect on
+// :80 (which is the port the mesh layer actually dials), and burns ACME
+// attempts on a name no CA will sign.
+func TestBuildBlock_MeshLayersAreHTTPOnly(t *testing.T) {
+	for ext, want := range map[string]string{
+		"i2p": "http://mysvc.{$HOME_SUBDOMAIN}.i2p {",
+	} {
+		block, err := buildBlock(ext, "mysvc", "mysvc", PortSelection{Name: "default", Port: 80, Protocol: "tcp"})
+		require.NoError(t, err, ext)
+		assert.Contains(t, block.Content, want)
+		assert.Contains(t, block.Content, "reverse_proxy mysvc:80")
+	}
 }
 
-func TestBuildBlock_I2P(t *testing.T) {
-	block, err := buildBlock("i2p", "mysvc", "mysvc", PortSelection{Name: "default", Port: 80, Protocol: "tcp"})
-	require.NoError(t, err)
-	assert.Contains(t, block.Content, "mysvc.i2p")
-	assert.Contains(t, block.Content, "reverse_proxy mysvc:80")
+func TestBuildRoutesBlock_MeshLayersAreHTTPOnly(t *testing.T) {
+	for ext, want := range map[string]string{
+		"i2p": "http://appflowy.{$HOME_SUBDOMAIN}.i2p {",
+	} {
+		content, err := buildRoutesBlock(ext, "appflowy", "reverse_proxy appflowy:80\n")
+		require.NoError(t, err, ext)
+		assert.Contains(t, content, want)
+	}
 }
 
-func TestBuildBlock_Ygg(t *testing.T) {
-	block, err := buildBlock("ygg", "mysvc", "mysvc", PortSelection{Name: "default", Port: 80, Protocol: "tcp"})
+// Yggdrasil has no naming, so there is no `<name>.ygg` host to match on: the
+// block is port-addressed and written by the ygg layer, which is the only
+// thing that knows the port. Empty content is the signal to skip the write.
+func TestBuildBlock_YggIsWrittenByItsLayer(t *testing.T) {
+	block, err := buildBlock("ygg", "mysvc", "mysvc", PortSelection{Name: "web", Port: 8080, Protocol: "tcp"})
 	require.NoError(t, err)
-	assert.Contains(t, block.Content, "mysvc.ygg")
-	assert.Contains(t, block.Content, "reverse_proxy mysvc:80")
+	assert.Empty(t, block.Content)
+	assert.Equal(t, 8080, block.Port, "the port must still reach the layer")
+
+	routes, err := buildRoutesBlock("ygg", "appflowy", "reverse_proxy appflowy:80\n")
+	require.NoError(t, err)
+	assert.Empty(t, routes)
+}
+
+func TestWrapSiteBlock(t *testing.T) {
+	got := WrapSiteBlock(":9001", "# header comment\n\nreverse_proxy svc:80\n")
+	assert.Equal(t, ":9001 {\n\treverse_proxy svc:80\n}\n", got)
 }
 
 func TestBuildBlock_DisplayNameDiffers(t *testing.T) {
@@ -170,40 +192,71 @@ func TestBuildBlock_UnknownExtension(t *testing.T) {
 	assert.ErrorContains(t, err, "unknown extension")
 }
 
-func TestBuildBlock_TorMultiPort_DistinctContent(t *testing.T) {
-	// Before the multi-port fix, tor/ygg blocks ignored port name entirely,
-	// so two ports produced byte-identical content — which, combined with
-	// WriteFile no longer clobbering by filename, would leave two files
-	// both claiming the same "svc.onion" address (a Caddy validate error).
-	web, err := buildBlock("tor", "svc", "svc", PortSelection{Name: "web", Port: 8080, Protocol: "tcp"})
+// Two i2p ports must not produce byte-identical blocks: combined with
+// per-port filenames, that leaves two files claiming one host, which Caddy
+// rejects at validate time.
+func TestBuildBlock_I2PPerPortAddressesAreDistinct(t *testing.T) {
+	web, err := buildBlock("i2p", "svc", "svc",
+		PortSelection{Name: "default", Port: 8080, Protocol: "tcp"})
 	require.NoError(t, err)
-	ssh, err := buildBlock("tor", "svc", "svc", PortSelection{Name: "ssh", Port: 22, Protocol: "tcp"})
+	admin, err := buildBlock("i2p", "svc", "svc",
+		PortSelection{Name: "admin", Port: 9090, Subdomain: "admin", Protocol: "tcp"})
 	require.NoError(t, err)
-	assert.NotEqual(t, web.Content, ssh.Content)
-	assert.Contains(t, web.Content, "svc.onion")
-	assert.Contains(t, ssh.Content, "ssh.svc.onion")
+
+	assert.Contains(t, web.Content, "http://svc.{$HOME_SUBDOMAIN}.i2p {")
+	assert.Contains(t, admin.Content, "http://admin.{$HOME_SUBDOMAIN}.i2p {")
+	assert.NotEqual(t, web.Content, admin.Content)
 }
 
-func TestBuildBlock_YggMultiPort_DistinctContent(t *testing.T) {
-	web, err := buildBlock("ygg", "svc", "svc", PortSelection{Name: "web", Port: 8080, Protocol: "tcp"})
+// Tor joins ygg in writing its own Caddy config: a .onion is a hash of a key
+// tor generates, so it cannot be templated from a service name, and nothing
+// rewrites the Host header on the way in the way i2pd's hostoverride does.
+func TestBuildBlock_TorIsWrittenByItsLayer(t *testing.T) {
+	block, err := buildBlock("tor", "svc", "svc",
+		PortSelection{Name: "default", Port: 8080, Protocol: "tcp"})
 	require.NoError(t, err)
-	ssh, err := buildBlock("ygg", "svc", "svc", PortSelection{Name: "ssh", Port: 22, Protocol: "tcp"})
+	assert.Empty(t, block.Content)
+
+	routes, err := buildRoutesBlock("tor", "appflowy", "reverse_proxy appflowy:80\n")
 	require.NoError(t, err)
-	assert.NotEqual(t, web.Content, ssh.Content)
-	assert.Contains(t, web.Content, "svc.ygg")
-	assert.Contains(t, ssh.Content, "ssh.svc.ygg")
+	assert.Empty(t, routes)
 }
+
+// A mesh layer delivers to Caddy on :80 and nowhere else — i2pd's tunnel and
+// tor's HiddenServicePort both target it. A port declared with its own listen
+// port (22:22) therefore gets no mesh block, rather than one that sits there
+// never receiving a request.
+func TestBuildBlock_MeshSkipsExplicitListenPorts(t *testing.T) {
+	for _, ext := range []string{"i2p"} {
+		block, err := buildBlock(ext, "forgejo", "forgejo",
+			PortSelection{Name: "22", Port: 22, Listen: 22, Protocol: "tcp"})
+		require.NoError(t, err, ext)
+		assert.Empty(t, block.Content, ext)
+	}
+}
+
+// Caddy speaks HTTP; nothing here proxies datagrams. A udp port is recorded
+// for compose and skipped for routing.
+func TestBuildBlock_UDPGetsNoSiteBlock(t *testing.T) {
+	block, err := buildBlock("private", "adguardhome", "adguardhome",
+		PortSelection{Name: "53", Port: 53, Listen: 53, Protocol: "udp"})
+	require.NoError(t, err)
+	assert.Empty(t, block.Content)
+}
+
+// The ygg equivalent of this guard lives in internal/network/ygg: distinct
+// ports come from the layer's allocator, not from the site address.
 
 // ── WriteFile / RemoveFile filename scheme ───────────────────────────────────
 
 func TestBlockFilename_DefaultPort(t *testing.T) {
-	assert.Equal(t, "svc", blockFilename("svc", "default"))
-	assert.Equal(t, "svc", blockFilename("svc", "web"))
-	assert.Equal(t, "svc", blockFilename("svc", ""))
+	assert.Equal(t, "svc", PortFileName("svc", "default"))
+	assert.Equal(t, "svc", PortFileName("svc", "web"))
+	assert.Equal(t, "svc", PortFileName("svc", ""))
 }
 
 func TestBlockFilename_NamedPort(t *testing.T) {
-	assert.Equal(t, "svc-ssh", blockFilename("svc", "ssh"))
+	assert.Equal(t, "svc-ssh", PortFileName("svc", "ssh"))
 }
 
 func TestWriteFile_MultiPortPrivate_DoesNotClobber(t *testing.T) {
@@ -261,4 +314,25 @@ func TestRemoveAllPortFiles_NoPortsDeclared_FallsBackToDefault(t *testing.T) {
 	require.NoError(t, RemoveAllPortFiles(dir, "private", "svc"))
 	_, err := os.Stat(filepath.Join(dir, "caddy", "conf.d", "svc.conf"))
 	assert.True(t, os.IsNotExist(err))
+}
+
+// The ygg layer names its socat forwarders with this same function. If the two
+// ever diverge again, enable writes files that disable cannot find.
+func TestPortFileName_IsTheOneNamingRule(t *testing.T) {
+	assert.Equal(t, "svc", PortFileName("svc", "default"))
+	assert.Equal(t, "svc", PortFileName("svc", "web"))
+	assert.Equal(t, "svc", PortFileName("svc", ""))
+	assert.Equal(t, "svc-ssh", PortFileName("svc", "ssh"))
+}
+
+// An eepsite is namespaced under the home subdomain, matching the tailnet
+// name. A bare <service>.i2p is a name in the global I2P namespace that anyone
+// can register — and a browser asking for one reached a stranger's site,
+// because nothing publishes ours under it.
+func TestI2PHost_NamespacedUnderHomeSubdomain(t *testing.T) {
+	assert.Equal(t, "searxng.leno.i2p", I2PHost("searxng", "leno"))
+	assert.Equal(t, "searxng.{$HOME_SUBDOMAIN}.i2p", I2PHost("searxng", HomeSubdomainVar))
+
+	// No home subdomain configured: fall back rather than emit "searxng..i2p".
+	assert.Equal(t, "searxng.i2p", I2PHost("searxng", ""))
 }

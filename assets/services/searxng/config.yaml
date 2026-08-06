@@ -2,6 +2,7 @@ vars: {}
 secrets:
   SECRET_KEY:
     required: true
+    description: "Signs search request state - any long random string"
 databases:
   - redis:
       env:

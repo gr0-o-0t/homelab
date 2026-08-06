@@ -2,8 +2,10 @@ package db
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/groot/homelab/internal/config"
 )
@@ -256,40 +258,203 @@ func TestProvision(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		// Verify expected docker exec calls were made
-		var hasCreateDB, hasCreateUser, hasGrantDB, hasGrantSchema, hasExtension bool
+		// Verify expected docker exec calls were made. The database is created
+		// owned by the service role (not merely granted to it), and the public
+		// schema is handed over too — since PG 15 it belongs to
+		// pg_database_owner and is not world-writable.
+		var hasCreateDB, hasCreateUser, hasSchemaOwner, hasExtension bool
 		for _, call := range fc.runCalls {
 			line := call.Name + " " + strings.Join(call.Args, " ")
-			if strings.Contains(line, `CREATE DATABASE "testdb"`) {
+			if strings.Contains(line, `CREATE DATABASE "testdb" OWNER "testuser"`) {
 				hasCreateDB = true
 			}
 			if strings.Contains(line, "CREATE USER") && strings.Contains(line, "testuser") {
 				hasCreateUser = true
 			}
-			if strings.Contains(line, "GRANT ALL PRIVILEGES ON DATABASE") && strings.Contains(line, "testdb") {
-				hasGrantDB = true
-			}
-			if strings.Contains(line, "GRANT ALL ON SCHEMA public") && strings.Contains(line, "testuser") {
-				hasGrantSchema = true
+			if strings.Contains(line, `ALTER SCHEMA public OWNER TO "testuser"`) {
+				hasSchemaOwner = true
 			}
 			if strings.Contains(line, "CREATE EXTENSION") && strings.Contains(line, "pgcrypto") {
 				hasExtension = true
 			}
 		}
 		if !hasCreateDB {
-			t.Error("missing CREATE DATABASE call")
+			t.Error("missing CREATE DATABASE … OWNER call")
 		}
 		if !hasCreateUser {
 			t.Error("missing CREATE USER call")
 		}
-		if !hasGrantDB {
-			t.Error("missing GRANT ON DATABASE call")
-		}
-		if !hasGrantSchema {
-			t.Error("missing GRANT ON SCHEMA call")
+		if !hasSchemaOwner {
+			t.Error("missing ALTER SCHEMA public OWNER call")
 		}
 		if !hasExtension {
 			t.Error("missing CREATE EXTENSION call")
+		}
+	})
+
+	// The role has to exist before CREATE DATABASE can name it as OWNER.
+	t.Run("postgres creates the role before the database", func(t *testing.T) {
+		fc := &fakeCommander{}
+		p := &Provisioner{RC: fc, SM: &fakeSM{store: make(map[string]string)}}
+		if err := p.Provision(ctx, config.DBPostgres, "mysvc", decl); err != nil {
+			t.Fatal(err)
+		}
+
+		userIdx, dbIdx := -1, -1
+		for i, call := range fc.runCalls {
+			line := strings.Join(call.Args, " ")
+			if userIdx < 0 && strings.Contains(line, "CREATE USER") {
+				userIdx = i
+			}
+			if dbIdx < 0 && strings.Contains(line, "CREATE DATABASE") {
+				dbIdx = i
+			}
+		}
+		if userIdx < 0 || dbIdx < 0 {
+			t.Fatalf("expected both CREATE USER and CREATE DATABASE (got %d, %d)", userIdx, dbIdx)
+		}
+		if userIdx > dbIdx {
+			t.Error("CREATE DATABASE … OWNER would fail: role is created after the database")
+		}
+	})
+
+	// An existing database predating the ownership model must be transferred,
+	// not left owned by postgres with the service holding bare grants.
+	t.Run("postgres transfers ownership of an existing database", func(t *testing.T) {
+		fc := &fakeCommander{
+			outputData: map[string][]byte{
+				"docker exec homelab-postgres psql -U postgres -d postgres -t -A -c SELECT 1 FROM pg_database WHERE datname='testdb'": []byte("1"),
+			},
+		}
+		p := &Provisioner{RC: fc, SM: &fakeSM{store: make(map[string]string)}}
+		if err := p.Provision(ctx, config.DBPostgres, "mysvc", decl); err != nil {
+			t.Fatal(err)
+		}
+
+		var altered bool
+		for _, call := range fc.runCalls {
+			if strings.Contains(strings.Join(call.Args, " "), `ALTER DATABASE "testdb" OWNER TO "testuser"`) {
+				altered = true
+			}
+		}
+		if !altered {
+			t.Error("existing database should be transferred with ALTER DATABASE … OWNER TO")
+		}
+	})
+
+	// PostgreSQL's CREATE ROLE/CREATE USER grammar has no IF NOT EXISTS clause,
+	// so emitting one is a syntax error (SQLSTATE 42601) and provisioning fails
+	// for every Postgres-backed service. The role must be looked up first.
+	t.Run("postgres never emits CREATE USER IF NOT EXISTS", func(t *testing.T) {
+		fc := &fakeCommander{}
+		p := &Provisioner{RC: fc, SM: &fakeSM{store: make(map[string]string)}}
+
+		if err := p.Provision(ctx, config.DBPostgres, "mysvc", decl); err != nil {
+			t.Fatal(err)
+		}
+		for _, call := range fc.runCalls {
+			line := strings.Join(call.Args, " ")
+			if strings.Contains(line, "CREATE USER") && strings.Contains(line, "IF NOT EXISTS") {
+				t.Errorf("invalid PostgreSQL syntax: %s", line)
+			}
+		}
+	})
+
+	t.Run("postgres alters an existing role instead of recreating it", func(t *testing.T) {
+		fc := &fakeCommander{
+			outputData: map[string][]byte{
+				"docker exec homelab-postgres psql -U postgres -d postgres -t -A -c SELECT 1 FROM pg_roles WHERE rolname='testuser'": []byte("1"),
+			},
+		}
+		p := &Provisioner{RC: fc, SM: &fakeSM{store: make(map[string]string)}}
+
+		if err := p.Provision(ctx, config.DBPostgres, "mysvc", decl); err != nil {
+			t.Fatal(err)
+		}
+
+		var altered, created bool
+		for _, call := range fc.runCalls {
+			line := strings.Join(call.Args, " ")
+			if strings.Contains(line, `ALTER USER "testuser" WITH LOGIN PASSWORD`) {
+				altered = true
+			}
+			if strings.Contains(line, `CREATE USER "testuser"`) {
+				created = true
+			}
+		}
+		if !altered {
+			t.Error("existing role should be updated with ALTER USER … PASSWORD")
+		}
+		if created {
+			t.Error("existing role should not be issued a CREATE USER")
+		}
+	})
+
+	// The MariaDB account identity includes the host, so a DROP that spells the
+	// wildcard differently from the CREATE silently leaves the user behind.
+	t.Run("mariadb create and drop agree on the wildcard host", func(t *testing.T) {
+		fcCreate := &fakeCommander{}
+		pc := &Provisioner{RC: fcCreate, SM: &fakeSM{store: make(map[string]string)}}
+		if err := pc.Provision(ctx, config.DBMariaDB, "mysvc", decl); err != nil {
+			t.Fatal(err)
+		}
+
+		fcDrop := &fakeCommander{}
+		pd := &Provisioner{RC: fcDrop, SM: &fakeSM{store: make(map[string]string)}}
+		if err := pd.Deprovision(ctx, config.DBMariaDB, "mysvc", decl); err != nil {
+			t.Fatal(err)
+		}
+
+		const account = "'testuser'@'%'"
+		joined := func(f *fakeCommander) string {
+			var all string
+			for _, c := range f.runCalls {
+				all += strings.Join(c.Args, " ") + "\n"
+			}
+			return all
+		}
+		if !strings.Contains(joined(fcCreate), "CREATE USER IF NOT EXISTS "+account) {
+			t.Errorf("CREATE did not use %s:\n%s", account, joined(fcCreate))
+		}
+		if !strings.Contains(joined(fcDrop), "DROP USER IF EXISTS "+account) {
+			t.Errorf("DROP did not use %s:\n%s", account, joined(fcDrop))
+		}
+	})
+
+	// Immich upgrades its own vector extensions on every start and backs up
+	// with pg_dumpall, so its role has to be a superuser. A silently dropped
+	// ALTER shows up much later as an Immich startup failure.
+	t.Run("postgres grants superuser only when asked", func(t *testing.T) {
+		const wantSQL = `ALTER USER "testuser" WITH SUPERUSER`
+
+		for _, tc := range []struct {
+			name      string
+			superuser bool
+			want      bool
+		}{
+			{"not requested", false, false},
+			{"requested", true, true},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				fc := &fakeCommander{}
+				p := &Provisioner{RC: fc, SM: &fakeSM{store: make(map[string]string)}}
+
+				su := decl
+				su.Superuser = tc.superuser
+				if err := p.Provision(ctx, config.DBPostgres, "mysvc", su); err != nil {
+					t.Fatal(err)
+				}
+
+				var got bool
+				for _, call := range fc.runCalls {
+					if strings.Contains(strings.Join(call.Args, " "), wantSQL) {
+						got = true
+					}
+				}
+				if got != tc.want {
+					t.Errorf("ALTER USER … SUPERUSER issued = %v, want %v", got, tc.want)
+				}
+			})
 		}
 	})
 
@@ -351,6 +516,67 @@ func TestProvision(t *testing.T) {
 		err := p.Provision(ctx, config.DBType("mssql"), "mysvc", decl)
 		if err == nil {
 			t.Fatal("expected error for unsupported db type")
+		}
+	})
+}
+
+// `docker compose up -d` returns before Postgres accepts connections, so
+// auto-started dependencies must be waited on or the dependent service comes up
+// against a database that is not listening yet.
+func TestWaitHealthy(t *testing.T) {
+	ctx := context.Background()
+	const inspectKey = "docker inspect --format={{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}} homelab-postgres"
+
+	t.Run("returns once healthy", func(t *testing.T) {
+		fc := &fakeCommander{outputData: map[string][]byte{inspectKey: []byte("healthy\n")}}
+		p := &Provisioner{RC: fc, PollInterval: time.Millisecond}
+
+		if err := p.WaitHealthy(ctx, config.DBPostgres, time.Second); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	// Containers without a healthcheck report no health state; "running" is then
+	// the only signal available and must be accepted rather than timing out.
+	t.Run("accepts running when no healthcheck is defined", func(t *testing.T) {
+		fc := &fakeCommander{outputData: map[string][]byte{inspectKey: []byte("running\n")}}
+		p := &Provisioner{RC: fc, PollInterval: time.Millisecond}
+
+		if err := p.WaitHealthy(ctx, config.DBPostgres, time.Second); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("times out with actionable guidance", func(t *testing.T) {
+		fc := &fakeCommander{outputData: map[string][]byte{inspectKey: []byte("starting\n")}}
+		p := &Provisioner{RC: fc, PollInterval: time.Millisecond}
+
+		err := p.WaitHealthy(ctx, config.DBPostgres, 5*time.Millisecond)
+		if err == nil {
+			t.Fatal("expected a timeout")
+		}
+		for _, want := range []string{"did not become healthy", "starting", "homelab logs postgres", "homelab setup postgres"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error should mention %q, got: %v", want, err)
+			}
+		}
+	})
+
+	t.Run("honours context cancellation", func(t *testing.T) {
+		fc := &fakeCommander{outputData: map[string][]byte{inspectKey: []byte("starting\n")}}
+		p := &Provisioner{RC: fc, PollInterval: time.Hour}
+
+		cctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if err := p.WaitHealthy(cctx, config.DBPostgres, time.Hour); !errors.Is(err, context.Canceled) {
+			t.Errorf("expected context.Canceled, got %v", err)
+		}
+	})
+
+	t.Run("rejects unknown db type", func(t *testing.T) {
+		p := &Provisioner{RC: &fakeCommander{}, PollInterval: time.Millisecond}
+		if err := p.WaitHealthy(ctx, config.DBType("mongo"), time.Second); err == nil {
+			t.Fatal("expected an error for an unsupported engine")
 		}
 	})
 }

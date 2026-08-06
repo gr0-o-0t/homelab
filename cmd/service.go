@@ -2,31 +2,20 @@ package cmd
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"sort"
 	"strings"
-	"syscall"
 	"time"
-
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/mattn/go-isatty"
 
 	"github.com/groot/homelab/internal/caddy"
 	"github.com/groot/homelab/internal/config"
-	"github.com/groot/homelab/internal/db"
 	"github.com/groot/homelab/internal/docker"
-	"github.com/groot/homelab/internal/network"
 	"github.com/groot/homelab/internal/run"
 	"github.com/groot/homelab/internal/scaffold"
 	"github.com/groot/homelab/internal/service"
-	tuiDashboard "github.com/groot/homelab/internal/tui/dashboard"
-	tuiLogs "github.com/groot/homelab/internal/tui/logs"
 	"github.com/groot/homelab/internal/tui/styles"
-	tuiWizard "github.com/groot/homelab/internal/tui/wizard"
 	"github.com/spf13/cobra"
 )
 
@@ -299,6 +288,11 @@ func runServiceRestart(_ *cobra.Command, args []string) error {
 		if err := validateService(root, name); err != nil {
 			return err
 		}
+		// Same reasoning as `up`: restarting a service whose database is down
+		// just produces connection errors.
+		if err := ensureDBDependencies(context.Background(), root, name); err != nil {
+			return err
+		}
 		if restartFlags.build {
 			fmt.Printf("%s Rebuilding and recreating %s…\n", styles.Primary.Render("→"), styles.Bold.Render(name))
 			if err := run.Default().DockerComposeEnv(
@@ -352,6 +346,8 @@ func runServiceLogs(_ *cobra.Command, args []string) error {
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 // resolveTargets returns the service names to operate on based on --all, --group, or positional args.
+
+// resolveTargets returns the service names to operate on based on --all, --group, or positional args.
 func resolveTargets(root string, all bool, group string, args []string) ([]string, error) {
 	if all && group != "" {
 		return nil, fmt.Errorf("--all and --group are mutually exclusive")
@@ -401,6 +397,8 @@ func resolveTargets(root string, all bool, group string, args []string) ([]strin
 }
 
 // firstOrEmpty returns the first element of args or a placeholder string.
+
+// firstOrEmpty returns the first element of args or a placeholder string.
 func firstOrEmpty(args []string) string {
 	if len(args) > 0 {
 		return args[0]
@@ -409,89 +407,6 @@ func firstOrEmpty(args []string) string {
 }
 
 // ── output helpers ────────────────────────────────────────────────────────────
-
-func printServiceTable(svcs []service.Service, env map[string]string, wide bool) {
-	if len(svcs) == 0 {
-		fmt.Println(styles.Muted.Render("\n  No services found.\n"))
-		return
-	}
-
-	fmt.Printf("\n  %s  %s\n\n",
-		styles.Header.Render("Homelab Services"),
-		styles.Muted.Render(fmt.Sprintf("%d services", len(svcs))),
-	)
-
-	fmt.Printf("  %s  %s  %s",
-		styles.TableHeader.Render(styles.Width(styles.ColWidthName).Render("SERVICE")),
-		styles.TableHeader.Render(styles.Width(12).Render("STATE")),
-		styles.TableHeader.Render(styles.Width(styles.ColWidthExpose).Render("EXPOSURES")),
-	)
-	if wide {
-		fmt.Printf("  %s  %s",
-			styles.TableHeader.Render(styles.Width(styles.ColWidthPorts).Render("PORTS")),
-			styles.TableHeader.Render("URL"),
-		)
-	}
-	fmt.Println()
-	fmt.Println(styles.Divider.Render("  " + strings.Repeat("─", styles.ColWidthName+12+styles.ColWidthExpose+6)))
-
-	for _, svc := range svcs {
-		name := styles.Width(styles.ColWidthName).Render(truncate(svc.Name, styles.ColWidthName-1))
-
-		var stateCol string
-		switch {
-		case svc.Total == 0:
-			stateCol = styles.Muted.Render("stopped")
-		case svc.Running == svc.Total:
-			stateCol = styles.Success.Render(fmt.Sprintf("%d/%d", svc.Running, svc.Total))
-		default:
-			stateCol = styles.Warning.Render(fmt.Sprintf("%d/%d", svc.Running, svc.Total))
-		}
-
-		// LAYERS column
-		var layerTags string
-		hasAnyLayer := svc.Enabled || svc.PublicEnabled || svc.HasTor || svc.HasI2P || svc.HasYgg || svc.HasIPFS
-		if hasAnyLayer {
-			var parts []string
-			if svc.Enabled {
-				parts = append(parts, styles.Success.Render("ts"))
-			}
-			if svc.PublicEnabled {
-				parts = append(parts, styles.Primary.Render("cf"))
-			}
-			if svc.HasTor {
-				parts = append(parts, styles.Accent.Render("tor"))
-			}
-			if svc.HasI2P {
-				parts = append(parts, styles.Warning.Render("i2p"))
-			}
-			if svc.HasYgg {
-				parts = append(parts, styles.Primary.Render("ygg"))
-			}
-			if svc.HasIPFS {
-				parts = append(parts, styles.Muted.Render("ipfs"))
-			}
-			layerTags = strings.Join(parts, " ")
-		}
-
-		fmt.Printf("  %s  %s  %s", name, styles.Width(12).Render(stateCol), layerTags)
-		if wide {
-			var portsStr string
-			if len(svc.HostPorts) > 0 {
-				portsStr = styles.Width(styles.ColWidthPorts).Render(truncate(strings.Join(svc.HostPorts, ", "), styles.ColWidthPorts-1))
-			} else {
-				portsStr = styles.Width(styles.ColWidthPorts).Render(styles.Muted.Render("–"))
-			}
-			var ustr string
-			if svc.Enabled && env["HOME_SUBDOMAIN"] != "" && env["DOMAIN"] != "" {
-				ustr = styles.Muted.Render(fmt.Sprintf("https://%s.%s.%s", svc.Name, env["HOME_SUBDOMAIN"], env["DOMAIN"]))
-			}
-			fmt.Printf("  %s  %s", portsStr, ustr)
-		}
-		fmt.Println()
-	}
-	fmt.Println()
-}
 
 // discoverServices tries the Docker SDK first for live container data, then
 // falls back to plain filesystem discovery if the daemon is unavailable.
@@ -506,132 +421,6 @@ func discoverServices(root string) ([]service.Service, error) {
 
 // printPsTable renders a rich container table for `service ps`.
 // Ports and Restart columns added alongside existing health/uptime/image columns.
-func printPsTable(name string, summaries []docker.ContainerSummary, details []docker.ContainerDetail) {
-	fmt.Printf("\n  %s %s\n\n",
-		styles.Header.Render("Service:"),
-		styles.Bold.Render(name),
-	)
-
-	const (
-		wName    = 24
-		wState   = 12
-		wHealth  = 12
-		wUptime  = 14
-		wPorts   = 22
-		wRestart = 8
-	)
-
-	fmt.Printf("  %s  %s  %s  %s  %s  %s  %s\n",
-		styles.TableHeader.Render(styles.Width(wName).Render("CONTAINER")),
-		styles.TableHeader.Render(styles.Width(wState).Render("STATE")),
-		styles.TableHeader.Render(styles.Width(wHealth).Render("HEALTH")),
-		styles.TableHeader.Render(styles.Width(wUptime).Render("UPTIME")),
-		styles.TableHeader.Render(styles.Width(wPorts).Render("PORTS")),
-		styles.TableHeader.Render(styles.Width(wRestart).Render("RESTART")),
-		styles.TableHeader.Render("IMAGE"),
-	)
-	fmt.Println(styles.Divider.Render("  " + strings.Repeat("─", wName+wState+wHealth+wUptime+wPorts+wRestart+36)))
-
-	for i, s := range summaries {
-		cName := styles.Width(wName).Render(truncate(s.Name, wName-1))
-		cState := styles.Width(wState).Render(styles.StateTag(s.State))
-		cImage := styles.Muted.Render(truncate(s.Image, 36))
-
-		var cHealth, cUptime, cPorts, cRestart string
-		if details != nil && i < len(details) {
-			d := details[i]
-			cHealth = styles.Width(wHealth).Render(styles.HealthTag(d.Health))
-			if d.State == containerStateRunning && !d.StartedAt.IsZero() {
-				cUptime = styles.Width(wUptime).Render(
-					styles.Success.Render("↑ " + formatUptime(time.Since(d.StartedAt))))
-			} else if !d.FinishedAt.IsZero() && d.FinishedAt.Year() > 1 {
-				cUptime = styles.Width(wUptime).Render(
-					styles.Muted.Render("↓ " + formatUptime(time.Since(d.FinishedAt))))
-			} else {
-				cUptime = styles.Width(wUptime).Render(styles.Muted.Render("–"))
-			}
-			if len(d.Ports) > 0 {
-				cPorts = styles.Width(wPorts).Render(truncate(strings.Join(d.Ports, ", "), wPorts-1))
-			} else {
-				cPorts = styles.Width(wPorts).Render(styles.Muted.Render("–"))
-			}
-			cRestart = styles.Width(wRestart).Render(fmt.Sprintf("%d", d.RestartCount))
-		} else {
-			cHealth = styles.Width(wHealth).Render(styles.Muted.Render("–"))
-			cUptime = styles.Width(wUptime).Render(styles.Muted.Render(s.Status))
-			cPorts = styles.Width(wPorts).Render(styles.Muted.Render("–"))
-			cRestart = styles.Width(wRestart).Render(styles.Muted.Render("–"))
-		}
-
-		fmt.Printf("  %s  %s  %s  %s  %s  %s  %s\n", cName, cState, cHealth, cUptime, cPorts, cRestart, cImage)
-	}
-	fmt.Println()
-}
-
-// formatUptime converts a duration into a human-readable uptime string.
-func formatUptime(d time.Duration) string {
-	if d < 0 {
-		d = -d
-	}
-	days := int(d.Hours()) / 24
-	hours := int(d.Hours()) % 24
-	mins := int(d.Minutes()) % 60
-	switch {
-	case days > 0:
-		return fmt.Sprintf("%dd %dh", days, hours)
-	case hours > 0:
-		return fmt.Sprintf("%dh %dm", hours, mins)
-	default:
-		return fmt.Sprintf("%dm", mins)
-	}
-}
-
-// truncate shortens s to max chars, appending … if needed.
-func truncate(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	return s[:max-1] + "…"
-}
-
-// serviceJSON is the machine-readable shape of a service entry.
-type serviceJSON struct {
-	Name               string   `json:"name"`
-	Enabled            bool     `json:"enabled"`
-	PublicEnabled      bool     `json:"publicEnabled"`
-	HasCaddyConf       bool     `json:"hasCaddyConf"`
-	HasPublicCaddyConf bool     `json:"hasPublicCaddyConf"`
-	TorEnabled         bool     `json:"torEnabled"`
-	I2PEnabled         bool     `json:"i2pEnabled"`
-	YggEnabled         bool     `json:"yggEnabled"`
-	IPFSEnabled        bool     `json:"ipfsEnabled"`
-	HostPorts          []string `json:"hostPorts,omitempty"`
-	Dir                string   `json:"dir"`
-}
-
-func printServiceJSON(svcs []service.Service) error {
-	out := make([]serviceJSON, len(svcs))
-	for i, s := range svcs {
-		out[i] = serviceJSON{
-			Name:               s.Name,
-			Enabled:            s.Enabled,
-			PublicEnabled:      s.PublicEnabled,
-			HasCaddyConf:       s.HasCaddyConf,
-			HasPublicCaddyConf: s.HasPublicCaddyConf,
-			TorEnabled:         s.HasTor,
-			I2PEnabled:         s.HasI2P,
-			YggEnabled:         s.HasYgg,
-			IPFSEnabled:        s.HasIPFS,
-			HostPorts:          s.HostPorts,
-			Dir:                s.Dir,
-		}
-	}
-	enc := json.NewEncoder(os.Stdout)
-	enc.SetIndent("", "  ")
-	return enc.Encode(out)
-}
-
-// ── validation ────────────────────────────────────────────────────────────────
 
 // validateService checks that services/<name>/ and its docker-compose.yml exist.
 func validateService(root, name string) error {
@@ -649,19 +438,6 @@ func validateService(root, name string) error {
 }
 
 // buildServiceHint returns a styled list of known services for error messages.
-func buildServiceHint(svcs []service.Service) string {
-	if len(svcs) == 0 {
-		return styles.Muted.Render("  (no services found in services/)")
-	}
-	var sb strings.Builder
-	sb.WriteString(styles.Muted.Render("  Available services:"))
-	for _, s := range svcs {
-		sb.WriteString("\n    " + styles.Primary.Render(s.Name))
-	}
-	return sb.String()
-}
-
-// ── tab completion ────────────────────────────────────────────────────────────
 
 func completeServiceNames(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 	if len(args) != 0 {
@@ -696,124 +472,6 @@ func completeGroupNames(_ *cobra.Command, _ []string, toComplete string) ([]stri
 }
 
 // ── TUI launchers ─────────────────────────────────────────────────────────────
-
-func isTTY() bool {
-	return isatty.IsTerminal(os.Stdout.Fd()) && !noColor()
-}
-
-// runListTUI launches the fullscreen dashboard. It loops so that 'l' opens the
-// log viewer and 'n' opens the scaffold wizard, both returning to the dashboard.
-func runListTUI(root string) error {
-	return runDashboardTUI(root)
-}
-
-// runDashboardTUI is the main entry point for the interactive TUI.
-func runDashboardTUI(root string) error {
-	dc, _ := docker.New()
-	if dc != nil {
-		defer func() { _ = dc.Close() }()
-	}
-
-	catalog := catalogNames()
-
-	// Build network layer list from registry + config for header pills.
-	cfgFile := config.RootConfigFile(root, rootFlags.configFile)
-	cfg, _ := config.Load(cfgFile)
-	layers := make([]network.NetworkLayer, 0, len(extRegistry().Names()))
-	for _, name := range extRegistry().Names() {
-		if layer, ok := extRegistry().Get(name); ok {
-			// Only include layers enabled in config (or always-on like ts)
-			if cfg != nil && (name == "ts" || hasResolvedExtension(cfg, name)) {
-				layers = append(layers, layer)
-			}
-		}
-	}
-
-	for {
-		var svcs []service.Service
-		var err error
-		if dc != nil {
-			svcs, err = service.DiscoverAllWithDocker(root, dc, catalog)
-		} else {
-			svcs, err = service.DiscoverWithCatalog(root, catalog)
-		}
-		if err != nil {
-			return err
-		}
-
-		model := tuiDashboard.New(root, dc, svcs, catalog, layers, func(name string) map[string]string {
-			return buildEnv(root, name)
-		})
-		p := tea.NewProgram(model, tea.WithAltScreen())
-		fm, err := p.Run()
-		if err != nil {
-			return err
-		}
-
-		final, ok := fm.(tuiDashboard.Model)
-		if !ok {
-			break
-		}
-
-		switch {
-		case final.SelectedForInstall != "":
-			// Install the selected catalog service, then re-enter the dashboard.
-			if err := runServiceAdd(nil, []string{final.SelectedForInstall}); err != nil {
-				fmt.Fprintf(os.Stderr, "install failed: %v\n", err)
-			}
-		case final.SelectedForLogs != "":
-			if err := runLogTUI(root, final.SelectedForLogs); err != nil {
-				return err
-			}
-		case final.SelectedForNew:
-			if err := runWizardTUI(root, ""); err != nil {
-				return err
-			}
-		default:
-			return nil
-		}
-	}
-	return nil
-}
-
-// runLogTUI launches the fullscreen log viewer for a single service.
-//
-// The in-app "q"/ctrl+c keypress already cleans up the underlying
-// `docker compose logs -f` process via the model's own Update handling, but
-// that path is only reached through Bubble Tea's terminal raw-mode key
-// capture. A SIGINT/SIGTERM delivered outside that (a `kill <pid>`, a
-// dropped SSH session) bypasses it entirely — Go's default action for those
-// signals is immediate process termination with no cleanup at all. Register
-// our own handler so the child process is still killed and reaped, then let
-// the Program shut down cleanly (restoring the terminal) before exiting.
-func runLogTUI(root, serviceName string) error {
-	model := tuiLogs.New(root, serviceName, buildEnv(root, serviceName))
-	p := tea.NewProgram(model, tea.WithAltScreen())
-
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	defer signal.Stop(sigCh)
-	go func() {
-		if _, ok := <-sigCh; ok {
-			model.Stop()
-			p.Quit()
-		}
-	}()
-
-	_, err := p.Run()
-	return err
-}
-
-// runWizardTUI launches the interactive service scaffold wizard.
-// initialName pre-fills the name field; pass "" to start blank.
-func runWizardTUI(root, initialName string) error {
-	model := tuiWizard.New(root, initialName)
-	p := tea.NewProgram(model, tea.WithAltScreen())
-	_, err := p.Run()
-	return err
-}
-
-// ── scaffold ──────────────────────────────────────────────────────────────────
 
 // scaffoldService writes boilerplate for a new service using the embedded
 // templates in internal/scaffold. Used by the non-interactive CLI path.
@@ -853,31 +511,6 @@ func scaffoldService(root, name, container, port string, dryRun bool) error {
 	return nil
 }
 
-// ensureDBDependencies checks whether the service has database dependencies
-// and ensures the corresponding shared DB containers are running.
-func ensureDBDependencies(ctx context.Context, root, name string) error {
-	svcCfg, err := config.Load(config.ServiceConfigFile(root, name))
-	if err != nil {
-		return err
-	}
-	if svcCfg == nil || svcCfg.Databases.Kind == 0 {
-		return nil
-	}
-
-	svcDB, err := svcCfg.ServiceDatabases()
-	if err != nil {
-		return fmt.Errorf("reading database declarations: %w", err)
-	}
-	if len(svcDB) == 0 {
-		return nil
-	}
-
-	p := db.New(root, nil) // nil SM — EnsureRunning doesn't need secrets
-	for dbType := range svcDB.DBTypeSet() {
-		if err := p.EnsureRunning(ctx, dbType); err != nil {
-			return fmt.Errorf("%w\n  Install: homelab add %s && homelab up %s",
-				err, dbType, dbType)
-		}
-	}
-	return nil
-}
+// sharedDBStartTimeout bounds how long we wait for an auto-started shared
+// database to become healthy. Postgres recovery after an unclean shutdown is the
+// slow case; a minute is generous without hanging a script forever.

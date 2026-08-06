@@ -1,6 +1,16 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# Service: Overseerr (media discovery and request management)
-# https://docs.overseerr.dev/
+# Service: Seerr (media discovery and request management)
+# https://github.com/seerr-team/seerr
+#
+# Was lscr.io/linuxserver/overseerr:latest. Overseerr merged with Jellyseerr
+# into Seerr, and LinuxServer deprecated their image on 2026-02-16, pointing at
+# the official Seerr build. Deprecated LSIO images stop receiving updates and
+# eventually lose their `latest` tag, so this now tracks upstream directly.
+# https://info.linuxserver.io/issues/2026-02-16-overseerr/
+#
+# Migrating: Seerr reads the same /config layout, so the existing seerr_data
+# volume carries over. Take a copy of it first — this is a fork merge, not a
+# point release, and a rollback needs the old data intact.
 # ─────────────────────────────────────────────────────────────────────────────
 
 networks:
@@ -10,7 +20,7 @@ networks:
 
 services:
   seerr:
-    image: lscr.io/linuxserver/overseerr:latest
+    image: ghcr.io/seerr-team/seerr:latest
     container_name: seerr
     user: "${PUID:-1000}:${PGID:-1000}"
     restart: unless-stopped

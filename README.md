@@ -75,7 +75,6 @@ You will be prompted for:
 | `TOR_ENABLED` | Enable Tor onion service proxy (`true`/`false`) |
 | `I2P_ENABLED` | Enable I2P router + eepsite proxy |
 | `YGGDRASIL_ENABLED` | Enable Yggdrasil mesh node |
-| `IPFS_ENABLED` | Enable IPFS Kubo node |
 
 ### 3. Set up Tailscale and Cloudflare
 
@@ -207,8 +206,6 @@ Extension-specific advanced subcommands:
 ```
 homelab ext cf route add <service>     # add Cloudflare DNS route
 homelab ext cf route rm <service>      # remove Cloudflare DNS route
-homelab ext ipfs gateway enable        # enable IPFS Gateway Caddy route
-homelab ext ipfs gateway disable       # disable IPFS Gateway Caddy route
 ```
 
 ### Service subcommand (legacy, hidden)
@@ -297,7 +294,6 @@ homelab/
 │   ├── enable.go             # homelab enable
 │   ├── ext.go                # homelab ext (list + extension command hub)
 │   ├── i2p.go                # homelab ext i2p
-│   ├── ipfs.go               # homelab ext ipfs
 │   ├── logs.go               # homelab logs
 │   ├── new.go                # homelab new
 │   ├── restart.go            # homelab restart

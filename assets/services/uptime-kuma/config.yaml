@@ -1,4 +1,4 @@
 vars: {}
 secrets: {}
 ports:
-  - 3001
+  - status:3001

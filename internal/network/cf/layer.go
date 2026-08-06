@@ -4,6 +4,7 @@
 package cf
 
 import (
+	"fmt"
 	"path/filepath"
 
 	"github.com/groot/homelab/internal/network"
@@ -16,12 +17,13 @@ const containerName = "cloudflared"
 type Layer struct {
 	repoRoot   string
 	runner     *run.Commander
+	envFn      network.EnvFunc
 	reloadHook func() error
 }
 
 // New creates a new Cloudflare layer.
-func New(repoRoot string, runner *run.Commander) *Layer {
-	return &Layer{repoRoot: repoRoot, runner: runner}
+func New(repoRoot string, runner *run.Commander, envFn network.EnvFunc) *Layer {
+	return &Layer{repoRoot: repoRoot, runner: runner, envFn: envFn}
 }
 
 func newForTest(repoRoot string, hook func() error) *Layer {
@@ -68,6 +70,20 @@ func (l *Layer) CaddyConfigDir(configRoot string) string {
 	return filepath.Join(configRoot, "caddy", "conf.d-cf")
 }
 
+// ServiceAddresses returns the public hostname Cloudflare fronts. Templated,
+// not looked up: the tunnel serves whatever DNS name is routed to it, and that
+// name is the one this layer wrote into Caddy.
+func (l *Layer) ServiceAddresses(svcName string, env map[string]string) []network.ServiceAddress {
+	dom := env["DOMAIN"]
+	if dom == "" {
+		return []network.ServiceAddress{{Note: "DOMAIN not set — run homelab setup"}}
+	}
+	return []network.ServiceAddress{{URL: fmt.Sprintf("https://%s.%s", svcName, dom)}}
+}
+
 func (l *Layer) env() map[string]string {
-	return map[string]string{}
+	if l.envFn == nil {
+		return map[string]string{}
+	}
+	return l.envFn()
 }

@@ -1,0 +1,19 @@
+# Tor hidden service keys
+
+Tor creates one subdirectory per onion service here, each holding that
+service's private key and its generated `hostname`. Tor owns those
+subdirectories: it makes them mode 0700 and refuses to start if it finds them
+more permissive than that.
+
+This README exists so the directory itself ships in the embedded assets and is
+created by `homelab setup`, owned by you. Without it the directory does not
+exist when the tor container first starts, Docker creates the bind-mount target
+as root:root, and then neither you nor tor (which runs as your uid inside the
+container) can create anything in it — `homelab enable <svc> --tor` fails with
+"permission denied".
+
+If that already happened, the fix is one command:
+
+    sudo chown -R "$(id -u):$(id -g)" ~/.config/homelab/tor/hidden_service
+
+Never delete this directory: the keys in it *are* your .onion addresses.
