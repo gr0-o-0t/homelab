@@ -232,15 +232,14 @@ func runServiceUp(_ *cobra.Command, args []string) error {
 			return err
 		}
 		fmt.Printf("%s Starting %s…\n", styles.Primary.Render("→"), styles.Bold.Render(name))
+		composeFile := run.ServiceComposeFile(root, name)
+		env := buildEnv(root, name)
+		warnPortCollisions([]string{composeFile}, env, nil)
 		upArgs := []string{"up", "-d"}
 		if upFlags.build {
 			upArgs = append(upArgs, "--build")
 		}
-		if err := run.Default().DockerComposeEnv(
-			run.ServiceComposeFile(root, name),
-			buildEnv(root, name),
-			upArgs...,
-		); err != nil {
+		if err := run.Default().DockerComposeEnv(composeFile, env, upArgs...); err != nil {
 			return err
 		}
 	}

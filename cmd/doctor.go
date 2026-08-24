@@ -106,6 +106,7 @@ func runDoctor(_ *cobra.Command, args []string) error {
 	}
 
 	renderCheckGroup(diagnostics.RunCoreStackChecks(dc, dir), &pass)
+	renderCheckGroup(diagnostics.RunPortChecks(dir, buildEnv(dir, ""), activeProfiles(dir), dc), &pass)
 
 	// Core stack extras — Caddy config validate + Tailscale connectivity
 	if dc != nil {

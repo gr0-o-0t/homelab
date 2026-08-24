@@ -58,6 +58,11 @@ func runSetup(_ *cobra.Command, _ []string) error {
 				"TS_HOSTNAME":    {Value: "caddy-home", Required: true},
 				"CF_TUNNEL_NAME": {Value: "pub", Required: false},
 				"I2P_EXT_PORT":   {Value: "45678", Required: false},
+				// i2pd's web console, published on loopback only. Overridable
+				// because a host-level i2pd (the distro package runs one as a
+				// systemd service) already owns 7070, and the container then
+				// cannot bind it. `homelab doctor` names the collision.
+				"I2P_CONSOLE_PORT": {Value: "7070", Required: false},
 			},
 			Secrets: map[string]config.SecretEntry{
 				"TS_AUTHKEY":           {Required: true},

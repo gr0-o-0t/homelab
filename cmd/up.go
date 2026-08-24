@@ -38,6 +38,7 @@ var upCmd = &cobra.Command{
 		for _, note := range activeExtNotes(dir) {
 			fmt.Printf("  %s\n", styles.Muted.Render(note))
 		}
+		warnPortCollisions([]string{composeFile}, env, activeProfiles(dir))
 
 		upArgs := []string{"up", "-d"}
 		if upFlags.build {

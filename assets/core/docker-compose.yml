@@ -189,6 +189,12 @@ services:
       # management, and the "Address registration line" generator you need to
       # register a name on reg.i2p. Bound to 127.0.0.1 so it stays off both the
       # LAN and the tailnet; reach it at http://127.0.0.1:7070 on this host.
+      #
+      # Set I2P_CONSOLE_PORT if 7070 is taken. The usual culprit is a host-level
+      # i2pd — the distro package installs one as an enabled systemd service,
+      # and it grabs 7070 (and 4444) at boot, leaving this container to die with
+      # "failed to bind host port 127.0.0.1:7070". `homelab doctor` catches it
+      # before compose does.
       - "127.0.0.1:${I2P_CONSOLE_PORT:-7070}:7070"
     depends_on:
       tailscale:

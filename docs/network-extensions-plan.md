@@ -209,6 +209,7 @@ Replace all `withTunnelProfile` calls with `withProfiles`.
 | `I2P_ENABLED` | `false` | No | Enable I2P router + eepsite proxy |
 | `I2P_JVM_XMX` | `512m` | No | I2P JVM heap limit |
 | `I2P_EXT_PORT` | `45678` | No | I2P external port for I2NP |
+| `I2P_CONSOLE_PORT` | `7070` | No | i2pd web console, published on loopback only. Change it if a host-level i2pd already owns 7070 — `homelab doctor` reports that collision. |
 | `YGGDRASIL_ENABLED` | `false` | No | Enable Yggdrasil mesh node |
 
 ### New keyring secrets (none for phase 1 — extensions are optional and don't require tokens by default)
