@@ -31,26 +31,43 @@
 #   6. homelab up immich                        # rebuilds ANN indexes on start
 #
 # Keep the immich_pgdata volume until the library is confirmed intact.
+#
+# Media location: this file mounts immich_uploads at /data, which is where
+# Immich has looked since 1.133 (IMMICH_MEDIA_LOCATION, default /data). An
+# install that previously ran with the media at /usr/src/app/upload has that
+# prefix baked into every row of the assets table, and Immich refuses to start
+# with "Detected an inconsistent media location" rather than lose track of the
+# files. Rewrite the stored paths once, then start normally:
+#
+#   docker exec -it immich immich-admin change-media-location
 # ─────────────────────────────────────────────────────────────────────────────
 
 networks:
   # Shared network — Caddy (via Tailscale namespace) reaches every service here,
-  # and it is how Immich reaches homelab-postgres and homelab-redis.
+  # it is how Immich reaches homelab-postgres and homelab-redis, and it is the
+  # only network with egress. machine-learning needs egress: it downloads CLIP
+  # and face-recognition models from HuggingFace the first time a job runs, so
+  # an `internal: true` network would leave smart search permanently broken.
   home-services:
     name: home-services
     external: true
-  # Internal-only network for Immich server ↔ machine-learning traffic.
-  # Never expose this outside the stack.
-  immich-internal:
-    internal: true
 
 services:
   immich-server:
     image: ghcr.io/immich-app/immich-server:${IMMICH_VERSION:-release}
-    # "immich" is the name Caddy uses: `reverse_proxy immich:2283`
+    # "immich" is the name Caddy uses: `reverse_proxy immich:2283`. That one
+    # port serves the web app *and* the API — the separate immich-web and
+    # immich-proxy containers were folded into immich-server in 1.106, and the
+    # web build ships inside this image (Dockerfile: COPY --from=web … /build/www).
     container_name: immich
-    user: "${PUID:-1000}:${PGID:-1000}"
-    restart: unless-stopped
+    # ponytail: root inside the container, unlike the rest of the catalog.
+    # Immich's image declares `VOLUME /data` without creating it, so Docker
+    # makes the named volume root-owned and a `user: 1000:1000` container dies
+    # with EACCES on the first mount-check write. Upstream's rootless example
+    # only works because it bind-mounts a host directory the admin chowned
+    # first. Switch back to non-root the day this stack grows a
+    # chown-the-volume step.
+    restart: always
     environment:
       DB_HOSTNAME: ${DB_HOSTNAME}
       DB_PORT: ${DB_PORT}
@@ -63,44 +80,27 @@ services:
       DB_VECTOR_EXTENSION: vectorchord
       REDIS_HOSTNAME: ${REDIS_HOSTNAME}
       REDIS_PORT: ${REDIS_PORT}
-      UPLOAD_LOCATION: /usr/src/app/upload
       IMMICH_VERSION: ${IMMICH_VERSION:-release}
     volumes:
-      - immich-uploads:/usr/src/app/upload
+      # /data, not /usr/src/app/upload — see the media-location note above.
+      - immich-uploads:/data
       - /etc/localtime:/etc/localtime:ro
     networks:
-      - home-services # Caddy, postgres, redis
-      - immich-internal # machine-learning sidecar
-    healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "wget -q --spider http://localhost:2283/api/server-info/ping 2>/dev/null || exit 1",
-        ]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 90s # allows time for DB migrations on first boot
+      - home-services # Caddy, postgres, redis, machine-learning
+    # No healthcheck block: both images ship their own (`immich-healthcheck`
+    # and `python3 healthcheck.py`), which Docker uses when compose is silent.
+    # The hand-written wget probe this replaced pointed at
+    # /api/server-info/ping, an endpoint that has since moved.
 
   immich-machine-learning:
     image: ghcr.io/immich-app/immich-machine-learning:${IMMICH_VERSION:-release}
+    # Reached by immich-server at the default http://immich-machine-learning:3003.
     container_name: immich-machine-learning
-    user: "${PUID:-1000}:${PGID:-1000}"
-    restart: unless-stopped
+    restart: always
     volumes:
       - immich-model-cache:/cache
     networks:
-      - immich-internal
-    healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "wget -q --spider http://localhost:3003/ping 2>/dev/null || exit 1",
-        ]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 120s # model loading takes time
+      - home-services
 
 volumes:
   immich-uploads:
