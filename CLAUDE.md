@@ -31,8 +31,10 @@ go test ./internal/scaffold/...
 homelab add [name]                                 # install a bundled service from the catalog (no name → list catalog)
 homelab new [name]                                 # scaffold wizard (TUI) or --container/--port flags
 homelab setup [service]                            # configure vars and secrets interactively (no arg → root wizard)
-homelab start [service]     (alias: up)            # start core stack or service(s) (--all, --group, --build)
-homelab stop [service]      (alias: down)          # stop core stack or service(s) (--all, --group)
+homelab up [service]                               # create + start containers (--all, --group, --build)
+homelab down [service]                             # stop + REMOVE containers (--all, --group)
+homelab start [service]                            # resume existing stopped containers (--all, --group)
+homelab stop [service]                             # stop containers, keep them (--all, --group)
 homelab restart [service]                          # restart containers (--all, --group, --build)
 homelab reload [service]                           # reload Caddy config or a service's routing
 homelab update [service]                           # pull latest images + restart (--all)
