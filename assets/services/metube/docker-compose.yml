@@ -13,7 +13,7 @@ services:
     image: ghcr.io/alexta69/metube:latest
     container_name: metube
     user: "${PUID:-1000}:${PGID:-1000}"
-    restart: unless-stopped
+    restart: always
     environment:
       DOWNLOAD_DIR: /downloads
       TZ: ${TZ:-UTC}

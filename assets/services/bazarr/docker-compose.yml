@@ -13,7 +13,7 @@ services:
     image: lscr.io/linuxserver/bazarr:latest
     container_name: bazarr
     user: "${PUID:-1000}:${PGID:-1000}"
-    restart: unless-stopped
+    restart: always
     environment:
       TZ: ${TZ:-UTC}
     volumes:

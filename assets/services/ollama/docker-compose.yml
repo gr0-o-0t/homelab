@@ -14,7 +14,7 @@ services:
     image: ollama/ollama:latest
     container_name: ollama
     user: "${PUID:-1000}:${PGID:-1000}"
-    restart: unless-stopped
+    restart: always
     environment:
       OLLAMA_KEEP_ALIVE: ${KEEP_ALIVE:-5m}
     volumes:

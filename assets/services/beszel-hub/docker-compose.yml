@@ -13,7 +13,7 @@ services:
     image: ghcr.io/henrygd/beszel:latest
     container_name: beszel-hub
     user: "${PUID:-1000}:${PGID:-1000}"
-    restart: unless-stopped
+    restart: always
     volumes:
       - beszel-hub-data:/beszel_data
     networks:

@@ -13,7 +13,7 @@ services:
     image: ghcr.io/mealie-recipes/mealie:latest
     container_name: mealie
     user: "${PUID:-1000}:${PGID:-1000}"
-    restart: unless-stopped
+    restart: always
     environment:
       BASE_URL: https://mealie.${HOME_SUBDOMAIN}.${DOMAIN}
       TZ: ${TZ:-UTC}

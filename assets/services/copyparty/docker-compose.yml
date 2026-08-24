@@ -13,7 +13,7 @@ services:
     image: copyparty/copyparty:latest
     container_name: copyparty
     user: "${PUID:-1000}:${PGID:-1000}"
-    restart: unless-stopped
+    restart: always
     environment:
       # enabling mimalloc by replacing "NOPE" with "2" will make some stuff twice as fast, but everything will use twice as much ram:
       LD_PRELOAD: /usr/lib/libmimalloc-secure.so.NOPE

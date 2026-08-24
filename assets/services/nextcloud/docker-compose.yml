@@ -16,7 +16,7 @@ services:
     image: nextcloud:${NEXTCLOUD_VERSION:-latest}
     container_name: nextcloud
     user: "${PUID:-1000}:${PGID:-1000}"
-    restart: unless-stopped
+    restart: always
     environment:
       MYSQL_HOST: ${NC_DB_HOST}
       MYSQL_PORT: ${NC_DB_PORT}

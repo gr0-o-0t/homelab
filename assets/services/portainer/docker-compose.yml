@@ -13,7 +13,7 @@ services:
     image: portainer/portainer-ce:latest
     container_name: portainer
     user: "${PUID:-1000}:${PGID:-1000}"
-    restart: unless-stopped
+    restart: always
     volumes:
       - portainer-data:/data
       # Read-WRITE Docker socket, unlike the :ro mounts in dozzle/homepage/

@@ -13,7 +13,7 @@ services:
     image: ghcr.io/sysadminsmedia/homebox:latest
     container_name: homebox
     user: "${PUID:-1000}:${PGID:-1000}"
-    restart: unless-stopped
+    restart: always
     environment:
       HBOX_OPTIONS_ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-false}
       TZ: ${TZ:-UTC}

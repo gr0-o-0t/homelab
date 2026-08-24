@@ -20,7 +20,7 @@ services:
   litellm:
     image: litellm/litellm:latest
     container_name: litellm
-    restart: unless-stopped
+    restart: always
     command:
       - "--config=/app/config.yaml"
     environment:

@@ -11,7 +11,7 @@ services:
   {{.Container}}:
     image: # TODO: set image
     container_name: {{.Container}}
-    restart: unless-stopped
+    restart: always
     environment:
       {}  # TODO: add environment variables
     volumes:

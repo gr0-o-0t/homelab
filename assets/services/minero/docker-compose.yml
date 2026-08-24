@@ -18,7 +18,7 @@ services:
     # stable name to show. Every other service in the catalog sets this.
     container_name: monerod
     user: 1000:1000
-    restart: unless-stopped
+    restart: always
     tty: true
     stdin_open: true
     networks:
@@ -61,7 +61,7 @@ services:
     image: ghcr.io/gr0-o-0t/minero-p2pool:latest
     container_name: p2pool
     user: 1000:1000
-    restart: unless-stopped
+    restart: always
     tty: true
     stdin_open: true
     security_opt:
@@ -91,7 +91,7 @@ services:
   xmrig:
     image: ghcr.io/gr0-o-0t/minero-xmrig:latest
     container_name: xmrig
-    restart: unless-stopped
+    restart: always
     tty: true
     stdin_open: true
     privileged: true

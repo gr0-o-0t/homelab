@@ -13,17 +13,14 @@ services:
   dbx:
     image: t8y2/dbx
     container_name: dbx
-    restart: unless-stopped
+    restart: always
     volumes:
       - dbx-data:/app/data
     networks:
       - home-services
     healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "wget -q --spider http://localhost:4224 2>/dev/null || exit 1",
-        ]
+      # ponytail: image ships no wget/curl — bash /dev/tcp is the only probe available
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/4224"]
       interval: 30s
       timeout: 10s
       retries: 3

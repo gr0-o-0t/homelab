@@ -27,7 +27,7 @@ services:
     image: lscr.io/linuxserver/netbox:${NETBOX_VERSION:-latest}
     container_name: netbox
     user: "${PUID:-1000}:${PGID:-1000}"
-    restart: unless-stopped
+    restart: always
     depends_on:
       netbox-redis:
         condition: service_healthy
@@ -75,7 +75,7 @@ services:
     image: docker.io/valkey/valkey:9-alpine
     container_name: netbox-redis
     user: "${PUID:-1000}:${PGID:-1000}"
-    restart: unless-stopped
+    restart: always
     command: valkey-server --port 6379
     networks:
       - netbox-internal
@@ -89,7 +89,7 @@ services:
     image: docker.io/valkey/valkey:9-alpine
     container_name: netbox-redis-cache
     user: "${PUID:-1000}:${PGID:-1000}"
-    restart: unless-stopped
+    restart: always
     command: valkey-server --port 6380
     networks:
       - netbox-internal

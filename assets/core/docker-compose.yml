@@ -46,7 +46,7 @@ services:
     image: tailscale/tailscale:latest
     container_name: tailscale
     hostname: ${TS_HOSTNAME:-caddy-home}
-    restart: unless-stopped
+    restart: always
     environment:
       TS_AUTHKEY: ${TS_AUTHKEY}
       TS_STATE_DIR: /var/lib/tailscale
@@ -91,7 +91,7 @@ services:
     #   • The home-services Docker bridge
     # This means we do NOT add caddy to any explicit `networks:` block here.
     network_mode: "service:tailscale"
-    restart: unless-stopped
+    restart: always
     depends_on:
       tailscale:
         condition: service_healthy # wait for Tailscale IP before binding
@@ -133,7 +133,7 @@ services:
     image: cloudflare/cloudflared:latest
     container_name: cloudflared
     profiles: ["tunnel"]
-    restart: unless-stopped
+    restart: always
     command: tunnel --no-autoupdate run
     environment:
       TUNNEL_TOKEN: ${CF_TUNNEL_TOKEN}
@@ -153,7 +153,7 @@ services:
     image: gnzsnz/torproxy:latest
     container_name: tor
     profiles: ["tor"]
-    restart: unless-stopped
+    restart: always
     volumes:
       - ../tor/torrc:/etc/tor/torrc:ro
       - ../tor/torrc.d:/etc/tor/torrc.d:ro
@@ -176,7 +176,7 @@ services:
       dockerfile: Dockerfile.i2p
     container_name: i2p
     profiles: ["i2p"]
-    restart: unless-stopped
+    restart: always
     volumes:
       - ../i2p:/config-host:ro
       - i2p-config:/home/i2pd/data
@@ -204,7 +204,7 @@ services:
       dockerfile: Dockerfile.ygg
     container_name: yggdrasil
     profiles: ["yggdrasil"]
-    restart: unless-stopped
+    restart: always
     cap_add:
       - NET_ADMIN
     devices:

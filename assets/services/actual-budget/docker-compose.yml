@@ -12,7 +12,7 @@ services:
   actual-budget:
     image: actualbudget/actual-server:latest-alpine
     container_name: actual-budget
-    restart: unless-stopped
+    restart: always
     volumes:
       - actual-budget-data:/data
     networks:

@@ -13,7 +13,7 @@ services:
     image: f0rc3/gokapi:latest
     container_name: gokapi
     user: "${PUID:-1000}:${PGID:-1000}"
-    restart: unless-stopped
+    restart: always
     environment:
       TZ: ${TZ:-UTC}
     volumes:

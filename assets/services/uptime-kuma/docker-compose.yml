@@ -13,7 +13,7 @@ services:
     image: louislam/uptime-kuma:2-slim
     container_name: uptime-kuma
     user: "${PUID:-1000}:${PGID:-1000}"
-    restart: unless-stopped
+    restart: always
     volumes:
       - uptime-kuma-data:/app/data
       - /var/run/docker.sock:/var/run/docker.sock:ro

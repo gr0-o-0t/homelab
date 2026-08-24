@@ -13,7 +13,7 @@ services:
     image: corentinth/it-tools:latest
     container_name: it-tools
     user: "${PUID:-1000}:${PGID:-1000}"
-    restart: unless-stopped
+    restart: always
     networks:
       - home-services
     healthcheck:

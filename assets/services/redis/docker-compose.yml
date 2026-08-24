@@ -11,7 +11,7 @@ services:
   redis:
     image: redis:8-alpine
     container_name: homelab-redis
-    restart: unless-stopped
+    restart: always
     volumes:
       - redis-data:/data
     networks:

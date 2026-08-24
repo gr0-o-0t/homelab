@@ -13,7 +13,7 @@ services:
     image: deluan/navidrome:latest
     container_name: navidrome
     user: "${PUID:-1000}:${PGID:-1000}"
-    restart: unless-stopped
+    restart: always
     environment:
       ND_MUSICFOLDER: /music
       ND_DATAFOLDER: /data

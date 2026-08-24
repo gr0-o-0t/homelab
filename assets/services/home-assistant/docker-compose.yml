@@ -17,7 +17,7 @@ services:
     image: ghcr.io/home-assistant/home-assistant:stable
     container_name: home-assistant
     user: "${PUID:-1000}:${PGID:-1000}"
-    restart: unless-stopped
+    restart: always
     privileged: true
     environment:
       TZ: ${TZ:-UTC}

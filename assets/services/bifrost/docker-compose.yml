@@ -25,7 +25,7 @@ services:
   bifrost:
     image: maximhq/bifrost:latest
     container_name: bifrost
-    restart: unless-stopped
+    restart: always
     environment:
       LOG_LEVEL: ${BIFROST_LOG_LEVEL:-info}
       BIFROST_PG_HOST: ${BIFROST_PG_HOST}

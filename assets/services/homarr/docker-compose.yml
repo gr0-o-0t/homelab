@@ -13,7 +13,7 @@ services:
     image: ghcr.io/homarr-labs/homarr:latest
     container_name: homarr
     user: "${PUID:-1000}:${PGID:-1000}"
-    restart: unless-stopped
+    restart: always
     environment:
       SECRET_ENCRYPTION_KEY: ${ENCRYPTION_KEY}
     volumes:

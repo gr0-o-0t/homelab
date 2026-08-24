@@ -75,7 +75,7 @@ tor:
   image: gnzsnz/torproxy:latest
   container_name: tor
   profiles: ["tor"]
-  restart: unless-stopped
+  restart: always
   environment:
     TOR_ENABLED: ${TOR_ENABLED}
   volumes:
@@ -101,7 +101,7 @@ i2p:
   image: geti2p/i2p:latest
   container_name: i2p
   profiles: ["i2p"]
-  restart: unless-stopped
+  restart: always
   environment:
     JVM_XMX: ${I2P_JVM_XMX:-512m}
     EXT_PORT: ${I2P_EXT_PORT:-45678}
@@ -130,7 +130,7 @@ yggdrasil:
   image: yggdrasilnetwork/yggdrasil-go:latest
   container_name: yggdrasil
   profiles: ["yggdrasil"]
-  restart: unless-stopped
+  restart: always
   cap_add:
     - NET_ADMIN
   devices:

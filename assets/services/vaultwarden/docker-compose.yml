@@ -13,7 +13,7 @@ services:
     image: vaultwarden/server:${VAULTWARDEN_VERSION:-latest}
     container_name: vaultwarden
     user: "${PUID:-1000}:${PGID:-1000}"
-    restart: unless-stopped
+    restart: always
     environment:
       DOMAIN: https://vault.${HOME_SUBDOMAIN}.${DOMAIN}
       # Disable public sign-ups — only invited users can register.

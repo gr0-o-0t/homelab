@@ -11,7 +11,7 @@ services:
   mariadb:
     image: mariadb:11
     container_name: homelab-mariadb
-    restart: unless-stopped
+    restart: always
     command:
       - mariadbd
       - --skip-log-bin

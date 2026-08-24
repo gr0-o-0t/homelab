@@ -15,7 +15,7 @@ services:
   grafana:
     image: grafana/grafana-oss:latest
     container_name: homelab-grafana
-    restart: unless-stopped
+    restart: always
     environment:
       GF_SECURITY_ADMIN_USER: admin
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}

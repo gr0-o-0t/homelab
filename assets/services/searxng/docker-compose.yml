@@ -11,7 +11,7 @@ services:
   searxng:
     image: searxng/searxng:latest
     container_name: searxng
-    restart: unless-stopped
+    restart: always
     environment:
       SEARXNG_BASE_URL: https://searxng.${HOME_SUBDOMAIN}.${DOMAIN}
       SEARXNG_SECRET_KEY: ${SECRET_KEY}

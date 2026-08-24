@@ -32,7 +32,7 @@ services:
     image: adguard/adguardhome:latest
     container_name: adguardhome
     user: "${PUID:-1000}:${PGID:-1000}"
-    restart: unless-stopped
+    restart: always
     environment:
       TZ: ${TZ:-UTC}
     volumes:

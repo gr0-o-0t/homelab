@@ -20,7 +20,7 @@ services:
     image: technitium/dns-server:latest
     container_name: technitium
     user: "${PUID:-1000}:${PGID:-1000}"
-    restart: unless-stopped
+    restart: always
     environment:
       DNS_SERVER_DOMAIN: technitium.${HOME_SUBDOMAIN}.${DOMAIN}
     volumes:

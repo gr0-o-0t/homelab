@@ -16,7 +16,7 @@ services:
     image: codeberg.org/forgejo/forgejo:15-rootless
     container_name: forgejo
     user: "${PUID:-1000}:${PGID:-1000}"
-    restart: unless-stopped
+    restart: always
     environment:
       USER_UID: ${PUID:-1000}
       USER_GID: ${PGID:-1000}

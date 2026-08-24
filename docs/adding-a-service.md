@@ -56,7 +56,7 @@ services:
   paperless-ngx:           # ← this name is used in caddy.conf
     image: ghcr.io/paperless-ngx/paperless-ngx:latest
     container_name: paperless-ngx
-    restart: unless-stopped
+    restart: always
     environment:
       PAPERLESS_REDIS: redis://paperless-redis:6379
       PAPERLESS_DBHOST: paperless-postgres

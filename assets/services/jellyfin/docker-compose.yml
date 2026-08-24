@@ -13,7 +13,7 @@ services:
     image: jellyfin/jellyfin:latest
     container_name: jellyfin
     user: "${PUID:-1000}:${PGID:-1000}"
-    restart: unless-stopped
+    restart: always
     # Optional: expose GPU for hardware transcoding.
     # Uncomment the lines below for NVIDIA (requires nvidia-container-toolkit).
     # deploy:

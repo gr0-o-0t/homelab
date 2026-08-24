@@ -16,7 +16,7 @@ services:
     image: vabene1111/recipes:latest
     container_name: tandoor
     user: "${PUID:-1000}:${PGID:-1000}"
-    restart: unless-stopped
+    restart: always
     environment:
       SECRET_KEY: ${SECRET_KEY}
       DB_ENGINE: django.db.backends.postgresql

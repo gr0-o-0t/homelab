@@ -13,7 +13,7 @@ services:
     image: ghcr.io/pocket-id/pocket-id:latest
     container_name: pocket-id
     user: "${PUID:-1000}:${PGID:-1000}"
-    restart: unless-stopped
+    restart: always
     environment:
       PUBLIC_APP_URL: "https://pocket-id.${HOME_SUBDOMAIN}.${DOMAIN}"
       TRUST_PROXY: "true"

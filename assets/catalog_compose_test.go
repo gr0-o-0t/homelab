@@ -18,6 +18,7 @@ type auditComposeFile struct {
 		ContainerName string   `yaml:"container_name"`
 		Image         string   `yaml:"image"`
 		Ports         []string `yaml:"ports"`
+		Restart       string   `yaml:"restart"`
 	} `yaml:"services"`
 	Volumes map[string]struct {
 		Name string `yaml:"name"`
@@ -129,6 +130,36 @@ func TestCatalogServices_ContainersAreExplicitlyNamed(t *testing.T) {
 	}
 	sort.Strings(unnamed)
 	assert.Empty(t, unnamed, "these containers need an explicit `container_name:`")
+}
+
+// A container with no restart policy stays down after a host reboot or a Docker
+// daemon restart, and the whole point of this stack is that it comes back by
+// itself. Every container in the catalog *and* the core stack declares
+// `restart: always` — one policy, no per-service reasoning about which is which.
+func TestComposeFiles_RestartPolicyIsAlways(t *testing.T) {
+	const want = "always"
+
+	var wrong []string
+	check := func(file string, cf auditComposeFile) {
+		for key, s := range cf.Services {
+			if s.Restart != want {
+				wrong = append(wrong, fmt.Sprintf("%s/%s has restart:%q", file, key, s.Restart))
+			}
+		}
+	}
+
+	for svc, cf := range loadCatalog(t) {
+		check(svc, cf)
+	}
+
+	data, err := assets.CoreFS.ReadFile("core/docker-compose.yml")
+	require.NoError(t, err)
+	var core auditComposeFile
+	require.NoError(t, yaml.Unmarshal(data, &core))
+	check("core", core)
+
+	sort.Strings(wrong)
+	assert.Empty(t, wrong, "every container needs `restart: %s`", want)
 }
 
 // LinuxServer deprecated its Overseerr image when upstream merged into Seerr;

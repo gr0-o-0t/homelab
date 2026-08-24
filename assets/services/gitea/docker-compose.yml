@@ -16,7 +16,7 @@ services:
     image: gitea/gitea:latest
     container_name: gitea
     user: "${PUID:-1000}:${PGID:-1000}"
-    restart: unless-stopped
+    restart: always
     environment:
       USER_UID: ${PUID:-1000}
       USER_GID: ${PGID:-1000}
