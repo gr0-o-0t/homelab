@@ -12,7 +12,14 @@ Use the "Edit zone DNS" template, then restrict it:
 | Permissions | Zone – DNS – Edit |
 | Zone Resources | Include – Specific zone – `example.com` |
 
-Copy the token and paste it as `CLOUDFLARE_API_TOKEN` in your `.env`.
+Copy the token, then store it with `homelab setup` — it goes into the system
+keyring, not a file on disk.
+
+> **When you change `DOMAIN`, re-scope the token too.** Zone Resources still
+> point at the old zone, so Caddy's DNS-01 challenge fails with
+> `expected 1 zone, got 0 for <newdomain>.` — the token is valid, it just
+> cannot see the new zone. Same trap if the zone is still pending nameserver
+> delegation.
 
 > **Do not** use the Global API Key. A scoped token limits blast radius if it ever leaks.
 
