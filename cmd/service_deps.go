@@ -10,6 +10,7 @@ import (
 	"github.com/groot/homelab/internal/config"
 	"github.com/groot/homelab/internal/db"
 	"github.com/groot/homelab/internal/run"
+	"github.com/groot/homelab/internal/secrets"
 	"github.com/groot/homelab/internal/tui/styles"
 )
 
@@ -21,15 +22,6 @@ import (
 // database to become healthy. Postgres recovery after an unclean shutdown is the
 // slow case; a minute is generous without hanging a script forever.
 const sharedDBStartTimeout = 90 * time.Second
-
-// ensureDBDependencies makes sure every shared database a service declares is
-// actually usable before that service starts.
-//
-// A declared dependency is a dependency: if the shared container is not running
-// we start it and wait for it to report healthy, rather than failing and telling
-// the user to run a command we could have run ourselves. Compose cannot express
-// this — the shared databases live in their own compose projects, so
-// `depends_on` cannot reach them.
 
 // ensureDBDependencies makes sure every shared database a service declares is
 // actually usable before that service starts.
@@ -63,13 +55,39 @@ func ensureDBDependencies(ctx context.Context, root, name string) error {
 	}
 	sort.Slice(types, func(i, j int) bool { return types[i] < types[j] })
 
-	p := db.New(root, nil) // nil SM — status checks need no secrets
+	// A real secrets manager, not nil: provisioning stores the generated role
+	// password in the keyring, and the same password is what buildEnv injects
+	// into the service.
+	sm, err := secrets.Open()
+	if err != nil {
+		return fmt.Errorf("opening keyring: %w", err)
+	}
+	p := db.New(root, sm)
+
 	for _, dbType := range types {
-		if err := p.EnsureRunning(ctx, dbType); err == nil {
-			continue
+		if err := p.EnsureRunning(ctx, dbType); err != nil {
+			if err := startSharedDB(ctx, root, dbType, p); err != nil {
+				return err
+			}
 		}
-		if err := startSharedDB(ctx, root, dbType, p); err != nil {
-			return err
+	}
+
+	// Provision the role and database too, not just the container.
+	//
+	// Starting the shared instance but leaving the service's role uncreated is
+	// the worst of both worlds: buildEnv fills in user/database/host from the
+	// declaration regardless, so the service starts against credentials that
+	// were never created and crash-loops on "failed to connect to
+	// user=<svc> database=<svc>" — which reads like a network fault, not a
+	// missing setup step. Provisioning is idempotent and needs no input, so
+	// there is nothing to ask the user for.
+	for i := range svcDB {
+		entry := &svcDB[i]
+		if err := p.Provision(ctx, entry.Type, name, entry.ServiceDBDecl); err != nil {
+			return fmt.Errorf(
+				"provisioning %s database %q for %s: %w\n"+
+					"  Run `homelab setup %s` to configure it interactively",
+				entry.Type, entry.Database, name, err, name)
 		}
 	}
 	return nil
