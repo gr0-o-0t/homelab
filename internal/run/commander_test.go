@@ -128,7 +128,9 @@ func TestCommander_DockerComposeEnv_ConstructsCorrectArgs(t *testing.T) {
 		Stderr:  os.Stderr,
 	}
 
-	err := cmd.DockerComposeEnv(composePath, map[string]string{"TEST_VAR": "test_value"}, "ps")
+	// `config` renders the file without contacting a daemon, so the test needs
+	// docker installed but never touches a running one.
+	err := cmd.DockerComposeEnv(composePath, map[string]string{"TEST_VAR": "test_value"}, "config")
 	assert.NoError(t, err)
 }
 
