@@ -69,20 +69,20 @@ func (l *Layer) Status() network.Status {
 	return network.Status{ContainerState: state}
 }
 
-// ConfDir is the main conf.d/: the tailnet is the default exposure layer, and
-// the Caddyfile imported this directory before there were other layers.
-func (l *Layer) ConfDir() string { return "conf.d" }
+// LegacyConfDir is the main conf.d/: the tailnet is the default exposure
+// layer, and the Caddyfile imported this directory before there were others.
+func (l *Layer) LegacyConfDir() string { return "conf.d" }
 
 // ServiceAddresses returns the tailnet hostname. Templated, not looked up:
 // the wildcard cert and DNS record cover every *.<home>.<domain> name. The
-// label is the one the generated conf.d block answers on — any --name or
+// label is the one the service's site block answers on — any --name or
 // declared subdomain (vaultwarden → vault) — not the bare service name.
 func (l *Layer) ServiceAddresses(svcName string, env map[string]string) []network.ServiceAddress {
 	sub, dom := env["HOME_SUBDOMAIN"], env["DOMAIN"]
 	if sub == "" || dom == "" {
 		return []network.ServiceAddress{{Note: "HOME_SUBDOMAIN/DOMAIN not set — run homelab setup"}}
 	}
-	return []network.ServiceAddress{{URL: fmt.Sprintf("https://%s.%s.%s", configgen.CurrentHost(l.repoRoot, l, svcName), sub, dom)}}
+	return []network.ServiceAddress{{URL: fmt.Sprintf("https://%s.%s.%s", configgen.ServiceHost(l.repoRoot, svcName), sub, dom)}}
 }
 
 func (l *Layer) env() map[string]string {

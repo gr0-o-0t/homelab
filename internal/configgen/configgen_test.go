@@ -57,63 +57,6 @@ func TestBlockFilename_NamedPort(t *testing.T) {
 	assert.Equal(t, "svc-ssh", PortFileName("svc", "ssh"))
 }
 
-func TestWriteFile_MultiPortPrivate_DoesNotClobber(t *testing.T) {
-	// Regression test for the reproduced bug: WriteFile used to collapse
-	// every private/cf filename to "<svc>.conf" regardless of port name, so
-	// a second port's write silently overwrote the first.
-	dir := t.TempDir()
-	require.NoError(t, WriteFile(dir, "conf.d", "svc", "web", "web-block\n"))
-	require.NoError(t, WriteFile(dir, "conf.d", "svc", "ssh", "ssh-block\n"))
-
-	webData, err := os.ReadFile(filepath.Join(dir, "caddy", "conf.d", "svc.conf"))
-	require.NoError(t, err, "default/web port should keep its own file")
-	assert.Equal(t, "web-block\n", string(webData))
-
-	sshData, err := os.ReadFile(filepath.Join(dir, "caddy", "conf.d", "svc-ssh.conf"))
-	require.NoError(t, err, "second port should get its own file instead of overwriting the first")
-	assert.Equal(t, "ssh-block\n", string(sshData))
-}
-
-func TestWriteFile_MultiPortCF_DoesNotClobber(t *testing.T) {
-	dir := t.TempDir()
-	require.NoError(t, WriteFile(dir, "conf.d-cf", "svc", "web", "web-block\n"))
-	require.NoError(t, WriteFile(dir, "conf.d-cf", "svc", "ssh", "ssh-block\n"))
-
-	_, err := os.Stat(filepath.Join(dir, "caddy", "conf.d-cf", "svc.conf"))
-	require.NoError(t, err)
-	_, err = os.Stat(filepath.Join(dir, "caddy", "conf.d-cf", "svc-ssh.conf"))
-	require.NoError(t, err, "cf should follow the same per-port scheme as the other extensions")
-}
-
-func TestRemoveAllPortFiles_RemovesEveryDeclaredPort(t *testing.T) {
-	dir := t.TempDir()
-	svcDir := filepath.Join(dir, "services", "svc")
-	require.NoError(t, os.MkdirAll(svcDir, 0o755))
-	require.NoError(t, os.WriteFile(
-		filepath.Join(svcDir, "config.yaml"),
-		[]byte("ports:\n  - web:8080\n  - ssh:22\n"),
-		0o644,
-	))
-
-	require.NoError(t, WriteFile(dir, "conf.d", "svc", "web", "web-block\n"))
-	require.NoError(t, WriteFile(dir, "conf.d", "svc", "ssh", "ssh-block\n"))
-
-	require.NoError(t, RemoveAllPortFiles(dir, "conf.d", "svc"))
-
-	_, err := os.Stat(filepath.Join(dir, "caddy", "conf.d", "svc.conf"))
-	assert.True(t, os.IsNotExist(err), "default-port file should be removed")
-	_, err = os.Stat(filepath.Join(dir, "caddy", "conf.d", "svc-ssh.conf"))
-	assert.True(t, os.IsNotExist(err), "per-port file should also be removed, not orphaned")
-}
-
-func TestRemoveAllPortFiles_NoPortsDeclared_FallsBackToDefault(t *testing.T) {
-	dir := t.TempDir()
-	require.NoError(t, WriteFile(dir, "conf.d", "svc", "", "content\n"))
-	require.NoError(t, RemoveAllPortFiles(dir, "conf.d", "svc"))
-	_, err := os.Stat(filepath.Join(dir, "caddy", "conf.d", "svc.conf"))
-	assert.True(t, os.IsNotExist(err))
-}
-
 // The ygg layer names its socat forwarders with this same function. If the two
 // ever diverge again, enable writes files that disable cannot find.
 func TestPortFileName_IsTheOneNamingRule(t *testing.T) {

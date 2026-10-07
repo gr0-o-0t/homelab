@@ -9,10 +9,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
+	"sort"
 
 	"github.com/groot/homelab/internal/configgen"
+	"github.com/groot/homelab/internal/exposure"
 	"github.com/groot/homelab/internal/network"
 	"github.com/groot/homelab/internal/run"
 )
@@ -49,7 +49,7 @@ func (l *Layer) Label() string         { return "Yggdrasil mesh node" }
 func (l *Layer) ContainerName() string { return containerName }
 func (l *Layer) Profile() string       { return "yggdrasil" }
 func (l *Layer) Flag() string          { return "ygg" }
-func (l *Layer) ConfDir() string       { return "conf.d-ygg" }
+func (l *Layer) LegacyConfDir() string { return "conf.d-ygg" }
 
 func (l *Layer) Start() error {
 	return l.runner.DockerComposeEnv(
@@ -69,20 +69,44 @@ func (l *Layer) Status() network.Status {
 }
 
 // Configure gives each of the service's ports a mesh port and a socat
-// forwarder pointing at Caddy (tailscale:<port>), then has yggdrasil reconcile
-// its forwarders.
+// forwarder pointing at Caddy (tailscale:<port>), records the allocation in
+// the service's exposure.yaml, then has yggdrasil reconcile its forwarders.
 func (l *Layer) Configure(svcName, _ string, ports []network.PortSelection) error {
-	for _, port := range ports {
-		if _, err := l.appendForwarder(svcName, port.Name); err != nil {
+	alloc, err := l.allocate(svcName, ports)
+	if err != nil {
+		return err
+	}
+	keep := map[string]bool{}
+	for _, p := range ports {
+		file := configgen.PortFileName(svcName, p.Name)
+		keep[file] = true
+		if err := l.writeForwarder(file, alloc[exposure.MeshKey(p.Name)]); err != nil {
 			return fmt.Errorf("writing socat forwarder: %w", err)
 		}
+	}
+	// A narrower --ports selection drops the forwarders of deselected ports.
+	var stale []string
+	for _, f := range l.fileNames(svcName) {
+		if !keep[f] {
+			stale = append(stale, f)
+		}
+	}
+	if err := removeExact(l.socatDir(), stale, ".forward"); err != nil {
+		return err
+	}
+	if err := exposure.Update(l.repoRoot, svcName, func(s *exposure.State) { s.YggPorts = alloc }); err != nil {
+		return err
 	}
 	return l.reload()
 }
 
-// Teardown removes the service's socat forwarders and has yggdrasil reconcile.
+// Teardown removes the service's socat forwarders, releases its mesh ports
+// and has yggdrasil reconcile.
 func (l *Layer) Teardown(svcName string) error {
 	_ = l.removeForwarder(svcName)
+	if err := exposure.Update(l.repoRoot, svcName, func(s *exposure.State) { s.YggPorts = nil }); err != nil {
+		return err
+	}
 	return l.reload()
 }
 
@@ -91,16 +115,22 @@ func (l *Layer) Teardown(svcName string) error {
 // listening port, not Host header. A port-only site address serves plain HTTP:
 // there is no hostname for automatic HTTPS to get a certificate for — which is
 // what we want, since yggdrasil already encrypts the transport.
+//
+// The mesh ports are the ones Configure recorded in exposure.yaml.
 func (l *Layer) Sites(svcName, _ string, ports []network.PortSelection) ([]network.Site, error) {
-	taken, err := l.takenPorts()
+	st, err := exposure.Load(l.repoRoot, svcName)
 	if err != nil {
 		return nil, err
 	}
 	sites := make([]network.Site, 0, len(ports))
 	for _, p := range ports {
-		meshPort := taken[configgen.PortFileName(svcName, p.Name)]
+		meshPort := st.YggPorts[exposure.MeshKey(p.Name)]
 		if meshPort == 0 {
-			return nil, fmt.Errorf("%s has no mesh port for %q — configure it first", svcName, p.Name)
+			// No forwarder carries this port onto the mesh — a port declared
+			// since the service was enabled, or one an older install never
+			// forwarded — so a block for it would route nothing. `homelab
+			// enable <svc> --ygg` allocates it.
+			continue
 		}
 		sites = append(sites, network.Site{
 			PortName: p.Name,
@@ -112,20 +142,29 @@ func (l *Layer) Sites(svcName, _ string, ports []network.PortSelection) ([]netwo
 	return sites, nil
 }
 
-// ServiceAddresses pairs the node's mesh address with the port allocated to
+// ServiceAddresses pairs the node's mesh address with each port allocated to
 // this service. The mesh has no naming, so both halves are required and
 // neither can be templated from the service name.
 func (l *Layer) ServiceAddresses(svcName string, _ map[string]string) []network.ServiceAddress {
-	port := l.MeshPort(svcName)
-	if port == 0 {
+	st, err := exposure.Load(l.repoRoot, svcName)
+	if err != nil || len(st.YggPorts) == 0 {
 		return nil
 	}
-	addr := l.NodeAddress()
-	a := network.ServiceAddress{URL: ServiceURL(addr, port)}
-	if addr == "" {
-		a.Note = "node address unknown — is the yggdrasil container running?"
+	keys := make([]string, 0, len(st.YggPorts))
+	for k := range st.YggPorts {
+		keys = append(keys, k)
 	}
-	return []network.ServiceAddress{a}
+	sort.Strings(keys)
+	addr := l.NodeAddress()
+	out := make([]network.ServiceAddress, 0, len(keys))
+	for _, k := range keys {
+		a := network.ServiceAddress{URL: ServiceURL(addr, st.YggPorts[k])}
+		if addr == "" {
+			a.Note = "node address unknown — is the yggdrasil container running?"
+		}
+		out = append(out, a)
+	}
+	return out
 }
 
 // ── Ygg-specific helpers ─────────────────────────────────────────────────────
@@ -155,16 +194,6 @@ func (l *Layer) NodeAddress() string {
 	})
 }
 
-// MeshPort returns the mesh port allocated to a service, or 0 if it has no
-// forwarder. socat.d is the allocation registry, so this needs no daemon.
-func (l *Layer) MeshPort(svcName string) int {
-	taken, err := l.takenPorts()
-	if err != nil {
-		return 0
-	}
-	return taken[svcName]
-}
-
 // ServiceURL formats the address a mesh peer opens. Either half can be
 // missing — the node may be stopped (no address) or the service may not be
 // exposed (no port) — so the placeholder names which half is unknown instead
@@ -183,8 +212,7 @@ func (l *Layer) socatDir() string {
 	return filepath.Join(l.repoRoot, "yggdrasil", "socat.d")
 }
 
-// appendForwarder writes the socat forwarder for one service port and returns
-// the mesh port it was given.
+// writeForwarder writes one port's socat forwarder.
 //
 // The forwarder targets tailscale:<meshPort>, not the service container:
 // Caddy runs in the tailscale container's network namespace, so that is the
@@ -192,24 +220,12 @@ func (l *Layer) socatDir() string {
 // the same). Going straight to the service would bypass Caddy entirely, which
 // is what the generated `<name>.ygg` Caddy blocks used to pretend wasn't
 // happening.
-func (l *Layer) appendForwarder(name, portName string) (int, error) {
-	socatDir := l.socatDir()
-	if err := os.MkdirAll(socatDir, 0o750); err != nil {
-		return 0, fmt.Errorf("creating socat.d: %w", err)
+func (l *Layer) writeForwarder(file string, meshPort int) error {
+	if err := os.MkdirAll(l.socatDir(), 0o750); err != nil {
+		return fmt.Errorf("creating socat.d: %w", err)
 	}
-
-	file := configgen.PortFileName(name, portName)
-	meshPort, err := l.allocatePort(file)
-	if err != nil {
-		return 0, err
-	}
-
-	fwdPath := filepath.Join(socatDir, file+".forward")
 	content := fmt.Sprintf("PORT=%d\nTARGET=tailscale:%d\n", meshPort, meshPort)
-	if err := os.WriteFile(fwdPath, []byte(content), 0o600); err != nil {
-		return 0, err
-	}
-	return meshPort, nil
+	return os.WriteFile(filepath.Join(l.socatDir(), file+".forward"), []byte(content), 0o600)
 }
 
 // meshPortBase is where mesh port allocation starts.
@@ -222,67 +238,47 @@ func (l *Layer) appendForwarder(name, portName string) (int, error) {
 // mesh routing off Caddy's own listeners entirely.
 const meshPortBase = 9000
 
-// allocatePort picks the mesh port for a forwarder: the one it already has if
-// it has one — re-enabling must not move a service, since peers reach it as
-// [addr]:port and there is no name to re-resolve — otherwise the lowest free
-// port at or above meshPortBase.
+// allocate picks the mesh port of each port: the one it already has in
+// exposure.yaml if it has one — re-enabling must not move a service, since
+// peers reach it as [addr]:port and there is no name to re-resolve — otherwise
+// the lowest port at or above meshPortBase that no service holds. Every
+// service's exposure.yaml is the allocation registry.
 //
 // Two services on 8080 used to mean two socats binding 8080, the second dying
 // with EADDRINUSE in a log nobody reads.
-func (l *Layer) allocatePort(file string) (int, error) {
-	taken, err := l.takenPorts()
-	if err != nil {
-		return 0, err
-	}
-	if p, ok := taken[file]; ok {
-		return p, nil
-	}
-
-	claimed := make(map[int]bool, len(taken))
-	for _, p := range taken {
-		claimed[p] = true
-	}
-	for p := meshPortBase; p <= 65535; p++ {
-		if !claimed[p] {
-			return p, nil
-		}
-	}
-	return 0, fmt.Errorf("no free mesh port at or above %d", meshPortBase)
-}
-
-// takenPorts maps forwarder name → mesh port, read from socat.d. The directory
-// is the allocation registry; there is no separate state file to drift.
-func (l *Layer) takenPorts() (map[string]int, error) {
-	matches, err := filepath.Glob(filepath.Join(l.socatDir(), "*.forward"))
+func (l *Layer) allocate(svcName string, ports []network.PortSelection) (map[string]int, error) {
+	st, err := exposure.Load(l.repoRoot, svcName)
 	if err != nil {
 		return nil, err
 	}
-	taken := make(map[string]int, len(matches))
-	for _, m := range matches {
-		data, err := os.ReadFile(m) //nolint:gosec // path from our own glob
-		if err != nil {
-			continue
-		}
-		if p := parsePort(string(data)); p > 0 {
-			taken[strings.TrimSuffix(filepath.Base(m), ".forward")] = p
+	taken, err := exposure.MeshPorts(l.repoRoot, svcName)
+	if err != nil {
+		return nil, err
+	}
+	alloc := map[string]int{}
+	for _, p := range ports { // keep existing allocations first, so a new port cannot take one
+		key := exposure.MeshKey(p.Name)
+		if mp := st.YggPorts[key]; mp != 0 && !taken[mp] {
+			alloc[key] = mp
+			taken[mp] = true
 		}
 	}
-	return taken, nil
-}
-
-// parsePort reads PORT=<n> out of a .forward file. Returns 0 if absent or
-// unparseable — a malformed file just doesn't reserve a port.
-func parsePort(content string) int {
-	for _, line := range strings.Split(content, "\n") {
-		rest, ok := strings.CutPrefix(strings.TrimSpace(line), "PORT=")
-		if !ok {
+	next := meshPortBase
+	for _, p := range ports {
+		key := exposure.MeshKey(p.Name)
+		if alloc[key] != 0 {
 			continue
 		}
-		if p, err := strconv.Atoi(strings.TrimSpace(rest)); err == nil {
-			return p
+		for next <= 65535 && taken[next] {
+			next++
 		}
+		if next > 65535 {
+			return nil, fmt.Errorf("no free mesh port at or above %d", meshPortBase)
+		}
+		alloc[key] = next
+		taken[next] = true
 	}
-	return 0
+	return alloc, nil
 }
 
 // removeForwarder removes every forward file for the service — both the

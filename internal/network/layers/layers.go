@@ -15,7 +15,7 @@ import (
 
 // New returns every layer, in display order, rooted at the given config dir.
 // runner and env may be nil for callers that only read identity or routing
-// (names, conf dirs, site templates) and never start a container.
+// (names, site templates) and never start a container.
 func New(root string, runner *run.Commander, env network.EnvFunc) *network.Registry {
 	r := network.NewRegistry()
 	r.Register(tailscale.New(root, runner, env)) // the private layer: always first
@@ -26,7 +26,7 @@ func New(root string, runner *run.Commander, env network.EnvFunc) *network.Regis
 	return r
 }
 
-// Static returns the layers for identity only — name, label, flag, conf dir —
+// Static returns the layers for identity only — name, label, flag —
 // which do not depend on a config dir. For use where none is known yet, such
 // as registering CLI flags at init.
 func Static() []network.NetworkLayer { return New("", nil, nil).All() }

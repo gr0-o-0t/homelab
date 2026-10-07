@@ -59,10 +59,9 @@ func runServiceStatus(dir, name string, env map[string]string) error {
 		containerStatus = styles.Warning.Render(fmt.Sprintf("%d/%d running", svc.Running, svc.Total))
 	}
 
-	ts, _ := extRegistry().Get("ts")
 	var url string
 	if priv && env["HOME_SUBDOMAIN"] != "" && env["DOMAIN"] != "" {
-		url = fmt.Sprintf("https://%s.%s.%s", configgen.CurrentHost(dir, ts, name), env["HOME_SUBDOMAIN"], env["DOMAIN"])
+		url = fmt.Sprintf("https://%s.%s.%s", configgen.ServiceHost(dir, name), env["HOME_SUBDOMAIN"], env["DOMAIN"])
 	}
 
 	fmt.Printf("\n%s\n\n", styles.Header.Render(fmt.Sprintf("Status: %s", name)))
@@ -74,7 +73,7 @@ func runServiceStatus(dir, name string, env map[string]string) error {
 	}
 	if priv {
 		fmt.Printf("  %s  Config:  %s\n", styles.Muted.Render("↳"),
-			styles.Muted.Render(configgen.GeneratedFilePath(dir, ts.ConfDir(), name, "")))
+			styles.Muted.Render(configgen.SitesFile(dir, name)))
 	}
 
 	// ── Network Exposure section ──────────────────────────────────────────

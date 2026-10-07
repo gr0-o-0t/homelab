@@ -4,10 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/groot/homelab/internal/configgen"
-	"github.com/groot/homelab/internal/network/layers"
+	"github.com/groot/homelab/internal/exposure"
 )
 
 // ErrInvalidConfig marks a Reload that failed because `caddy validate`
@@ -17,14 +16,12 @@ import (
 // down with it.
 var ErrInvalidConfig = errors.New("caddy validate failed")
 
-// Snapshot is the state of every imported Caddy config directory at one point
-// in time, so a write that produced an invalid config can be undone.
-//
-// It covers whole directories rather than the files a writer meant to touch:
-// enable writes through several hands (configgen and each network layer), and
-// only the directory listing knows everything they did.
+// Snapshot is a service's routing files at one point in time — its sites file
+// and its exposure.yaml — so a change that produced an invalid config can be
+// undone. Those two files are everything enable/disable/reload write for
+// Caddy; a layer's daemon side is undone by tearing the layer down.
 type Snapshot struct {
-	dirs map[string]map[string]entry // dir → basename → state
+	files map[string]*entry // path → content; nil = did not exist
 }
 
 type entry struct {
@@ -32,72 +29,42 @@ type entry struct {
 	mode os.FileMode
 }
 
-// Snapshot records the current Caddy config. Take it before writing, then
+// Snapshot records a service's routing files. Take it before writing, then
 // call ReloadOrRestore instead of Reload.
-func (m *Manager) Snapshot() (*Snapshot, error) {
-	s := &Snapshot{dirs: map[string]map[string]entry{}}
-	for _, l := range layers.New(m.RepoRoot, nil, nil).All() {
-		dir := configgen.ConfigDir(m.RepoRoot, l.ConfDir())
-		files := map[string]entry{}
-		des, err := os.ReadDir(dir)
-		if err != nil && !os.IsNotExist(err) {
-			return nil, fmt.Errorf("snapshotting %s: %w", dir, err)
+func (m *Manager) Snapshot(svc string) (*Snapshot, error) {
+	s := &Snapshot{files: map[string]*entry{}}
+	for _, path := range []string{configgen.SitesFile(m.RepoRoot, svc), exposure.Path(m.RepoRoot, svc)} {
+		fi, err := os.Stat(path)
+		if errors.Is(err, os.ErrNotExist) {
+			s.files[path] = nil
+			continue
 		}
-		for _, de := range des {
-			if de.IsDir() {
-				continue
-			}
-			path := filepath.Join(dir, de.Name())
-			fi, err := os.Stat(path)
-			if os.IsNotExist(err) {
-				continue // dangling link left by the retired symlink scheme
-			}
-			if err != nil {
-				return nil, err
-			}
-			data, err := os.ReadFile(path) //nolint:gosec // path from our own listing
-			if err != nil {
-				return nil, err
-			}
-			files[de.Name()] = entry{data: data, mode: fi.Mode().Perm()}
+		if err != nil {
+			return nil, fmt.Errorf("snapshotting %s: %w", path, err)
 		}
-		s.dirs[dir] = files
+		data, err := os.ReadFile(path) //nolint:gosec // path built from the config dir
+		if err != nil {
+			return nil, err
+		}
+		s.files[path] = &entry{data: data, mode: fi.Mode().Perm()}
 	}
 	return s, nil
 }
 
-// Restore puts every config directory back the way the snapshot found it:
-// files added since are removed, changed or removed ones are rewritten.
+// Restore puts the files back the way the snapshot found them: rewritten if
+// they existed, removed if they did not.
 func (s *Snapshot) Restore() error {
 	var errs []error
-	for dir, files := range s.dirs {
-		des, err := os.ReadDir(dir)
-		if err != nil && !os.IsNotExist(err) {
+	for path, e := range s.files {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			errs = append(errs, err)
 			continue
 		}
-		for _, de := range des {
-			if de.IsDir() {
-				continue
-			}
-			if _, kept := files[de.Name()]; !kept {
-				if err := os.Remove(filepath.Join(dir, de.Name())); err != nil && !os.IsNotExist(err) {
-					errs = append(errs, err)
-				}
-			}
-		}
-		for name, e := range files {
-			errs = append(errs, restoreEntry(filepath.Join(dir, name), e))
+		if e != nil {
+			errs = append(errs, os.WriteFile(path, e.data, e.mode))
 		}
 	}
 	return errors.Join(errs...)
-}
-
-func restoreEntry(path string, e entry) error {
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	return os.WriteFile(path, e.data, e.mode)
 }
 
 // ReloadOrRestore reloads Caddy and, if validation rejects the config, restores

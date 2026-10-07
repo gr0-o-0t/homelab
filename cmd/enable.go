@@ -9,9 +9,7 @@ import (
 	"github.com/groot/homelab/internal/configgen"
 	"github.com/groot/homelab/internal/network"
 	"github.com/groot/homelab/internal/network/layers"
-	"github.com/groot/homelab/internal/routing"
 	"github.com/groot/homelab/internal/run"
-	"github.com/groot/homelab/internal/service"
 	"github.com/groot/homelab/internal/tui/styles"
 	"github.com/spf13/cobra"
 )
@@ -32,7 +30,10 @@ with extension flags:
   --ygg   expose on Yggdrasil IPv6 mesh
 
 Port selection defaults to all ports declared in the service's config.yaml.
-Use --ports to expose specific named ports only.
+Use --ports to expose specific named ports only. --name and --ports are
+remembered (services/<name>/exposure.yaml): enabling another layer later
+keeps them unless given again; --name=<service> or a --ports listing every
+port resets them.
 
 Examples:
   homelab enable gitea                      # private tailnet only
@@ -94,59 +95,40 @@ func runEnable(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	displayName := svcName
-	if enableName != "" {
-		displayName = enableName
-	}
-
-	// Layers this run turns on, so a failure part-way can take them back off.
-	// Without that, the blocks already written stay on disk and go live on the
-	// next unrelated Caddy reload — a failed `--all` could make a service
-	// public through the tunnel without anyone noticing.
-	before := activeLayerSet(root, svcName)
-	mgr, _, explain := quietCaddy(root)
-	snap, err := mgr.Snapshot() // Caddy's dirs, restored if this run fails
-	if err != nil {
+	if err := requireSitesLayout(root, svcName); err != nil {
 		return err
 	}
-	var added []network.NetworkLayer
-	rollback := func(cause error) error {
-		_ = snap.Restore()
-		var names []string
-		for _, l := range added {
-			_ = routing.Disable(root, l, svcName)
-			names = append(names, l.Name())
-		}
-		if len(added) > 0 {
-			fmt.Printf("  %s  rolled back: %s\n", styles.Warning.Render("!"), strings.Join(names, ", "))
-		}
-		return cause
+
+	// --name and --ports replace what the service was enabled with; without
+	// them the stored ones are kept (see caddy.Manager.Enable).
+	var name *string
+	if cmd.Flags().Changed("name") {
+		name = &enableName
+	}
+	var ports []string
+	if cmd.Flags().Changed("ports") {
+		ports = enablePorts
 	}
 
-	// The private tailnet layer is always enabled; the flags add the rest.
-	for _, l := range selectedEnableLayers() {
-		err := routing.Enable(root, l, svcName, enableName, enablePorts)
-		if !before[l.Name()] {
-			added = append(added, l) // on failure it may be half-written
+	mgr, _, explain := quietCaddy(root)
+	ls := selectedEnableLayers()
+	if undone, err := mgr.Enable(extRegistry(), svcName, ls, name, ports); err != nil {
+		if len(undone) > 0 {
+			fmt.Printf("  %s  rolled back: %s\n", styles.Warning.Render("!"), strings.Join(undone, ", "))
 		}
-		if err != nil {
-			if l.Flag() == "" {
-				return err // nothing written yet worth rolling back
-			}
-			return rollback(fmt.Errorf("%s: %w", l.Name(), err))
-		}
+		return explain(err)
+	}
+
+	host := configgen.ServiceHost(root, svcName)
+	for _, l := range ls {
 		if l.Flag() == "" {
 			fmt.Printf("  %s  Private: %s.%s.%s\n",
-				styles.Success.Render("✓"), displayName, "{$HOME_SUBDOMAIN}", "{$DOMAIN}")
+				styles.Success.Render("✓"), host, "{$HOME_SUBDOMAIN}", "{$DOMAIN}")
 		} else {
 			fmt.Printf("  %s  %s: enabled\n", styles.Success.Render("✓"), l.Label())
 		}
 	}
-
 	fmt.Println()
-	if err := explain(mgr.ReloadOrRestore(snap)); err != nil {
-		return rollback(err)
-	}
 	return nil
 }
 
@@ -160,20 +142,6 @@ func selectedEnableLayers() []network.NetworkLayer {
 		}
 	}
 	return out
-}
-
-// activeLayerSet is the set of layers a service is currently exposed on.
-func activeLayerSet(root, name string) map[string]bool {
-	set := map[string]bool{}
-	svcs, _ := service.Discover(root)
-	for _, s := range svcs {
-		if s.Name == name {
-			for _, l := range s.ActiveLayers() {
-				set[l] = true
-			}
-		}
-	}
-	return set
 }
 
 func caddyReload() error {

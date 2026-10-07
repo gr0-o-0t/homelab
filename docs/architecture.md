@@ -101,10 +101,19 @@ Public services use a separate subdomain (default: `pub.example.com`) and are se
 ### 6. Multi-layer service exposure
 
 Caddy config is generated, never hand-written per layer. Each service declares
-its ports in `config.yaml` (or a `caddy.routes.conf` body for complex routing);
-`homelab enable <name>` writes the private block into `caddy/conf.d/`,
-`--cf`/`--i2p`/`--tor`/`--ygg` write theirs into `caddy/conf.d-<layer>/`, and
-Caddy is reloaded once. A failed validation restores the previous files.
+its ports in `config.yaml` (or a `caddy.routes.conf` body for complex routing).
+Which layers it is on — plus any `--name`, `--ports` and allocated Yggdrasil
+mesh ports — is stored in `services/<name>/exposure.yaml`, written only by
+`homelab enable`/`disable`. From that state and the declaration, homelab renders
+one Caddy file per service, `caddy/sites/<name>.conf`, holding the blocks of
+every enabled layer, and reloads Caddy once. If Caddy rejects it, the previous
+sites file and exposure.yaml are restored. Daemon-side config (torrc.d,
+tunnels.conf, socat.d) is written by the layer itself.
+
+Installs from before this kept one file per layer and port in
+`caddy/conf.d-<layer>/`. `homelab update` migrates them: it infers each
+service's exposure.yaml from those files, renders its sites file, and only then
+removes them. The Caddyfile still imports the old directories (now empty).
 
 For alternative network extensions:
 

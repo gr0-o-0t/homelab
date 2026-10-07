@@ -1,0 +1,6 @@
+# One Caddy file per service: <service>.conf holds the site blocks of every
+# network layer the service is enabled on (tailnet, Cloudflare, I2P, Tor,
+# Yggdrasil). Rendered by `homelab enable|disable` from
+# services/<service>/exposure.yaml plus its config.yaml ports (or its
+# caddy.routes.conf); removed when the service is on no layer.
+# Do not edit by hand — `homelab reload <service>` re-renders it.

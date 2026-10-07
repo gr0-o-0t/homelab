@@ -1,4 +1,4 @@
-# Generated private (tailnet) site blocks, one file per service and port.
-# Written by `homelab enable <service>` from the service's config.yaml ports
-# (or its caddy.routes.conf); removed by `homelab disable <service>`.
-# Do not edit by hand — `homelab caddy reload <service>` regenerates them.
+# Legacy per-layer route directory. Routes now live in caddy/sites/, one file
+# per service; `homelab update` (or `homelab migrate`) moves any left here.
+# Still imported by the Caddyfile so an install that has not migrated keeps
+# routing. Do not add files.

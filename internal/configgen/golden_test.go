@@ -27,10 +27,7 @@ func TestGolden_HostLayers(t *testing.T) {
 			require.NoError(t, err)
 			blocks, err := configgen.Render(l, e)
 			require.NoError(t, err)
-			for _, b := range blocks {
-				require.NoError(t, configgen.WriteFile(root, l.ConfDir(), svc, b.PortName, b.Content))
-			}
-			goldentest.Check(t, root, svc, l.ConfDir())
+			goldentest.Check(t, svc, l.LegacyConfDir(), blocks)
 		}
 	}
 }

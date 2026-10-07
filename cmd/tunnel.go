@@ -271,8 +271,7 @@ func requireTunnelConfig(env map[string]string) error {
 // declared subdomain, not necessarily the service name — so the DNS route and
 // the Caddy route name the same host.
 func publicHostname(svcName string, env map[string]string) string {
-	cf, _ := extRegistry().Get("cf")
-	return fmt.Sprintf("%s.%s", configgen.CurrentHost(configDir(), cf, svcName), env["DOMAIN"])
+	return fmt.Sprintf("%s.%s", configgen.ServiceHost(configDir(), svcName), env["DOMAIN"])
 }
 
 func init() {

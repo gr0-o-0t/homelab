@@ -58,18 +58,18 @@ func (l *Layer) Status() network.Status {
 	return network.Status{ContainerState: state}
 }
 
-func (l *Layer) ConfDir() string { return "conf.d-cf" }
+func (l *Layer) LegacyConfDir() string { return "conf.d-cf" }
 
-// ServiceAddresses returns the public hostname Cloudflare fronts: the host
-// configgen wrote into the service's conf.d-cf block, which carries any --name
-// or declared subdomain — not the bare service name, which matched no site
-// block whenever those were set.
+// ServiceAddresses returns the public hostname Cloudflare fronts: the host the
+// service's site block answers on, which carries any --name or declared
+// subdomain — not the bare service name, which matched no site block whenever
+// those were set.
 func (l *Layer) ServiceAddresses(svcName string, env map[string]string) []network.ServiceAddress {
 	dom := env["DOMAIN"]
 	if dom == "" {
 		return []network.ServiceAddress{{Note: "DOMAIN not set — run homelab setup"}}
 	}
-	host := configgen.CurrentHost(l.repoRoot, l, svcName)
+	host := configgen.ServiceHost(l.repoRoot, svcName)
 	return []network.ServiceAddress{{URL: fmt.Sprintf("https://%s.%s", host, dom)}}
 }
 

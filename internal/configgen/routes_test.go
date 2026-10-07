@@ -141,17 +141,3 @@ func TestRender_StripsFileHeaderKeepsRouteComments(t *testing.T) {
 		"a comment documenting a route must be preserved")
 	assert.Contains(t, content, "reverse_proxy svc-gotrue:9999")
 }
-
-// RemoveAllPortFiles fans out over declared ports; a routes-driven service has
-// a single file per layer regardless, so it must not be missed on disable.
-func TestRemoveAllPortFiles_RoutesService(t *testing.T) {
-	root := t.TempDir()
-	writeRoutesService(t, root, "appflowy", twoRoutes)
-
-	require.NoError(t, configgen.WriteFile(root, "conf.d-i2p", "appflowy", "", "appflowy.i2p {\n}\n"))
-	path := filepath.Join(configgen.ConfigDir(root, "conf.d-i2p"), "appflowy.conf")
-	require.FileExists(t, path)
-
-	require.NoError(t, configgen.RemoveAllPortFiles(root, "conf.d-i2p", "appflowy"))
-	assert.NoFileExists(t, path, "disable left the generated layer config behind")
-}

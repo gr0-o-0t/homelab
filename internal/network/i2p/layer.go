@@ -17,6 +17,7 @@ import (
 	"sync"
 
 	"github.com/groot/homelab/internal/configgen"
+	"github.com/groot/homelab/internal/exposure"
 	"github.com/groot/homelab/internal/network"
 	"github.com/groot/homelab/internal/run"
 )
@@ -84,7 +85,7 @@ func (l *Layer) Label() string         { return "I2P router + eepsite proxy" }
 func (l *Layer) ContainerName() string { return containerName }
 func (l *Layer) Profile() string       { return "i2p" }
 func (l *Layer) Flag() string          { return "i2p" }
-func (l *Layer) ConfDir() string       { return "conf.d-i2p" }
+func (l *Layer) LegacyConfDir() string { return "conf.d-i2p" }
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
 
@@ -320,18 +321,11 @@ func (l *Layer) hostFor(name, displayName string) string {
 	return configgen.I2PHost(configgen.SiteHost(info, displayName), l.env()["HOME_SUBDOMAIN"])
 }
 
-// currentHost is the host the service's tunnel actually stamps — read back from
-// tunnels.conf, since only it knows a --name the service was enabled with —
-// falling back to the resolved default.
+// currentHost is the host the service's tunnel stamps: the one hostFor
+// resolves for the --name recorded in its exposure.yaml.
 func (l *Layer) currentHost(name string) string {
-	if tunnels, err := l.ParseTunnels(); err == nil {
-		for _, t := range tunnels {
-			if t.Name == name && t.HostOverride != "" {
-				return t.HostOverride
-			}
-		}
-	}
-	return l.hostFor(name, "")
+	st, _ := exposure.Load(l.repoRoot, name)
+	return l.hostFor(name, st.Name)
 }
 
 // RemoveTunnel removes a named tunnel section from tunnels.conf.

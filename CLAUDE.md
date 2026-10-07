@@ -218,11 +218,39 @@ Tailscale and Caddy run as a pair. Caddy uses `network_mode: service:tailscale`,
 
 ### Service Routing (`assets/caddy/`)
 
-- `caddy/Caddyfile` — global config: ACME settings, Cloudflare DNS-01, wildcard TLS snippet, imports `conf.d/*.conf`
-- `caddy/conf.d*/` — generated per-service site blocks, one dir per layer (`conf.d` private, `conf.d-cf`, `-i2p`, `-tor`, `-ygg`)
+- `caddy/Caddyfile` — global config: ACME settings, Cloudflare DNS-01, wildcard TLS snippet, imports `sites/*.conf` (and the legacy `conf.d*/*.conf`, empty once migrated)
+- `caddy/sites/<svc>.conf` — **one generated file per service** holding the site blocks of every layer it is on, in registry order (ts, cf, tor, i2p, ygg), each layer's blocks in port order
 - Catch-all `http://:80` and `http://:8081` sites abort unmatched hosts on the tunnel listeners
 
-`homelab enable <name>` generates Caddy config into `caddy/conf.d/` and reloads Caddy gracefully. `homelab disable` removes it.
+**Exposure is stored state**, `services/<svc>/exposure.yaml` (`internal/exposure`),
+written only by `enable`/`disable` (and migration):
+
+```yaml
+layers: [ts, cf, tor]
+name: dev-gitea        # --name; omitted = service name
+ports: [web, ssh]      # --ports; omitted = all declared ports
+ygg_ports: {web: 9000} # mesh port allocations (all services' files are the registry)
+```
+
+A service on no layer has no exposure.yaml. Discovery reads layers from it;
+nothing parses generated Caddy files back. `enable`/`disable` = configure the
+layer's daemon side (tor torrc.d, i2p tunnels.conf, ygg socat.d — still owned by
+the layers' Configure/Teardown), update the state, re-render `sites/<svc>.conf`
+from state + config.yaml (+ tor's onion from its hostname file), reload Caddy.
+If `caddy validate` rejects it, both files are restored (`caddy.Snapshot`).
+`--name`/`--ports` are remembered across enables; pass them again to change them.
+`homelab reload <svc>` re-renders from the state.
+
+**Migration** (`routing.Migrate`, idempotent): a service still having legacy
+`caddy/conf.d*/` files gets its state inferred from them (layers from which dirs
+hold its files, `--ports` from which port files exist, `--name` from the host in
+its blocks, ygg ports from socat.d), exposure.yaml and the sites file written,
+*then* the legacy files removed. Daemon files are only read. It runs from
+`homelab update` after the core is recreated, lazily before any command once the
+installed Caddyfile/compose/container serve `caddy/sites`, and via hidden
+`homelab migrate [--force]`. `enable`/`reload` refuse while the core predates
+`caddy/sites`; `enable`/`disable`/`delete` refuse a service that still has
+legacy files.
 
 ### Embedded Catalog (`assets/`)
 
@@ -307,7 +335,10 @@ homelab down --group media            # stop all media services
 | `internal/service` | `Discover()` filesystem scan; `DiscoverWithDocker()` enriches with SDK data |
 | `internal/docker` | Docker SDK client — read-only (ContainerList, ContainerInspect) |
 | `internal/run` | `Commander` — shells out to `docker compose`; injects env via `cmd.Env` |
-| `internal/caddy` | Caddy validate/reload via docker exec, snapshot/rollback of the conf.d dirs, per-service regeneration |
+| `internal/exposure` | `services/<svc>/exposure.yaml` — the stored exposure state |
+| `internal/configgen` | Renders site blocks per layer and the per-service `caddy/sites/<svc>.conf` |
+| `internal/routing` | State → sites file (`Apply`/`Sync`), daemon Configure/Teardown, legacy migration |
+| `internal/caddy` | Caddy validate/reload via docker exec; `Enable`/`Disable`/`ReloadService` with snapshot/rollback of a service's sites file + exposure.yaml |
 | `internal/scaffold` | `//go:embed templates/*`; `Render()` + `Write()` for new-service boilerplate |
 | `internal/tui/dashboard` | Bubble Tea fullscreen service browser |
 | `internal/tui/logs` | Bubble Tea streaming log viewer |

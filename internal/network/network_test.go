@@ -25,7 +25,7 @@ func (f *fakeLayer) Start() error           { return nil }
 func (f *fakeLayer) Stop() error            { return nil }
 func (f *fakeLayer) Status() network.Status { return network.Status{ContainerState: "running"} }
 func (f *fakeLayer) Flag() string           { return f.name }
-func (f *fakeLayer) ConfDir() string        { return "conf.d-" + f.name }
+func (f *fakeLayer) LegacyConfDir() string  { return "conf.d-" + f.name }
 func (f *fakeLayer) Sites(_, _ string, _ []network.PortSelection) ([]network.Site, error) {
 	return nil, nil
 }

@@ -22,8 +22,8 @@ func TestLayer_InterfaceImplementation(t *testing.T) {
 	assert.NotNil(t, l)
 }
 
-func TestLayer_ConfDir(t *testing.T) {
-	assert.Equal(t, "conf.d", New("/test/repo", nil, nil).ConfDir())
+func TestLayer_LegacyConfDir(t *testing.T) {
+	assert.Equal(t, "conf.d", New("/test/repo", nil, nil).LegacyConfDir())
 }
 
 // The URL names the host the generated block answers on, not the service.

@@ -10,6 +10,7 @@ import (
 
 	"github.com/groot/homelab/internal/caddy"
 	"github.com/groot/homelab/internal/config"
+	"github.com/groot/homelab/internal/configgen"
 	"github.com/groot/homelab/internal/diagnostics"
 	"github.com/groot/homelab/internal/docker"
 	"github.com/groot/homelab/internal/run"
@@ -186,17 +187,19 @@ func renderCheckGroup(g diagnostics.CheckGroup, pass *bool) {
 	}
 }
 
-// caddyRoutingCheck checks Caddy conf.d directories, and with --fix removes
-// dangling symlinks — routes are generated files now, but installs from before
-// the static caddy.conf scheme was retired can still hold links into service
-// directories, and a dangling one makes Caddy's import fail.
+// caddyRoutingCheck checks the Caddy route directories — caddy/sites, and the
+// legacy conf.d/conf.d-cf the Caddyfile still imports — and with --fix removes
+// dangling symlinks: installs from before the static caddy.conf scheme was
+// retired can still hold links into service directories, and a dangling one
+// makes Caddy's import fail.
 // Returns results and handles --fix repair.
 func caddyRoutingCheck(dir string, fix bool, pass *bool) []diagnostics.CheckResult {
 	var results []diagnostics.CheckResult
-	caddyConfD := filepath.Join(dir, "caddy", "conf.d")
-	caddyConfDPub := filepath.Join(dir, "caddy", "conf.d-cf")
-
-	for _, d := range []string{caddyConfD, caddyConfDPub} {
+	for _, d := range []string{
+		configgen.SitesDir(dir),
+		filepath.Join(dir, "caddy", "conf.d"),
+		filepath.Join(dir, "caddy", "conf.d-cf"),
+	} {
 		rel, _ := filepath.Rel(dir, d)
 		if _, err := os.Stat(d); os.IsNotExist(err) {
 			results = append(results, diagnostics.CheckResult{

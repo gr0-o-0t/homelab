@@ -35,40 +35,46 @@
 }
 
 # ── Wildcard TLS snippet ──────────────────────────────────────────────────────
-# Declare the wildcard cert once as a named snippet.  Every site block in
-# conf.d/ that matches *.{$HOME_SUBDOMAIN}.{$DOMAIN} will reuse this cert.
-# Public site blocks in conf.d-cf/ use direct ACME for 
-# *.{$DOMAIN}.
+# Declare the wildcard cert once as a named snippet. Every tailnet site block
+# (*.{$HOME_SUBDOMAIN}.{$DOMAIN}) imports it. Cloudflare sites are plain HTTP:
+# TLS is terminated at the Cloudflare edge.
 (wildcard_tls) {
 	tls {
 		dns cloudflare {$CLOUDFLARE_API_TOKEN}
 	}
 }
 
+# ── Service sites ─────────────────────────────────────────────────────────────
+# One file per service, caddy/sites/<name>.conf, holding the site blocks of
+# every layer it is enabled on (tailnet, Cloudflare, I2P, Tor, Yggdrasil).
+# Rendered by `homelab enable|disable|reload <name>` from
+# services/<name>/exposure.yaml. Tor sites are http://<onion>:8081: tor's
+# HiddenServicePort targets tailscale:8081, a listener that serves only onion
+# vhosts, since sharing :80 would let a Tor client send the Host header of a
+# cf/i2p-only site and reach it.
+import /homelab/caddy/sites/*.conf
+
+# ── Legacy per-layer directories ──────────────────────────────────────────────
+# Where routes lived before caddy/sites. `homelab update` migrates them and
+# leaves these empty; the imports remain so an install that has not migrated
+# yet keeps routing.
+
 # ── Private site blocks (tailnet only) ───────────────────────────────────────
-# Written by `homelab enable <name>`.
 # Each file handles <service>.{$HOME_SUBDOMAIN}.{$DOMAIN}.
 import /homelab/caddy/conf.d/*.conf
 
 # ── Public site blocks (Cloudflare Tunnel) ───────────────────────────────────
-# Written by `homelab enable <name> --cf`.
 # Each file handles <service>.{$DOMAIN}.
 # Traffic arrives via cloudflared → http://tailscale:80, TLS is terminated at Cloudflare edge.
 import /homelab/caddy/conf.d-cf/*.conf
 
 # ── I2P eepsite blocks ────────────────────────────────────────────────────────
-# Written by `homelab enable <name> --i2p`.
 import /homelab/caddy/conf.d-i2p/*.conf
 
 # ── Tor onion service blocks ───────────────────────────────────────────────────
-# Written by `homelab enable <name> --tor`. Each site is http://<onion>:8081:
-# tor's HiddenServicePort targets tailscale:8081, a listener that serves only
-# onion vhosts. Sharing :80 would let a Tor client send the Host header of a
-# cf/i2p-only site and reach it.
 import /homelab/caddy/conf.d-tor/*.conf
 
 # ── Yggdrasil mesh blocks ─────────────────────────────────────────────────────
-# Written by `homelab enable <name> --ygg`.
 import /homelab/caddy/conf.d-ygg/*.conf
 
 # ── Catch-alls for the plain-HTTP listeners ──────────────────────────────────

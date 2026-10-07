@@ -15,8 +15,8 @@ func TestStatic_OrderAndIdentity(t *testing.T) {
 	dirs, flags := map[string]bool{}, map[string]bool{}
 	for _, l := range layers.Static() {
 		names = append(names, l.Name())
-		assert.False(t, dirs[l.ConfDir()], "%s: conf dir %s is shared", l.Name(), l.ConfDir())
-		dirs[l.ConfDir()] = true
+		assert.False(t, dirs[l.LegacyConfDir()], "%s: conf dir %s is shared", l.Name(), l.LegacyConfDir())
+		dirs[l.LegacyConfDir()] = true
 		if l.Flag() != "" {
 			assert.False(t, flags[l.Flag()], "%s: flag --%s is shared", l.Name(), l.Flag())
 			flags[l.Flag()] = true

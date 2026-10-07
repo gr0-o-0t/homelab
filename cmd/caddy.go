@@ -57,11 +57,10 @@ var reloadCmd = &cobra.Command{
 	Long: `Reload configuration changes.
 
 Without arguments, reloads the Caddy config (validate + graceful reload).
-With a service name, regenerates the service's Caddy config for every layer
-it is currently enabled on (private, cf, i2p — keeping its --name) and reloads
-Caddy once: picks up edits to its config.yaml ports or caddy.routes.conf
-without redeploying. Tor and Yggdrasil blocks are written by their own layers
-and are left as they are.`,
+With a service name, re-renders the service's Caddy file
+(caddy/sites/<service>.conf) from its exposure.yaml — every layer it is
+enabled on, keeping its --name and --ports — and reloads Caddy once: picks up
+edits to its config.yaml ports or caddy.routes.conf without redeploying.`,
 	Args:              cobra.MaximumNArgs(1),
 	ValidArgsFunction: completeServiceNames,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -100,6 +99,9 @@ var validateCmd = &cobra.Command{
 
 func runServiceReload(root, name string) error {
 	if err := validateService(root, name); err != nil {
+		return err
+	}
+	if err := requireSitesLayout(root, name); err != nil {
 		return err
 	}
 	if err := runWithSpinner(

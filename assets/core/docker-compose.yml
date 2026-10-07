@@ -122,11 +122,13 @@ services:
     volumes:
       # Main Caddyfile
       - ../caddy/Caddyfile:/etc/caddy/Caddyfile:ro
-      # Every conf.d* dir the Caddyfile imports must be mounted here, under
+      # Every dir the Caddyfile imports must be mounted here, under
       # /homelab/. Generated site blocks are self-contained, so Caddy gets no
       # access to services/ (and its config.yaml files). A missing mount is silent:
       # Caddy treats an import glob that matches nothing as a no-op, so the
       # layer just never routes.
+      - ../caddy/sites:/homelab/caddy/sites:ro
+      # Legacy per-layer dirs: empty once `homelab update` has migrated them.
       - ../caddy/conf.d:/homelab/caddy/conf.d:ro
       - ../caddy/conf.d-cf:/homelab/caddy/conf.d-cf:ro
       - ../caddy/conf.d-i2p:/homelab/caddy/conf.d-i2p:ro

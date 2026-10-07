@@ -8,8 +8,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/groot/homelab/internal/configgen"
 	"github.com/groot/homelab/internal/docker"
+	"github.com/groot/homelab/internal/exposure"
 	"github.com/groot/homelab/internal/network/layers"
 )
 
@@ -22,7 +22,7 @@ type Service struct {
 	HasCaddyConf bool
 
 	// Layers lists the network layers the service is exposed on, in registry
-	// order — detected from its generated files in each layer's conf dir.
+	// order — read from its exposure.yaml.
 	Layers []LayerName
 
 	Installed bool // true = exists on disk; false = catalog-only (not yet added)
@@ -212,42 +212,20 @@ func discover(repoRoot string) ([]Service, error) {
 	return services, nil
 }
 
-// exposedLayers lists the layers name has a generated block in.
+// exposedLayers lists the layers name is exposed on, as its exposure.yaml
+// records them, in registry order. A missing or unreadable file means none.
 func exposedLayers(root, name string) []LayerName {
+	st, err := exposure.Load(root, name)
+	if err != nil {
+		return nil
+	}
 	var out []LayerName
-	for _, l := range layers.New(root, nil, nil).All() {
-		if exposedOn(root, l.ConfDir(), name) {
+	for _, l := range layers.Static() {
+		if st.On(l.Name()) {
 			out = append(out, l.Name())
 		}
 	}
 	return out
-}
-
-// exposedOn reports whether any generated block for name exists in a layer's
-// conf dir. Checking only <name>.conf missed services whose ports are named (a
-// subdomain port lands in <name>-<port>.conf); the file names are computed
-// from the declared ports rather than globbed, because "<name>-*" would also
-// match a different service called "<name>-something".
-func exposedOn(root, confDir, name string) bool {
-	files := []string{configgen.GeneratedFilePath(root, confDir, name, "")}
-	if info, err := configgen.LoadServiceInfo(root, name); err == nil {
-		if ports, err := configgen.ResolvePorts(info.Ports, nil); err == nil {
-			for _, p := range ports {
-				files = append(files, configgen.GeneratedFilePath(root, confDir, name, p.Name))
-			}
-		}
-	}
-	for _, f := range files {
-		if fileExists(f) {
-			return true
-		}
-	}
-	return false
-}
-
-func fileExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
 }
 
 // ── Layer exposure ────────────────────────────────────────────────────────────

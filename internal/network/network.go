@@ -82,9 +82,10 @@ type NetworkLayer interface {
 	// the container is part of the always-on core.
 	Profile() string
 
-	// ConfDir returns the directory under caddy/ holding this layer's
-	// generated site blocks (e.g. "conf.d-tor"). The Caddyfile imports it.
-	ConfDir() string
+	// LegacyConfDir returns the directory under caddy/ that held this layer's
+	// generated site blocks before they moved into one caddy/sites/<svc>.conf
+	// per service (e.g. "conf.d-tor"). Only migration reads it.
+	LegacyConfDir() string
 
 	// ── Lifecycle ────────────────────────────────────────────────────────
 
@@ -137,9 +138,8 @@ type Configurer interface {
 }
 
 // HostRouted is implemented by layers whose site address is a template of the
-// service's host label, so the label — including a --name it was enabled with —
-// can be read back out of a generated block and the block regenerated without
-// asking the layer's daemon anything.
+// service's host label. Migration uses it to recover the --name a service was
+// enabled with from a legacy per-layer block; nothing else reads blocks back.
 type HostRouted interface {
 	HostFromAddress(address string) (string, bool)
 }

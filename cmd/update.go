@@ -68,7 +68,20 @@ func updateCoreStack(root string) error {
 		return fmt.Errorf("recreating core stack: %w", err)
 	}
 	fmt.Printf("%s Core stack updated\n", styles.Success.Render("✓"))
-	return nil
+	// The recreated caddy now mounts caddy/sites, so routes still in the old
+	// per-layer files can move there.
+	if err := sitesReady(root); err != nil {
+		fmt.Printf("%s Route migration skipped: %v\n", styles.Warning.Render("!"), err)
+		return nil
+	}
+	n, err := runMigration(root, os.Stdout)
+	if n > 0 {
+		// Same routes, new files: a reload only confirms Caddy reads them.
+		if rerr := caddyReload(); rerr != nil {
+			fmt.Printf("%s Caddy reload: %v\n", styles.Warning.Render("!"), rerr)
+		}
+	}
+	return err
 }
 
 func init() {

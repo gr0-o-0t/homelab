@@ -27,8 +27,8 @@ func TestLayer_InterfaceImplementation(t *testing.T) {
 	assert.NotNil(t, l)
 }
 
-func TestLayer_ConfDir(t *testing.T) {
-	assert.Equal(t, "conf.d-i2p", New("/test/repo", nil, nil).ConfDir())
+func TestLayer_LegacyConfDir(t *testing.T) {
+	assert.Equal(t, "conf.d-i2p", New("/test/repo", nil, nil).LegacyConfDir())
 }
 
 // Caddy config for i2p is rendered by internal/configgen and written by

@@ -81,7 +81,7 @@ func (l *Layer) Label() string         { return "Tor onion service proxy" }
 func (l *Layer) ContainerName() string { return containerName }
 func (l *Layer) Profile() string       { return "tor" }
 func (l *Layer) Flag() string          { return "tor" }
-func (l *Layer) ConfDir() string       { return "conf.d-tor" }
+func (l *Layer) LegacyConfDir() string { return "conf.d-tor" }
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
 
@@ -170,12 +170,20 @@ func (l *Layer) ServiceAddresses(svcName string, _ map[string]string) []network.
 }
 
 // OnionAddress returns the generated .onion for a service, or "" when tor
-// isn't running or hasn't created the hidden service yet.
+// hasn't created the hidden service yet.
+//
+// The hostname file is read from the host side of the hidden_service bind
+// mount first — tor runs as this uid (see checkHiddenServiceDir), so it is
+// readable, and a service's sites file can then be re-rendered while tor is
+// stopped — and through the container only when that fails.
 func (l *Layer) OnionAddress(svcName string) string {
 	if l.onionHook != nil {
 		return l.onionHook(svcName)
 	}
 	return l.cacheFor(svcName).Get(func() string {
+		if data, err := os.ReadFile(filepath.Join(l.repoRoot, "tor", "hidden_service", svcName, "hostname")); err == nil { //nolint:gosec // path built from the config dir
+			return strings.TrimSpace(string(data))
+		}
 		if l.runner == nil {
 			return ""
 		}
@@ -186,6 +194,13 @@ func (l *Layer) OnionAddress(svcName string) string {
 		}
 		return strings.TrimSpace(string(out))
 	})
+}
+
+// RememberOnion seeds the address cache with an onion known from elsewhere.
+// Migration uses it with the address in a legacy conf.d-tor block, so it can
+// render the service's sites file without tor's key directory being readable.
+func (l *Layer) RememberOnion(svcName, onion string) {
+	l.cacheFor(svcName).Get(func() string { return onion })
 }
 
 // cacheFor returns this service's address cache, creating it on first use.
@@ -236,7 +251,7 @@ func (l *Layer) torServicePath(name string) string {
 // HTTP ports are pointed at Caddy's onion-only listener (tailscale:8081, see
 // caddyPort), not at the service
 // container. Going direct — which this used to do — meant onion traffic never
-// reached Caddy at all, so the conf.d-tor site blocks were decoration and any
+// reached Caddy at all, so the onion site blocks were decoration and any
 // service whose routing is more than one upstream (a caddy.routes.conf path
 // fan-out) was simply broken over Tor.
 //
@@ -277,10 +292,13 @@ func (l *Layer) writeTorService(name string, ports []network.PortSelection) erro
 // Tor writes the hostname file as soon as it creates the key, so this is a
 // short wait, not a wait for the descriptor to publish.
 func (l *Layer) waitForOnion(svcName string) string {
+	if addr := l.OnionAddress(svcName); addr != "" {
+		return addr
+	}
 	// No point polling a container that isn't up: the caller's error message
 	// already says to start tor and re-run.
-	if l.onionHook == nil && l.runner != nil &&
-		l.runner.ContainerStatus(containerName) != "running" {
+	if l.onionHook == nil &&
+		(l.runner == nil || l.runner.ContainerStatus(containerName) != "running") {
 		return ""
 	}
 	for range onionWaitAttempts {

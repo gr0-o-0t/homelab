@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/groot/homelab/internal/configgen"
+	"github.com/groot/homelab/internal/exposure"
 	"github.com/groot/homelab/internal/network"
 	"github.com/groot/homelab/internal/network/cf"
 	"github.com/groot/homelab/internal/network/i2p"
@@ -120,28 +121,12 @@ func TestResolve_SiteHostMatchesRenderedAddress(t *testing.T) {
 	}
 }
 
-// CurrentHost reads the enabled block, which records a --name the declaration
-// cannot know about.
-func TestCurrentHost_PrefersGeneratedBlock(t *testing.T) {
+// ServiceHost resolves the declaration with the --name stored in
+// exposure.yaml, which the declaration alone cannot know about.
+func TestServiceHost_UsesStoredName(t *testing.T) {
 	dir := t.TempDir()
-	assert.Equal(t, "gitea", configgen.CurrentHost(dir, cfl, "gitea"), "nothing enabled, nothing declared")
+	assert.Equal(t, "gitea", configgen.ServiceHost(dir, "gitea"), "nothing enabled, nothing declared")
 
-	require.NoError(t, configgen.WriteFile(dir, "conf.d-cf", "gitea", "", "http://git.{$DOMAIN} {\n    reverse_proxy gitea:3000\n}\n"))
-	assert.Equal(t, "git", configgen.CurrentHost(dir, cfl, "gitea"))
-}
-
-// GeneratedHost reads back every Host-routed layer, including a listen port on
-// the address, and refuses addresses it did not write.
-func TestGeneratedHost_PerLayer(t *testing.T) {
-	dir := t.TempDir()
-	assert.Equal(t, "", configgen.GeneratedHost(dir, ts, "gitea"), "no block, no host")
-
-	require.NoError(t, configgen.WriteFile(dir, "conf.d", "gitea", "", "git.{$HOME_SUBDOMAIN}.{$DOMAIN}:8443 {\n}\n"))
-	require.NoError(t, configgen.WriteFile(dir, "conf.d-i2p", "gitea", "", "http://"+configgen.I2PHost("git", configgen.HomeSubdomainVar)+" {\n}\n"))
-	require.NoError(t, configgen.WriteFile(dir, "conf.d-cf", "gitea", "", "http://example.org {\n}\n"))
-	assert.Equal(t, "git", configgen.GeneratedHost(dir, ts, "gitea"))
-	assert.Equal(t, "git", configgen.GeneratedHost(dir, i2pl, "gitea"))
-	assert.Equal(t, "", configgen.GeneratedHost(dir, cfl, "gitea"))
-	assert.Equal(t, "gitea", configgen.CurrentHost(dir, cfl, "gitea"), "unreadable block falls back to the declaration")
-	assert.Equal(t, "git", configgen.CurrentHost(dir, ts, "gitea"))
+	require.NoError(t, exposure.Save(dir, "gitea", exposure.State{Layers: []string{"cf"}, Name: "git"}))
+	assert.Equal(t, "git", configgen.ServiceHost(dir, "gitea"))
 }

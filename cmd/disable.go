@@ -1,10 +1,12 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 
+	"github.com/groot/homelab/internal/caddy"
+	"github.com/groot/homelab/internal/network"
 	"github.com/groot/homelab/internal/network/layers"
-	"github.com/groot/homelab/internal/routing"
 	"github.com/groot/homelab/internal/run"
 	"github.com/groot/homelab/internal/tui/styles"
 	"github.com/spf13/cobra"
@@ -63,17 +65,21 @@ func runDisable(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	if err := requireMigrated(root, svcName); err != nil {
+		return err
+	}
+
 	hasSpecific := false
 	for _, on := range disableLayerFlags {
 		hasSpecific = hasSpecific || *on
 	}
-	mgr, _, explain := quietCaddy(root)
 
 	fmt.Printf("\n%s\n\n", styles.Header.Render(fmt.Sprintf("Disable: %s", svcName)))
 
 	// Without flags only the private tailnet route goes; -a takes every layer.
-	// Each layer loses its Caddy blocks, then its own config (tunnel ingress,
-	// hidden service, forwarder).
+	// Each layer leaves the service's sites file, then loses its own config
+	// (hidden service, tunnel, forwarder).
+	var ls []network.NetworkLayer
 	for _, l := range extRegistry().All() {
 		private := l.Flag() == ""
 		switch {
@@ -81,18 +87,23 @@ func runDisable(cmd *cobra.Command, args []string) error {
 		case private && hasSpecific, !private && !*disableLayerFlags[l.Name()]:
 			continue
 		}
-		if err := routing.Disable(root, l, svcName); err != nil && !(private && disableAll) {
-			return fmt.Errorf("%s: %w", l.Name(), err)
-		}
-		if private {
+		ls = append(ls, l)
+	}
+
+	mgr, _, explain := quietCaddy(root)
+	err := mgr.Disable(extRegistry(), svcName, ls)
+	if errors.Is(err, caddy.ErrInvalidConfig) {
+		return explain(err) // rolled back: nothing was disabled
+	}
+	for _, l := range ls {
+		if l.Flag() == "" {
 			fmt.Printf("  %s  Private: removed\n", styles.Warning.Render("→"))
 		} else {
 			fmt.Printf("  %s  %s: removed\n", styles.Warning.Render("→"), l.Label())
 		}
 	}
-
-	if err := explain(mgr.Reload()); err != nil {
-		fmt.Printf("  %s  Caddy reload: %v\n", styles.Warning.Render("!"), err)
+	if err != nil {
+		fmt.Printf("  %s  Caddy reload: %v\n", styles.Warning.Render("!"), explain(err))
 	}
 
 	if disableStop {

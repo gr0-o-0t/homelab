@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/groot/homelab/internal/exposure"
 	"github.com/groot/homelab/internal/routing"
 	"github.com/groot/homelab/internal/tui/styles"
 	"github.com/spf13/cobra"
@@ -61,7 +62,13 @@ func deleteOne(root, svcName string) error {
 		}
 	}
 
-	active := activeLayerSet(root, svcName) // read before anything is removed
+	if err := requireMigrated(root, svcName); err != nil {
+		return err
+	}
+	st, err := exposure.Load(root, svcName) // read before anything is removed
+	if err != nil {
+		return err
+	}
 
 	// 1. Containers first. If they cannot be taken down, stop here: with the
 	// compose file deleted, nothing could take them down afterwards.
@@ -73,24 +80,23 @@ func deleteOne(root, svcName string) error {
 		fmt.Printf("  %s  down failed, continuing (--force): %v\n", styles.Warning.Render("!"), err)
 	}
 
-	// 2. Every network layer the service is on. Caddy blocks are removed for
-	// all layers, but a layer's own Disable — which restarts its daemon and
-	// drops every connection on it — runs only where the service is actually
-	// exposed. The onion key goes too: disable keeps it so a re-enable gets
-	// the same address, but after delete it is just private key material.
+	// 2. Every network layer the service is on: its sites file first, then
+	// each layer's own Teardown — which reloads its daemon — only where the
+	// service is actually exposed. The onion key goes too: disable keeps it so
+	// a re-enable gets the same address, but after delete it is just private
+	// key material.
 	fmt.Printf("  %s  Removing network config…\n", styles.Muted.Render("→"))
 	mgr, _, explain := quietCaddy(root)
-	for _, l := range extRegistry().All() {
-		if active[l.Name()] {
-			_ = routing.Disable(root, l, svcName)
-		} else {
-			_ = routing.RemoveRoutes(root, l, svcName)
-		}
-	}
-	_ = os.RemoveAll(filepath.Join(root, "tor", "hidden_service", svcName))
+	_ = routing.RemoveSites(root, svcName)
 	if err := explain(mgr.Reload()); err != nil {
 		fmt.Printf("  %s  Caddy reload: %v\n", styles.Warning.Render("!"), err)
 	}
+	for _, l := range extRegistry().All() {
+		if st.On(l.Name()) {
+			_ = routing.Teardown(l, svcName)
+		}
+	}
+	_ = os.RemoveAll(filepath.Join(root, "tor", "hidden_service", svcName))
 
 	// 3. The service directory.
 	svcDir := filepath.Join(root, "services", svcName)

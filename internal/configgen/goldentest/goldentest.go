@@ -1,8 +1,9 @@
 // Package goldentest holds the fixtures and comparison for the generated-Caddy
 // golden tests. Each layer's own test package renders the fixture services and
-// checks the files it wrote against internal/configgen/testdata/golden/want,
-// so a refactor of how blocks are produced cannot silently change what lands
-// on disk.
+// checks the blocks against internal/configgen/testdata/golden/want/<svc>/
+// <legacy conf dir>/, and internal/routing checks that a service's sites file
+// is exactly those blocks in registry and port order — so a refactor of how
+// blocks are produced cannot silently change what Caddy loads.
 //
 // Set HOMELAB_UPDATE_GOLDEN=1 to rewrite the expected files from the current
 // output instead of comparing.
@@ -15,6 +16,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/groot/homelab/internal/configgen"
 )
 
 // Services are the fixture services: one port; several ports including a named
@@ -50,13 +53,18 @@ func Install(t *testing.T, root, svc string) {
 	}
 }
 
-// Check compares root/caddy/<confDir> with the expected files for svc, or
-// rewrites them when HOMELAB_UPDATE_GOLDEN is set. Lines are compared with
-// surrounding whitespace trimmed: Caddy ignores indentation.
-func Check(t *testing.T, root, svc, confDir string) {
+// Check compares the blocks one layer rendered for svc with the expected
+// files in want/<svc>/<dir> — one per block, named after its port as the
+// per-layer files were (configgen.PortFileName) — or rewrites them when
+// HOMELAB_UPDATE_GOLDEN is set. Lines are compared with surrounding whitespace
+// trimmed: Caddy ignores indentation.
+func Check(t *testing.T, svc, dir string, blocks []configgen.CaddyBlock) {
 	t.Helper()
-	got := readDir(t, filepath.Join(root, "caddy", confDir))
-	wantDir := filepath.Join(dataDir(), "want", svc, confDir)
+	got := map[string]string{}
+	for _, b := range blocks {
+		got[configgen.PortFileName(svc, b.PortName)+".conf"] = b.Content
+	}
+	wantDir := filepath.Join(dataDir(), "want", svc, dir)
 
 	if os.Getenv("HOMELAB_UPDATE_GOLDEN") != "" {
 		_ = os.RemoveAll(wantDir)
@@ -74,15 +82,21 @@ func Check(t *testing.T, root, svc, confDir string) {
 		return
 	}
 
-	want := readDir(t, wantDir)
+	want := Want(t, svc, dir)
 	if keys(got) != keys(want) {
-		t.Fatalf("%s/%s: files %s, want %s", svc, confDir, keys(got), keys(want))
+		t.Fatalf("%s/%s: files %s, want %s", svc, dir, keys(got), keys(want))
 	}
 	for name := range want {
-		if normalize(got[name]) != normalize(want[name]) {
-			t.Errorf("%s/%s/%s:\n--- got\n%s--- want\n%s", svc, confDir, name, got[name], want[name])
+		if Normalize(got[name]) != Normalize(want[name]) {
+			t.Errorf("%s/%s/%s:\n--- got\n%s--- want\n%s", svc, dir, name, got[name], want[name])
 		}
 	}
+}
+
+// Want returns the expected blocks of svc for one layer, by file name.
+func Want(t *testing.T, svc, dir string) map[string]string {
+	t.Helper()
+	return readDir(t, filepath.Join(dataDir(), "want", svc, dir))
 }
 
 func readDir(t *testing.T, dir string) map[string]string {
@@ -114,7 +128,8 @@ func keys(m map[string]string) string {
 	return strings.Join(ks, ",")
 }
 
-func normalize(s string) string {
+// Normalize trims every line, since Caddy ignores indentation.
+func Normalize(s string) string {
 	lines := strings.Split(strings.TrimSpace(s), "\n")
 	for i, l := range lines {
 		lines[i] = strings.TrimSpace(l)
