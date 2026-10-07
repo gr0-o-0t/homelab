@@ -10,8 +10,6 @@ import (
 	"github.com/groot/homelab/internal/tui/styles"
 )
 
-// ── constants ─────────────────────────────────────────────────────────────────
-
 // View layer: every function here turns Model state into a string and touches
 // nothing else — no Docker, no filesystem, no config.
 //
@@ -33,17 +31,11 @@ func (m Model) View() string {
 // ── Header ────────────────────────────────────────────────────────────────────
 
 func (m Model) renderHeader() string {
-	pills := []string{
-		m.corePill("tailscale", m.core.tailscale),
-		m.corePill("caddy", m.core.caddy),
-	}
-	if m.core.cloudflared != "" || m.isTunnelConfigured() {
-		pills = append(pills, m.corePill("tunnel", m.core.cloudflared))
-	}
-	// Network layer pills from the registry
+	// One pill per core container, named with the same short tags the list
+	// badges and `homelab status` use.
+	pills := []string{m.corePill("caddy", m.core["caddy"])}
 	for _, l := range m.layers {
-		state := m.core.get(l.ContainerName())
-		pills = append(pills, m.corePill(l.Label(), state))
+		pills = append(pills, m.corePill(l.Name(), m.core[l.ContainerName()]))
 	}
 	right := strings.Join(pills, "  ")
 
@@ -120,19 +112,23 @@ func (m Model) renderBody() string {
 
 	left := m.renderListPane(bodyHeight)
 	right := m.renderDetailPane(bodyHeight, rightWidth)
-
-	sepStyle := styles.PaneBorder
-	if m.focused == paneList {
-		sepStyle = styles.PaneFocusBorder
+	if m.help {
+		right = renderHelp(bodyHeight, rightWidth)
 	}
-	sep := sepStyle.Render(strings.Repeat("│\n", bodyHeight))
-	sep = strings.TrimRight(sep, "\n")
 
-	return lipgloss.JoinHorizontal(lipgloss.Top,
-		lipgloss.NewStyle().Width(listInnerWidth).Render(left),
-		sep,
-		lipgloss.NewStyle().Width(rightWidth).Render(right),
-	)
+	sep := styles.PaneBorder.Render(strings.TrimRight(strings.Repeat("│\n", bodyHeight), "\n"))
+
+	// Panes end in a newline and can run long; clamp each to exactly
+	// bodyHeight or the frame grows past the terminal and the header scrolls
+	// off the top.
+	fit := func(s string, w int) string {
+		lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+		if len(lines) > bodyHeight {
+			lines = lines[:bodyHeight]
+		}
+		return lipgloss.NewStyle().Width(w).MaxWidth(w).Height(bodyHeight).Render(strings.Join(lines, "\n"))
+	}
+	return lipgloss.JoinHorizontal(lipgloss.Top, fit(left, listInnerWidth), sep, fit(right, rightWidth))
 }
 
 // ── List pane ─────────────────────────────────────────────────────────────────
@@ -325,7 +321,7 @@ func (m Model) renderCatalogDetail(svc *service.Service, height, width int) stri
 	b.WriteString("\n " + styles.Muted.Render("Bundled service — not yet installed.") + "\n\n")
 
 	b.WriteString(" " + styles.PaneTitle.Render("Install") + "\n\n")
-	fmt.Fprintf(&b, "  Press %s to install this service.\n", key("i"))
+	fmt.Fprintf(&b, "  Press %s to install this service.\n", key("enter"))
 	fmt.Fprintf(&b, "  Or run: %s\n\n", styles.Primary.Render("homelab add "+svc.Name))
 
 	b.WriteString(" " + styles.Muted.Render("After installing:") + "\n")
@@ -359,51 +355,32 @@ func (m Model) renderInstalledDetail(svc *service.Service, height, width int) st
 	b.WriteString(" " + styles.PaneBorder.Render(strings.Repeat("─", w)) + "\n")
 
 	env := m.rootEnv()
-	domain := env["DOMAIN"]
-	homeSub := env["HOME_SUBDOMAIN"]
 
-	// Access
+	// Access: one row per configured layer, each address resolved by the
+	// layer that owns that network — the same source `homelab status` reads.
 	b.WriteString("\n " + styles.PaneTitle.Render("Access") + "\n")
-	if svc.HasCaddyConf {
-		if svc.Enabled {
-			url := fmt.Sprintf("https://%s.%s.%s", svc.Name, homeSub, domain)
-			fmt.Fprintf(&b, "  %s private   %s\n",
-				styles.Success.Render("●"), styles.Primary.Render(url))
-		} else {
-			fmt.Fprintf(&b, "  %s private   %s\n",
-				styles.Muted.Render("○"), styles.Muted.Render("not exposed"))
-		}
+	active := map[string]bool{}
+	for _, n := range svc.ActiveLayers() {
+		active[string(n)] = true
 	}
-	if svc.HasPublicCaddyConf {
-		if svc.PublicEnabled {
-			url := fmt.Sprintf("https://%s.%s", svc.Name, domain)
-			fmt.Fprintf(&b, "  %s public    %s\n",
-				styles.Success.Render("●"), styles.Primary.Render(url))
-		} else {
-			fmt.Fprintf(&b, "  %s public    %s\n",
-				styles.Muted.Render("○"), styles.Muted.Render("not exposed"))
-		}
-	}
-
-	// Extension layer addresses, each resolved by the layer that owns the
-	// network — the same source `homelab status` reads, so the two can no
-	// longer disagree about where a service lives.
-	for _, name := range svc.ActiveLayers() {
-		if name == "ts" || name == "cf" {
-			continue // rendered above with their own icons
-		}
-		layer, ok := m.layerByName(name)
-		if !ok {
+	for _, l := range m.layers {
+		tag := fmt.Sprintf("%-4s", l.Name())
+		if !active[l.Name()] {
+			fmt.Fprintf(&b, "  %s %s %s\n",
+				styles.Muted.Render("○"), styles.Muted.Render(tag), styles.Muted.Render("off"))
 			continue
 		}
-		for _, addr := range layer.ServiceAddresses(svc.Name, env) {
-			text := addr.URL
+		for _, addr := range l.ServiceAddresses(svc.Name, env) {
+			text := styles.Primary.Render(addr.URL)
 			if addr.Note != "" {
-				text = strings.TrimSpace(text + " (" + addr.Note + ")")
+				text = strings.TrimSpace(text + " " + styles.Muted.Render("("+addr.Note+")"))
 			}
-			fmt.Fprintf(&b, "  %s %-9s %s\n",
-				styles.Accent.Render("●"), name, styles.Primary.Render(text))
+			fmt.Fprintf(&b, "  %s %s %s\n", styles.Success.Render("●"), tag, text)
 		}
+	}
+	if len(m.layers) > 0 {
+		b.WriteString("  " + key("e") + styles.Muted.Render(" enable  ") +
+			key("d") + styles.Muted.Render(" disable") + "\n")
 	}
 
 	// Containers
@@ -464,64 +441,112 @@ func (m Model) renderStatusBar() string {
 
 	switch m.state {
 	case stateFilterInput:
-		hints = styles.Muted.Render("[enter/esc] done  [backspace] delete")
+		hints = hintBar("enter", "keep filter", "esc", "clear", "backspace", "delete")
 
-	case stateEnablePrompt:
-		hints = styles.Warning.Render("Expose:  ") +
-			key("p") + " private  " +
-			key("P") + " public  " +
-			key("b") + " both  " +
-			key("esc") + " cancel"
-
-	case stateDisablePrompt:
-		hints = styles.Warning.Render("Hide:  ") +
-			key("p") + " private  " +
-			key("P") + " public  " +
-			key("b") + " both  " +
-			key("esc") + " cancel"
+	case stateEnablePrompt, stateDisablePrompt:
+		verb, all := "Enable", "all"
+		if m.state == stateDisablePrompt {
+			verb, all = "Disable", "all"
+		}
+		var pairs []string
+		if svc := m.selectedService(); svc != nil {
+			for _, c := range m.promptChoices(svc) {
+				label := c.layer
+				if c.layer == "ts" {
+					label = "private"
+				}
+				pairs = append(pairs, c.key, label)
+			}
+			verb += " " + svc.Name
+		}
+		pairs = append(pairs, "a", all, "esc", "cancel")
+		hints = styles.Warning.Render(verb+":  ") + hintBar(pairs...)
 
 	case stateBusy:
 		hints = styles.Primary.Render(m.spin.View() + " " + m.busyMsg)
 
 	default:
-		if m.lastErr != "" {
-			hints = styles.Err.Render("✗ " + clip(m.lastErr, m.width-4))
-		} else if m.lastMsg != "" {
+		svc := m.selectedService()
+		switch {
+		case m.lastErr != "":
+			hints = styles.Err.Render("✗ " + m.lastErr)
+		case m.lastMsg != "":
 			hints = styles.Success.Render("✓ " + m.lastMsg)
-		} else {
-			svc := m.selectedService()
-			if svc != nil && !svc.Installed {
-				hints = key("i") + " install  " +
-					key("n") + " new  " +
-					key("/") + " filter  " +
-					key("R") + " refresh  " +
-					key("j") + "↓  " +
-					key("k") + "↑  " +
-					key("q") + " quit"
-			} else {
-				hints = key("u") + " start  " +
-					key("x") + " stop  " +
-					key("r") + " restart  " +
-					key("e") + " expose  " +
-					key("d") + " hide  " +
-					key("l") + " logs  " +
-					key("n") + " new  " +
-					key("tab") + " pane  " +
-					key("/") + " filter  " +
-					key("j") + "↓  " +
-					key("k") + "↑  " +
-					key("gg") + " top  " +
-					key("G") + " bot  " +
-					key("q") + " quit"
-			}
+		case svc != nil && !svc.Installed:
+			hints = hintBar("enter", "install", "n", "new", "/", "filter", "?", "help", "q", "quit")
+		case svc != nil:
+			// Ordered by importance: the bar is clipped on narrow terminals.
+			hints = hintBar("u", "up", "s", "stop", "r", "restart", "e", "enable", "d", "disable",
+				"enter", "logs", "?", "help", "q", "quit", "/", "filter")
+		default:
+			hints = hintBar("n", "new", "/", "filter", "?", "help", "q", "quit")
 		}
 	}
 
 	return lipgloss.NewStyle().
 		Width(m.width).
+		MaxHeight(1).
 		Background(lipgloss.Color("#1E2030")).
 		Padding(0, 1).
-		Render(hints)
+		Render(clipWidth(hints, m.width-2))
+}
+
+// helpKeys is the full keymap shown by '?'. Action names are the CLI
+// commands they run, so what the dashboard does is what the docs say.
+var helpKeys = [][2]string{
+	{"", "Service"},
+	{"u", "up       create + start"},
+	{"s", "stop     keep containers"},
+	{"r", "restart"},
+	{"x", "down     remove containers"},
+	{"e", "enable   add a layer"},
+	{"d", "disable  remove a layer"},
+	{"enter", "logs · install"},
+	{"", "General"},
+	{"n", "new service"},
+	{"/", "filter · esc clears"},
+	{"R", "refresh (auto 5s)"},
+	{"j/k ↑/↓", "move"},
+	{"gg/G", "top / bottom"},
+	{"ctrl+u/d", "half page up / down"},
+	{"?", "close help"},
+	{"q", "quit"},
+}
+
+func renderHelp(height, width int) string {
+	var b strings.Builder
+	b.WriteString(" " + styles.Bold.Render("Keys") + "\n")
+	b.WriteString(" " + styles.PaneBorder.Render(strings.Repeat("─", max(width-2, 1))) + "\n")
+	for _, h := range helpKeys {
+		if h[0] == "" {
+			b.WriteString("\n " + styles.PaneTitle.Render(h[1]) + "\n")
+			continue
+		}
+		fmt.Fprintf(&b, "  %s %s\n",
+			lipgloss.NewStyle().Width(10).Render(styles.Primary.Render(h[0])), h[1])
+	}
+	content := b.String()
+	for strings.Count(content, "\n") < height {
+		content += "\n"
+	}
+	return lipgloss.NewStyle().Width(width).MaxHeight(height).Render(content)
+}
+
+// hintBar renders key/label pairs as "[k] label  [k] label".
+func hintBar(pairs ...string) string {
+	var parts []string
+	for i := 0; i+1 < len(pairs); i += 2 {
+		parts = append(parts, key(pairs[i])+" "+pairs[i+1])
+	}
+	return strings.Join(parts, "  ")
+}
+
+// clipWidth trims a styled string to w visible cells so the bar never wraps.
+func clipWidth(s string, w int) string {
+	if w <= 0 || lipgloss.Width(s) <= w {
+		return s
+	}
+	return lipgloss.NewStyle().MaxWidth(w).Render(s)
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -544,8 +569,6 @@ func clip(s string, n int) string {
 }
 
 // stripAnsi removes ANSI escape sequences from log output.
-
-// stripAnsi removes ANSI escape sequences from log output.
 func stripAnsi(s string) string {
 	var b strings.Builder
 	inEsc := false
@@ -566,5 +589,3 @@ func stripAnsi(s string) string {
 	}
 	return b.String()
 }
-
-// ── tea.Cmd functions ─────────────────────────────────────────────────────────

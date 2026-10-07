@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"strings"
 	"testing"
 	"unicode/utf8"
 
@@ -37,6 +38,7 @@ func newTestModel(svcs []service.Service) Model {
 		[]string{"paperless", "vaultwarden"},
 		[]network.NetworkLayer{},
 		stubEnvBuilder,
+		nil,
 	)
 }
 
@@ -217,17 +219,6 @@ func Test_OpErrMsg_SetsError(t *testing.T) {
 
 // ── Prompt states ─────────────────────────────────────────────────────────────
 
-func Test_EnablePrompt_KeyE(t *testing.T) {
-	m := newTestModel(stubServices())
-	m.width, m.height = 120, 40
-	m.state = stateNormal
-	m.cursor = 0 // caddy — installed & enabled
-
-	prompted, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
-	m2 := prompted.(Model)
-	assert.Equal(t, stateEnablePrompt, m2.state)
-}
-
 func Test_EnablePrompt_CatalogServiceIgnored(t *testing.T) {
 	m := newTestModel(stubServices())
 	m.width, m.height = 120, 40
@@ -357,20 +348,6 @@ func Test_CtrlD_ClampsAtBottom(t *testing.T) {
 	assert.Equal(t, len(visible)-1, m3.cursor)
 }
 
-func Test_VimBindings_OnlyInListPane(t *testing.T) {
-	m := newTestModel(stubServices())
-	m.width, m.height = 120, 40
-	m.state = stateNormal
-	m.cursor = 2
-	m.focused = paneDetail // not list
-
-	// G should not move cursor when detail pane is focused
-	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
-	assert.Equal(t, 2, m2.(Model).cursor, "vim bindings should only work in list pane")
-}
-
-// ── Container detail ──────────────────────────────────────────────────────────
-
 func Test_ContainerDetailMsg_UpdatesDetailPane(t *testing.T) {
 	m := newTestModel(stubServices())
 	m.width, m.height = 120, 40
@@ -407,14 +384,14 @@ func Test_CoreStatusMsg_TorI2pYggPreserved(t *testing.T) {
 	m.width, m.height = 120, 40
 
 	upd, _ := m.Update(coreStatusMsg{
-		ts: "running", caddy: "running",
-		tor: "running", i2p: "exited",
-		yggdrasil: "running",
+		"tailscale": "running", "caddy": "running",
+		"tor": "running", "i2p": "exited",
+		"yggdrasil": "running",
 	})
 	m2 := upd.(Model)
-	assert.Equal(t, "running", m2.core.tor)
-	assert.Equal(t, "exited", m2.core.i2p)
-	assert.Equal(t, "running", m2.core.yggdrasil)
+	assert.Equal(t, "running", m2.core["tor"])
+	assert.Equal(t, "exited", m2.core["i2p"])
+	assert.Equal(t, "running", m2.core["yggdrasil"])
 }
 
 // ── clip ──────────────────────────────────────────────────────────────────────
@@ -447,4 +424,123 @@ func Test_Clip_EmojiNotCorrupted(t *testing.T) {
 func Test_Clip_ZeroOrNegativeLimit_ReturnsUnchanged(t *testing.T) {
 	assert.Equal(t, "abcdef", clip("abcdef", 0))
 	assert.Equal(t, "abcdef", clip("abcdef", -1))
+}
+
+// ── Layers and CLI actions ────────────────────────────────────────────────────
+
+// fakeLayer implements just what the dashboard calls; the embedded nil
+// interface panics on anything else, which is what a test wants.
+type fakeLayer struct {
+	network.NetworkLayer
+	name, ctr string
+}
+
+func (f fakeLayer) Name() string          { return f.name }
+func (f fakeLayer) ContainerName() string { return f.ctr }
+func (f fakeLayer) ServiceAddresses(svc string, _ map[string]string) []network.ServiceAddress {
+	return []network.ServiceAddress{{URL: "https://" + svc + "." + f.name}}
+}
+
+func layeredModel() Model {
+	m := newTestModel(stubServices())
+	m.width, m.height = 120, 40
+	m.layers = []network.NetworkLayer{
+		fakeLayer{name: "ts", ctr: "tailscale"},
+		fakeLayer{name: "cf", ctr: "cloudflared"},
+		fakeLayer{name: "tor", ctr: "tor"},
+	}
+	return m
+}
+
+func press(m Model, k string) Model {
+	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)}
+	if k == "esc" {
+		msg = tea.KeyMsg{Type: tea.KeyEsc}
+	}
+	out, _ := m.Update(msg)
+	return out.(Model)
+}
+
+func choiceKeys(cs []layerChoice) (keys []string) {
+	for _, c := range cs {
+		keys = append(keys, c.key)
+	}
+	return keys
+}
+
+func Test_EnablePrompt_OffersConfiguredLayers(t *testing.T) {
+	m := press(layeredModel(), "e") // caddy: ts enabled
+	require.Equal(t, stateEnablePrompt, m.state)
+	assert.Equal(t, []string{"p", "c", "t"}, choiceKeys(m.promptChoices(m.selectedService())))
+}
+
+func Test_DisablePrompt_OffersOnlyActiveLayers(t *testing.T) {
+	m := press(layeredModel(), "d")
+	require.Equal(t, stateDisablePrompt, m.state)
+	assert.Equal(t, []string{"p"}, choiceKeys(m.promptChoices(m.selectedService())))
+}
+
+func Test_DisablePrompt_NothingActive(t *testing.T) {
+	m := layeredModel()
+	m.cursor = 2 // jellyfin: no layers enabled
+	m = press(m, "d")
+	assert.Equal(t, stateNormal, m.state)
+	assert.Contains(t, m.lastErr, "no network layers")
+}
+
+func Test_Prompt_UnofferedKeyKeepsPrompt(t *testing.T) {
+	m := press(press(layeredModel(), "d"), "c") // cf is not active on caddy
+	assert.Equal(t, stateDisablePrompt, m.state)
+}
+
+func Test_Prompt_RunsMatchingCLICommand(t *testing.T) {
+	m := press(press(layeredModel(), "e"), "c")
+	assert.Equal(t, stateBusy, m.state)
+	assert.Equal(t, "homelab enable caddy --cf…", m.busyMsg)
+
+	m = press(press(layeredModel(), "e"), "a")
+	assert.Equal(t, "homelab enable caddy --cf --tor…", m.busyMsg)
+}
+
+func Test_LifecycleKeys_RunCLIVerbs(t *testing.T) {
+	for k, verb := range map[string]string{"u": "up", "s": "stop", "r": "restart", "x": "down"} {
+		m := press(layeredModel(), k)
+		assert.Equal(t, "homelab "+verb+" caddy…", m.busyMsg, "key %s", k)
+	}
+}
+
+func Test_Filter_EscClears(t *testing.T) {
+	m := press(press(press(layeredModel(), "/"), "i"), "esc")
+	assert.Equal(t, stateNormal, m.state)
+	assert.Equal(t, "", m.filter)
+}
+
+func Test_Header_UsesShortLayerNames(t *testing.T) {
+	v := layeredModel().View()
+	assert.Contains(t, v, "ts")
+	assert.Contains(t, v, "https://caddy.ts")
+	assert.NotContains(t, v, "tunnel")
+}
+
+func Test_CLICmd_ReportsLastOutputLine(t *testing.T) {
+	m := newTestModel(stubServices())
+	m.cli = []string{"sh", "-c", "echo progress; echo 'error: boom' >&2; exit 1", "sh"}
+	msg := m.cliCmd("ok", "up", "x")()
+	require.IsType(t, opErrMsg{}, msg)
+	assert.Equal(t, "error: boom", msg.(opErrMsg).output)
+
+	m.cli = []string{"true"}
+	assert.Equal(t, opDoneMsg{msg: "ok"}, m.cliCmd("ok", "up", "x")())
+}
+
+func Test_View_FitsTerminalHeight(t *testing.T) {
+	for _, help := range []bool{false, true} {
+		m := layeredModel()
+		m.width, m.height, m.help = 80, 12, help
+		m.logLines, m.logSvcName = make([]string, 30), "caddy"
+		for i := range m.logLines {
+			m.logLines[i] = "log line"
+		}
+		assert.Equal(t, 12, strings.Count(m.View(), "\n")+1, "help=%v", help)
+	}
 }

@@ -3,20 +3,18 @@ package dashboard
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"os/exec"
 	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/groot/homelab/internal/caddy"
 	"github.com/groot/homelab/internal/docker"
-	"github.com/groot/homelab/internal/routing"
 	"github.com/groot/homelab/internal/run"
 	"github.com/groot/homelab/internal/service"
 )
-
-// ── constants ─────────────────────────────────────────────────────────────────
 
 // Bubble Tea commands: the dashboard's side effects.
 //
@@ -74,21 +72,19 @@ func refreshCmd(repoRoot string, dc *docker.Client, catalogNames []string) tea.C
 	}
 }
 
-func coreRefreshCmd(dc *docker.Client) tea.Cmd {
+// coreRefreshCmd reports the state of each core container by name.
+func coreRefreshCmd(dc *docker.Client, containers []string) tea.Cmd {
 	return func() tea.Msg {
+		states := coreStatusMsg{}
 		if dc == nil {
-			return coreStatusMsg{}
+			return states
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
-		return coreStatusMsg{
-			ts:          dc.ContainerState(ctx, "tailscale"),
-			caddy:       dc.ContainerState(ctx, "caddy"),
-			cloudflared: dc.ContainerState(ctx, "cloudflared"),
-			tor:         dc.ContainerState(ctx, "tor"),
-			i2p:         dc.ContainerState(ctx, "i2p"),
-			yggdrasil:   dc.ContainerState(ctx, "yggdrasil"),
+		for _, c := range containers {
+			states[c] = dc.ContainerState(ctx, c)
 		}
+		return states
 	}
 }
 
@@ -134,115 +130,30 @@ func (m Model) fetchInspectCmd() tea.Cmd {
 	return inspectCmd(m.repoRoot, m.dc, svc.Name)
 }
 
-func privateEnableCmd(repoRoot, name string) tea.Cmd {
+// cliCmd runs the homelab binary itself with args, output captured.
+//
+// Every action the dashboard offers is a CLI command, so it runs as one. The
+// dashboard used to carry its own copy of each — and the copies drifted: "stop"
+// was really down-and-unroute, "start" skipped database provisioning, and
+// "public" only knew the old caddy.cf.conf symlink, so it failed on every
+// service that declares ports. One path means the TUI and the CLI cannot
+// disagree about what an action does.
+func (m Model) cliCmd(done string, args ...string) tea.Cmd {
+	argv := append(append([]string{}, m.cli...), args...)
 	return func() tea.Msg {
-		var buf bytes.Buffer
-		r := &run.Commander{Stdout: &buf, Stderr: &buf}
-		if err := routing.EnablePrivate(repoRoot, name, "", nil, r); err != nil {
-			return opErrMsg{err: err, output: buf.String()}
+		if len(argv) == 0 {
+			return opErrMsg{err: errors.New("no homelab binary configured")}
 		}
-		return opDoneMsg{msg: name + " private route enabled"}
+		out, err := exec.Command(argv[0], argv[1:]...).CombinedOutput()
+		if err != nil {
+			return opErrMsg{err: err, output: lastLine(string(out))}
+		}
+		return opDoneMsg{msg: done}
 	}
 }
 
-func privateDisableCmd(repoRoot, name string) tea.Cmd {
-	return func() tea.Msg {
-		var buf bytes.Buffer
-		r := &run.Commander{Stdout: &buf, Stderr: &buf}
-		if err := routing.DisablePrivate(repoRoot, name, r); err != nil {
-			return opErrMsg{err: err, output: buf.String()}
-		}
-		return opDoneMsg{msg: name + " private route disabled"}
-	}
-}
-
-func publicEnableCmd(repoRoot, name string) tea.Cmd {
-	return func() tea.Msg {
-		var buf bytes.Buffer
-		r := &run.Commander{Stdout: &buf, Stderr: &buf}
-		if err := caddy.NewWithRunner(repoRoot, r).EnablePublic(name); err != nil {
-			return opErrMsg{err: err, output: buf.String()}
-		}
-		return opDoneMsg{msg: name + " public route enabled"}
-	}
-}
-
-func publicDisableCmd(repoRoot, name string) tea.Cmd {
-	return func() tea.Msg {
-		var buf bytes.Buffer
-		r := &run.Commander{Stdout: &buf, Stderr: &buf}
-		if err := caddy.NewWithRunner(repoRoot, r).DisablePublic(name); err != nil {
-			return opErrMsg{err: err, output: buf.String()}
-		}
-		return opDoneMsg{msg: name + " public route disabled"}
-	}
-}
-
-func bothEnableCmd(repoRoot, name string) tea.Cmd {
-	return func() tea.Msg {
-		var buf bytes.Buffer
-		r := &run.Commander{Stdout: &buf, Stderr: &buf}
-		mgr := caddy.NewWithRunner(repoRoot, r)
-		if err := mgr.Enable(name); err != nil {
-			return opErrMsg{err: err, output: buf.String()}
-		}
-		if err := mgr.EnablePublic(name); err != nil {
-			return opErrMsg{err: err, output: buf.String()}
-		}
-		return opDoneMsg{msg: name + " private + public enabled"}
-	}
-}
-
-func bothDisableCmd(repoRoot, name string) tea.Cmd {
-	return func() tea.Msg {
-		var buf bytes.Buffer
-		r := &run.Commander{Stdout: &buf, Stderr: &buf}
-		if err := caddy.NewWithRunner(repoRoot, r).DisableBoth(name); err != nil {
-			return opErrMsg{err: err, output: buf.String()}
-		}
-		return opDoneMsg{msg: name + " all routes disabled"}
-	}
-}
-
-func upCmd(repoRoot, name string, buildEnv EnvBuilderFn) tea.Cmd {
-	return func() tea.Msg {
-		var buf bytes.Buffer
-		r := &run.Commander{Stdout: &buf, Stderr: &buf}
-		env := resolveEnv(buildEnv, name)
-		if err := r.DockerComposeEnv(
-			run.ServiceComposeFile(repoRoot, name), env, "up", "-d",
-		); err != nil {
-			return opErrMsg{err: err, output: buf.String()}
-		}
-		return opDoneMsg{msg: name + " started"}
-	}
-}
-
-func downCmd(repoRoot, name string, buildEnv EnvBuilderFn) tea.Cmd {
-	return func() tea.Msg {
-		var buf bytes.Buffer
-		r := &run.Commander{Stdout: &buf, Stderr: &buf}
-		_ = caddy.NewWithRunner(repoRoot, r).DisableBoth(name)
-		env := resolveEnv(buildEnv, name)
-		if err := r.DockerComposeEnv(
-			run.ServiceComposeFile(repoRoot, name), env, "down",
-		); err != nil {
-			return opErrMsg{err: err, output: buf.String()}
-		}
-		return opDoneMsg{msg: name + " stopped"}
-	}
-}
-
-func restartCmd(repoRoot, name string, buildEnv EnvBuilderFn) tea.Cmd {
-	return func() tea.Msg {
-		var buf bytes.Buffer
-		r := &run.Commander{Stdout: &buf, Stderr: &buf}
-		env := resolveEnv(buildEnv, name)
-		if err := r.DockerComposeEnv(
-			run.ServiceComposeFile(repoRoot, name), env, "restart",
-		); err != nil {
-			return opErrMsg{err: err, output: buf.String()}
-		}
-		return opDoneMsg{msg: name + " restarted"}
-	}
+// lastLine returns the last non-empty line of s — the CLI's "error: …" line.
+func lastLine(s string) string {
+	lines := strings.Split(strings.TrimSpace(s), "\n")
+	return strings.TrimSpace(lines[len(lines)-1])
 }

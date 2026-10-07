@@ -46,12 +46,18 @@ const (
 	stateFilterInput
 )
 
-type pane int
+// layerChoice is one entry in the enable/disable prompt: the key pressed, the
+// layer it selects, and the `homelab enable|disable` flag that does it. The
+// private layer has no flag — it is what the bare command does.
+type layerChoice struct{ key, layer, flag string }
 
-const (
-	paneList pane = iota
-	paneDetail
-)
+var layerChoices = []layerChoice{
+	{"p", "ts", ""},
+	{"c", "cf", "--cf"},
+	{"t", "tor", "--tor"},
+	{"i", "i2p", "--i2p"},
+	{"y", "ygg", "--ygg"},
+}
 
 // ── messages ──────────────────────────────────────────────────────────────────
 
@@ -62,11 +68,9 @@ type (
 		err    error
 		output string
 	}
-	coreStatusMsg struct {
-		ts, caddy, cloudflared string
-		tor, i2p, yggdrasil    string
-	}
-	logTailMsg struct {
+	// coreStatusMsg maps a core container name to its state.
+	coreStatusMsg map[string]string
+	logTailMsg    struct {
 		svcName string
 		lines   []string
 	}
@@ -79,64 +83,16 @@ type (
 	}
 )
 
-// ── core status ───────────────────────────────────────────────────────────────
-
-type coreStatus struct {
-	tailscale   string
-	caddy       string
-	cloudflared string
-	tor         string
-	i2p         string
-	yggdrasil   string
-}
-
-// layerByName finds a registered layer by its short name.
-
-// layerByName finds a registered layer by its short name.
-func (m Model) layerByName(name string) (network.NetworkLayer, bool) {
-	for _, l := range m.layers {
-		if l.Name() == name {
-			return l, true
-		}
-	}
-	return nil, false
-}
-
-func (cs coreStatus) get(containerName string) string {
-	switch containerName {
-	case "tailscale":
-		return cs.tailscale
-	case "caddy":
-		return cs.caddy
-	case "cloudflared":
-		return cs.cloudflared
-	case "tor":
-		return cs.tor
-	case "i2p":
-		return cs.i2p
-	case "yggdrasil":
-		return cs.yggdrasil
-	default:
-		return ""
-	}
-}
-
-// ── EnvBuilderFn ──────────────────────────────────────────────────────────────
-
-// EnvBuilderFn returns the docker compose environment map for a service name.
-
 // EnvBuilderFn returns the docker compose environment map for a service name.
 type EnvBuilderFn func(svcName string) map[string]string
 
 // ── model ─────────────────────────────────────────────────────────────────────
 
 // Model is the Bubble Tea model for the full-screen dashboard.
-
-// Model is the Bubble Tea model for the full-screen dashboard.
 type Model struct {
 	// layout
 	width, height int
-	focused       pane
+	help          bool
 
 	// state machine
 	state   dashState
@@ -154,9 +110,10 @@ type Model struct {
 	cursor       int
 	filter       string
 	buildEnv     EnvBuilderFn
+	cli          []string // argv prefix that runs the homelab CLI
 
-	// core health header
-	core coreStatus
+	// core health header, keyed by container name
+	core map[string]string
 
 	// detail pane log tail
 	logLines         []string
@@ -175,13 +132,9 @@ type Model struct {
 // New constructs the dashboard Model.
 // catalogNames lists all names from the embedded service catalog; services not
 // yet installed appear in the list as available-to-install stubs.
-// layers lists registered network layers for header status pills.
-
-// New constructs the dashboard Model.
-// catalogNames lists all names from the embedded service catalog; services not
-// yet installed appear in the list as available-to-install stubs.
-// layers lists registered network layers for header status pills.
-func New(repoRoot string, dc *docker.Client, services []service.Service, catalogNames []string, layers []network.NetworkLayer, buildEnv EnvBuilderFn) Model {
+// layers lists the configured network layers. cli is the argv prefix every
+// action is run through (the homelab binary plus its global flags).
+func New(repoRoot string, dc *docker.Client, services []service.Service, catalogNames []string, layers []network.NetworkLayer, buildEnv EnvBuilderFn, cli []string) Model {
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
 	sp.Style = styles.Primary
@@ -193,14 +146,24 @@ func New(repoRoot string, dc *docker.Client, services []service.Service, catalog
 		catalogNames: catalogNames,
 		layers:       layers,
 		buildEnv:     buildEnv,
+		cli:          cli,
 		spin:         sp,
 	}
+}
+
+// coreContainers is caddy plus each configured layer's container.
+func (m Model) coreContainers() []string {
+	names := []string{"caddy"}
+	for _, l := range m.layers {
+		names = append(names, l.ContainerName())
+	}
+	return names
 }
 
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		refreshCmd(m.repoRoot, m.dc, m.catalogNames),
-		coreRefreshCmd(m.dc),
+		coreRefreshCmd(m.dc, m.coreContainers()),
 		m.spin.Tick,
 		coreTickCmd(),
 		logTickCmd(),
@@ -224,7 +187,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case refreshedMsg:
 		m.services = msg.services
-		m.uiIdle()
 		// Clamp cursor if the list shrank.
 		if visible := m.visibleServices(); m.cursor >= len(visible) && len(visible) > 0 {
 			m.cursor = len(visible) - 1
@@ -232,32 +194,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, m.fetchLogsCmd())
 
 	case opDoneMsg:
-		m.lastMsg = msg.msg
-		m.lastErr = ""
-		return m, tea.Batch(
-			refreshCmd(m.repoRoot, m.dc, m.catalogNames),
-			m.spin.Tick,
-		)
+		m.state, m.busyMsg = stateNormal, ""
+		m.lastMsg, m.lastErr = msg.msg, ""
+		cmds = append(cmds, refreshCmd(m.repoRoot, m.dc, m.catalogNames))
 
 	case opErrMsg:
-		m.state = stateNormal
-		m.busyMsg = ""
+		m.state, m.busyMsg = stateNormal, ""
 		m.lastMsg = ""
 		if msg.output != "" {
-			m.lastErr = clip(strings.TrimSpace(msg.output), 120)
+			m.lastErr = clip(msg.output, 160)
 		} else {
 			m.lastErr = msg.err.Error()
 		}
+		// A failed op can still have changed something (a route written
+		// before the reload failed), so show the real state.
+		cmds = append(cmds, refreshCmd(m.repoRoot, m.dc, m.catalogNames))
 
 	case coreStatusMsg:
-		m.core = coreStatus{
-			tailscale:   msg.ts,
-			caddy:       msg.caddy,
-			cloudflared: msg.cloudflared,
-			tor:         msg.tor,
-			i2p:         msg.i2p,
-			yggdrasil:   msg.yggdrasil,
-		}
+		m.core = msg
 
 	case logTailMsg:
 		if msg.svcName == m.selectedName() {
@@ -271,7 +225,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case coreTickMsg:
-		cmds = append(cmds, coreRefreshCmd(m.dc), coreTickCmd())
+		// The service list refreshes on the same tick: containers change
+		// state behind the dashboard's back (crashes, other terminals).
+		cmds = append(cmds,
+			coreRefreshCmd(m.dc, m.coreContainers()),
+			refreshCmd(m.repoRoot, m.dc, m.catalogNames),
+			coreTickCmd())
 
 	case logTickMsg:
 		cmds = append(cmds, m.fetchLogsCmd(), logTickCmd())
@@ -291,7 +250,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleKey(msg tea.KeyMsg, cmds []tea.Cmd) (Model, []tea.Cmd) {
-	if msg.String() == "ctrl+c" {
+	k := msg.String()
+	if k == "ctrl+c" {
 		return m, append(cmds, tea.Quit)
 	}
 
@@ -299,9 +259,12 @@ func (m Model) handleKey(msg tea.KeyMsg, cmds []tea.Cmd) (Model, []tea.Cmd) {
 
 	// ── filter input ──────────────────────────────────────────────────────────
 	case stateFilterInput:
-		switch msg.String() {
-		case "esc", "enter":
+		switch k {
+		case "enter":
 			m.state = stateNormal
+		case "esc":
+			m.state = stateNormal
+			m.filter = ""
 		case "backspace":
 			if len(m.filter) > 0 {
 				m.filter = m.filter[:len(m.filter)-1]
@@ -312,99 +275,84 @@ func (m Model) handleKey(msg tea.KeyMsg, cmds []tea.Cmd) (Model, []tea.Cmd) {
 			}
 		}
 		m.cursor = 0
+		cmds = append(cmds, m.fetchLogsCmd())
 
-	// ── route selection prompts ───────────────────────────────────────────────
+	// ── layer selection prompts ───────────────────────────────────────────────
 	case stateEnablePrompt, stateDisablePrompt:
-		switch msg.String() {
-		case "esc":
+		svc := m.selectedService()
+		if k == "esc" || svc == nil {
 			m.state = stateNormal
-		case "p":
-			svc := m.selectedService()
-			if svc == nil {
-				break
-			}
-			if m.state == stateEnablePrompt {
-				m.busyOp(fmt.Sprintf("Enabling private route for %s…", svc.Name))
-				cmds = append(cmds, privateEnableCmd(m.repoRoot, svc.Name), m.spin.Tick)
-			} else {
-				m.busyOp(fmt.Sprintf("Disabling private route for %s…", svc.Name))
-				cmds = append(cmds, privateDisableCmd(m.repoRoot, svc.Name), m.spin.Tick)
-			}
-		case "P":
-			svc := m.selectedService()
-			if svc == nil {
-				break
-			}
-			if m.state == stateEnablePrompt {
-				env := m.rootEnv()
-				if env["CF_TUNNEL_TOKEN"] == "" {
-					m.state = stateNormal
-					m.lastErr = "public exposure requires CF_TUNNEL_TOKEN — run `homelab setup`"
-					break
+			break
+		}
+		verb := "enable"
+		if m.state == stateDisablePrompt {
+			verb = "disable"
+		}
+		choices := m.promptChoices(svc)
+		var flags []string
+		switch {
+		case k == "a" && verb == "enable":
+			for _, c := range choices {
+				if c.flag != "" {
+					flags = append(flags, c.flag)
 				}
-				m.busyOp(fmt.Sprintf("Enabling public route for %s…", svc.Name))
-				cmds = append(cmds, publicEnableCmd(m.repoRoot, svc.Name), m.spin.Tick)
-			} else {
-				m.busyOp(fmt.Sprintf("Disabling public route for %s…", svc.Name))
-				cmds = append(cmds, publicDisableCmd(m.repoRoot, svc.Name), m.spin.Tick)
 			}
-		case "b":
-			svc := m.selectedService()
-			if svc == nil {
-				break
-			}
-			if m.state == stateEnablePrompt {
-				env := m.rootEnv()
-				if env["CF_TUNNEL_TOKEN"] == "" {
-					m.state = stateNormal
-					m.lastErr = "public exposure requires CF_TUNNEL_TOKEN — run `homelab setup`"
-					break
+		case k == "a":
+			flags = []string{"--all"} // every layer, private included
+		default:
+			found := false
+			for _, c := range choices {
+				if c.key == k {
+					found = true
+					if c.flag != "" {
+						flags = []string{c.flag}
+					}
 				}
-				m.busyOp(fmt.Sprintf("Enabling private + public for %s…", svc.Name))
-				cmds = append(cmds, bothEnableCmd(m.repoRoot, svc.Name), m.spin.Tick)
-			} else {
-				m.busyOp(fmt.Sprintf("Disabling all routes for %s…", svc.Name))
-				cmds = append(cmds, bothDisableCmd(m.repoRoot, svc.Name), m.spin.Tick)
+			}
+			if !found {
+				return m, cmds // not an offered choice; keep the prompt open
 			}
 		}
+		args := append([]string{verb, svc.Name}, flags...)
+		m.busyOp(fmt.Sprintf("homelab %s…", strings.Join(args, " ")))
+		cmds = append(cmds, m.cliCmd(fmt.Sprintf("%s: %sd %s", svc.Name, verb, layerList(verb, flags)), args...), m.spin.Tick)
 
 	// ── normal mode ───────────────────────────────────────────────────────────
 	case stateNormal:
-		// Reset key sequence tracker on any non-g key.
-		if msg.String() != "g" && msg.String() != "ctrl+u" && msg.String() != "ctrl+d" {
+		// Any key acknowledges the last result.
+		m.lastMsg, m.lastErr = "", ""
+		if k != "g" {
 			m.lastKey = ""
 		}
+		svc := m.selectedService()
+		installed := svc != nil && svc.Installed
 
-		switch msg.String() {
+		switch k {
 		case "q":
 			return m, append(cmds, tea.Quit)
 
-		case "tab", "shift+tab":
-			if m.focused == paneList {
-				m.focused = paneDetail
-			} else {
-				m.focused = paneList
-			}
+		case "?":
+			m.help = !m.help
+
+		case "esc":
+			m.help = false
+			m.filter = ""
 
 		case "up", "k":
-			if m.focused == paneList {
-				if m.cursor > 0 {
-					m.cursor--
-					cmds = append(cmds, m.fetchLogsCmd())
-				}
+			if m.cursor > 0 {
+				m.cursor--
+				cmds = append(cmds, m.fetchLogsCmd())
 			}
 
 		case "down", "j":
-			if m.focused == paneList {
-				if visible := m.visibleServices(); m.cursor < len(visible)-1 {
-					m.cursor++
-					cmds = append(cmds, m.fetchLogsCmd())
-				}
+			if visible := m.visibleServices(); m.cursor < len(visible)-1 {
+				m.cursor++
+				cmds = append(cmds, m.fetchLogsCmd())
 			}
 
 		case "g":
 			// gg → jump to top
-			if m.focused == paneList && m.lastKey == "g" {
+			if m.lastKey == "g" {
 				m.cursor = 0
 				cmds = append(cmds, m.fetchLogsCmd())
 				m.lastKey = ""
@@ -412,105 +360,145 @@ func (m Model) handleKey(msg tea.KeyMsg, cmds []tea.Cmd) (Model, []tea.Cmd) {
 				m.lastKey = "g"
 			}
 
-		case "G":
-			// G → jump to bottom
-			if m.focused == paneList {
-				if visible := m.visibleServices(); len(visible) > 0 {
-					m.cursor = len(visible) - 1
-					cmds = append(cmds, m.fetchLogsCmd())
-				}
-			}
-
-		case "ctrl+u":
-			// Ctrl+u → half page up
-			if m.focused == paneList {
-				scrollBy := (m.height - headerLines - statusbarLines) / 2
-				if scrollBy < 1 {
-					scrollBy = 1
-				}
-				m.cursor -= scrollBy
-				if m.cursor < 0 {
-					m.cursor = 0
-				}
+		case "G", "end":
+			if visible := m.visibleServices(); len(visible) > 0 {
+				m.cursor = len(visible) - 1
 				cmds = append(cmds, m.fetchLogsCmd())
 			}
 
-		case "ctrl+d":
-			// Ctrl+d → half page down
-			if m.focused == paneList {
-				scrollBy := (m.height - headerLines - statusbarLines) / 2
-				if scrollBy < 1 {
-					scrollBy = 1
-				}
-				if visible := m.visibleServices(); m.cursor+scrollBy >= len(visible) {
-					m.cursor = len(visible) - 1
-				} else {
-					m.cursor += scrollBy
-				}
-				cmds = append(cmds, m.fetchLogsCmd())
+		case "home":
+			m.cursor = 0
+			cmds = append(cmds, m.fetchLogsCmd())
+
+		case "ctrl+u", "pgup":
+			m.cursor -= m.halfPage()
+			if m.cursor < 0 {
+				m.cursor = 0
 			}
+			cmds = append(cmds, m.fetchLogsCmd())
+
+		case "ctrl+d", "pgdown":
+			if visible := m.visibleServices(); m.cursor+m.halfPage() >= len(visible) {
+				m.cursor = max(len(visible)-1, 0)
+			} else {
+				m.cursor += m.halfPage()
+			}
+			cmds = append(cmds, m.fetchLogsCmd())
 
 		case "/":
 			m.state = stateFilterInput
 			m.filter = ""
 			m.cursor = 0
 
-		case "e":
-			if svc := m.selectedService(); svc != nil && svc.Installed {
-				m.lastMsg, m.lastErr = "", ""
-				m.state = stateEnablePrompt
-			}
-
-		case "d":
-			if svc := m.selectedService(); svc != nil && svc.Installed {
-				m.lastMsg, m.lastErr = "", ""
-				m.state = stateDisablePrompt
-			}
-
-		case "u":
-			if svc := m.selectedService(); svc != nil && svc.Installed {
-				m.busyOp(fmt.Sprintf("Starting %s…", svc.Name))
-				cmds = append(cmds, upCmd(m.repoRoot, svc.Name, m.buildEnv), m.spin.Tick)
-			}
-
-		case "x":
-			if svc := m.selectedService(); svc != nil && svc.Installed {
-				m.busyOp(fmt.Sprintf("Stopping %s…", svc.Name))
-				cmds = append(cmds, downCmd(m.repoRoot, svc.Name, m.buildEnv), m.spin.Tick)
-			}
-
-		case "r":
-			if svc := m.selectedService(); svc != nil && svc.Installed {
-				m.busyOp(fmt.Sprintf("Restarting %s…", svc.Name))
-				cmds = append(cmds, restartCmd(m.repoRoot, svc.Name, m.buildEnv), m.spin.Tick)
-			}
-
-		case "l":
-			if svc := m.selectedService(); svc != nil && svc.Installed {
-				m.SelectedForLogs = svc.Name
-				return m, append(cmds, tea.Quit)
-			}
-
-		case "i":
-			if svc := m.selectedService(); svc != nil && !svc.Installed {
-				m.SelectedForInstall = svc.Name
-				return m, append(cmds, tea.Quit)
-			}
+		case "R":
+			cmds = append(cmds, refreshCmd(m.repoRoot, m.dc, m.catalogNames))
 
 		case "n":
 			m.SelectedForNew = true
 			return m, append(cmds, tea.Quit)
 
-		case "R":
-			m.busyOp("Refreshing…")
-			cmds = append(cmds, refreshCmd(m.repoRoot, m.dc, m.catalogNames), m.spin.Tick)
+		// Actions on the selected service. Each runs the CLI command it is
+		// named after — the hint text and the command are the same word.
+		case "enter":
+			switch {
+			case installed:
+				m.SelectedForLogs = svc.Name
+				return m, append(cmds, tea.Quit)
+			case svc != nil:
+				m.SelectedForInstall = svc.Name
+				return m, append(cmds, tea.Quit)
+			}
+
+		case "i":
+			if svc != nil && !installed {
+				m.SelectedForInstall = svc.Name
+				return m, append(cmds, tea.Quit)
+			}
+
+		case "l":
+			if installed {
+				m.SelectedForLogs = svc.Name
+				return m, append(cmds, tea.Quit)
+			}
+
+		case "u", "s", "r", "x":
+			if installed {
+				verb := map[string]string{"u": "up", "s": "stop", "r": "restart", "x": "down"}[k]
+				done := map[string]string{"up": "started", "stop": "stopped", "restart": "restarted", "down": "taken down"}[verb]
+				m.busyOp(fmt.Sprintf("homelab %s %s…", verb, svc.Name))
+				cmds = append(cmds, m.cliCmd(svc.Name+" "+done, verb, svc.Name), m.spin.Tick)
+			}
+
+		case "e", "d":
+			if !installed {
+				break
+			}
+			m.state = stateEnablePrompt
+			if k == "d" {
+				m.state = stateDisablePrompt
+			}
+			if len(m.promptChoices(svc)) == 0 {
+				m.state = stateNormal
+				m.lastErr = "no network layers to " + map[string]string{"e": "enable", "d": "disable"}[k] + " for " + svc.Name
+			}
 		}
 	}
 
 	return m, cmds
 }
 
-// ── View ──────────────────────────────────────────────────────────────────────
+// promptChoices lists the layers the current prompt can act on: every
+// configured layer when enabling, only the service's active ones when
+// disabling.
+func (m Model) promptChoices(svc *service.Service) []layerChoice {
+	active := map[string]bool{}
+	for _, n := range svc.ActiveLayers() {
+		active[string(n)] = true
+	}
+	var out []layerChoice
+	for _, c := range layerChoices {
+		if _, ok := m.layerByName(c.layer); !ok {
+			continue
+		}
+		if m.state == stateDisablePrompt && !active[c.layer] {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
+// layerList names the layers a CLI call touches, for the status message.
+// `enable` always includes the private route; `disable` with flags does not.
+func layerList(verb string, flags []string) string {
+	switch {
+	case len(flags) == 0:
+		return "private route"
+	case flags[0] == "--all":
+		return "all layers"
+	}
+	names := strings.ReplaceAll(strings.Join(flags, " + "), "--", "")
+	if verb == "enable" {
+		return "private + " + names
+	}
+	return names
+}
+
+func (m Model) halfPage() int {
+	return max((m.height-headerLines-statusbarLines)/2, 1)
+}
+
+// ── selection helpers ─────────────────────────────────────────────────────────
+
+// layerByName finds a configured layer by its short name.
+func (m Model) layerByName(name string) (network.NetworkLayer, bool) {
+	for _, l := range m.layers {
+		if l.Name() == name {
+			return l, true
+		}
+	}
+	return nil, false
+}
 
 func (m Model) visibleServices() []service.Service {
 	if m.filter == "" {
@@ -550,22 +538,11 @@ func (m Model) rootEnv() map[string]string {
 	return m.buildEnv("")
 }
 
-func (m Model) isTunnelConfigured() bool {
-	return m.rootEnv()["CF_TUNNEL_TOKEN"] != ""
-}
-
 func (m *Model) busyOp(msg string) {
 	m.state = stateBusy
 	m.busyMsg = msg
 	m.lastMsg = ""
 	m.lastErr = ""
-}
-
-func (m *Model) uiIdle() {
-	if m.state == stateBusy {
-		m.state = stateNormal
-		m.busyMsg = ""
-	}
 }
 
 func resolveEnv(fn EnvBuilderFn, name string) map[string]string {

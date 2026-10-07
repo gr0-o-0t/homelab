@@ -91,7 +91,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		switch msg.String() {
-		case "q", "ctrl+c":
+		case "q", "esc", "ctrl+c":
 			m.stopFn()
 			return m, tea.Quit
 
@@ -171,7 +171,7 @@ func (m Model) View() string {
 		styles.Muted.Render("[") + styles.Primary.Render("j/k") + styles.Muted.Render("] scroll  ") +
 			styles.Muted.Render("[") + styles.Primary.Render("G") + styles.Muted.Render("] follow  ") +
 			styles.Muted.Render("[") + styles.Primary.Render("g") + styles.Muted.Render("] top  ") +
-			styles.Muted.Render("[") + styles.Primary.Render("q") + styles.Muted.Render("] back"),
+			styles.Muted.Render("[") + styles.Primary.Render("q/esc") + styles.Muted.Render("] back"),
 	)
 	b.WriteString("\n")
 

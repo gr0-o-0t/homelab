@@ -26,54 +26,26 @@ func isTTY() bool {
 	return isatty.IsTerminal(os.Stdout.Fd()) && !noColor()
 }
 
-// runListTUI launches the fullscreen dashboard. It loops so that 'l' opens the
-// log viewer and 'n' opens the scaffold wizard, both returning to the dashboard.
-
-// runListTUI launches the fullscreen dashboard. It loops so that 'l' opens the
-// log viewer and 'n' opens the scaffold wizard, both returning to the dashboard.
-func runListTUI(root string) error {
-	return runDashboardTUI(root)
-}
-
-// runDashboardTUI is the main entry point for the interactive TUI.
-
-// runDashboardTUI is the main entry point for the interactive TUI.
+// runDashboardTUI launches the fullscreen dashboard. It loops so that logs,
+// install and the new-service wizard run in the terminal and return to it.
 func runDashboardTUI(root string) error {
 	dc, _ := docker.New()
 	if dc != nil {
 		defer func() { _ = dc.Close() }()
 	}
-
 	catalog := catalogNames()
-
-	// Build network layer list from registry + config for header pills.
-	cfgFile := config.RootConfigFile(root, rootFlags.configFile)
-	cfg, _ := config.Load(cfgFile)
-	layers := make([]network.NetworkLayer, 0, len(extRegistry().Names()))
-	for _, name := range extRegistry().Names() {
-		if layer, ok := extRegistry().Get(name); ok {
-			// Only include layers enabled in config (or always-on like ts)
-			if cfg != nil && (name == "ts" || hasResolvedExtension(cfg, name)) {
-				layers = append(layers, layer)
-			}
-		}
-	}
+	layers := uiLayers(root)
+	cli := selfCLI(root)
 
 	for {
-		var svcs []service.Service
-		var err error
-		if dc != nil {
-			svcs, err = service.DiscoverAllWithDocker(root, dc, catalog)
-		} else {
-			svcs, err = service.DiscoverWithCatalog(root, catalog)
-		}
+		svcs, err := discoverAll(root, dc, catalog)
 		if err != nil {
 			return err
 		}
 
 		model := tuiDashboard.New(root, dc, svcs, catalog, layers, func(name string) map[string]string {
 			return buildEnv(root, name)
-		})
+		}, cli)
 		p := tea.NewProgram(model, tea.WithAltScreen())
 		fm, err := p.Run()
 		if err != nil {
@@ -116,17 +88,6 @@ func runDashboardTUI(root string) error {
 // signals is immediate process termination with no cleanup at all. Register
 // our own handler so the child process is still killed and reaped, then let
 // the Program shut down cleanly (restoring the terminal) before exiting.
-
-// runLogTUI launches the fullscreen log viewer for a single service.
-//
-// The in-app "q"/ctrl+c keypress already cleans up the underlying
-// `docker compose logs -f` process via the model's own Update handling, but
-// that path is only reached through Bubble Tea's terminal raw-mode key
-// capture. A SIGINT/SIGTERM delivered outside that (a `kill <pid>`, a
-// dropped SSH session) bypasses it entirely — Go's default action for those
-// signals is immediate process termination with no cleanup at all. Register
-// our own handler so the child process is still killed and reaped, then let
-// the Program shut down cleanly (restoring the terminal) before exiting.
 func runLogTUI(root, serviceName string) error {
 	model := tuiLogs.New(root, serviceName, buildEnv(root, serviceName))
 	p := tea.NewProgram(model, tea.WithAltScreen())
@@ -147,14 +108,50 @@ func runLogTUI(root, serviceName string) error {
 
 // runWizardTUI launches the interactive service scaffold wizard.
 // initialName pre-fills the name field; pass "" to start blank.
-
-// runWizardTUI launches the interactive service scaffold wizard.
-// initialName pre-fills the name field; pass "" to start blank.
 func runWizardTUI(root, initialName string) error {
 	model := tuiWizard.New(root, initialName)
 	p := tea.NewProgram(model, tea.WithAltScreen())
 	_, err := p.Run()
 	return err
+}
+
+// ── shared by the dashboard and the GUI ───────────────────────────────────────
+
+// uiLayers is the private layer plus every extension enabled in config.yaml:
+// the layers a front end can show and offer to enable.
+func uiLayers(root string) []network.NetworkLayer {
+	cfg, _ := config.Load(config.RootConfigFile(root, rootFlags.configFile))
+	var layers []network.NetworkLayer
+	for _, name := range extRegistry().Names() {
+		layer, ok := extRegistry().Get(name)
+		if ok && cfg != nil && (name == "ts" || hasResolvedExtension(cfg, name)) {
+			layers = append(layers, layer)
+		}
+	}
+	return layers
+}
+
+// selfCLI is the argv prefix front ends run actions through: this binary,
+// with the same config selection. Every button is then exactly its command.
+func selfCLI(root string) []string {
+	exe, err := os.Executable()
+	if err != nil {
+		exe = os.Args[0]
+	}
+	cli := []string{exe, "--no-color", "--config-dir", root}
+	if rootFlags.configFile != "" {
+		cli = append(cli, "--config", rootFlags.configFile)
+	}
+	return cli
+}
+
+// discoverAll lists installed services (with live container state when Docker
+// is reachable) followed by catalog entries not yet installed.
+func discoverAll(root string, dc *docker.Client, catalog []string) ([]service.Service, error) {
+	if dc != nil {
+		return service.DiscoverAllWithDocker(root, dc, catalog)
+	}
+	return service.DiscoverWithCatalog(root, catalog)
 }
 
 // ── scaffold ──────────────────────────────────────────────────────────────────

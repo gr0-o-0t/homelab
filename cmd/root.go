@@ -34,7 +34,7 @@ Run without arguments to open the interactive service browser.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		dir := configDir()
 		if isTTY() && !rootFlags.json {
-			return runListTUI(dir)
+			return runDashboardTUI(dir)
 		}
 		svcs, err := discoverServices(dir)
 		if err != nil {
