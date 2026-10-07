@@ -1,81 +1,164 @@
 //go:build gui
 
-// Package gui is the experimental desktop front end, `homelab --gui`, built on
-// Dear ImGui via giu. It is compiled only with `-tags gui` (see `make gui`):
-// giu needs cgo and the OpenGL/X11 development headers, which the default,
-// pure-Go build must not.
+// Package gui is the desktop front end, `homelab --gui`, built on Dear ImGui
+// via giu. It is compiled only with `-tags gui` (see `make gui`): giu needs
+// cgo and the OpenGL/X11 development headers, which the default, pure-Go
+// build must not.
 //
-// Like the terminal dashboard, it has no logic of its own: each button runs
-// the homelab CLI command it is named after, so the GUI cannot disagree with
-// the CLI about what an action does.
+// Like the terminal dashboard it has no logic of its own: every button is an
+// action from internal/actions, run as the homelab CLI command it describes,
+// so the GUI cannot disagree with the CLI about what an action does.
+//
+// Threading: background goroutines write the shared state under mu. Each
+// frame starts by copying it into v (snapshot) and is built from v alone.
+// Widget callbacks run while the frame is being built and may take mu, so
+// nothing may hold mu across building widgets — a locking call made with mu
+// held deadlocks the window. All I/O happens off the render thread; a
+// goroutine that changes shared state calls g.Update() to get a new frame.
 package gui
 
 import (
-	"image/color"
+	"bufio"
+	"bytes"
+	"context"
+	"fmt"
+	"io"
+	"maps"
+	"os"
 	"os/exec"
-	"sort"
-	"strconv"
+	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	g "github.com/AllenDang/giu"
 
-	"github.com/groot/homelab/internal/docker"
+	"github.com/groot/homelab/internal/actions"
+	"github.com/groot/homelab/internal/backup"
+	"github.com/groot/homelab/internal/network"
 	"github.com/groot/homelab/internal/service"
 )
 
 const refreshEvery = 5 * time.Second
 
-var (
-	colRunning = color.RGBA{0x9E, 0xCE, 0x6A, 0xFF}
-	colPartial = color.RGBA{0xE0, 0xAF, 0x68, 0xFF}
-	colMuted   = color.RGBA{0x73, 0x7A, 0xA2, 0xFF}
-	colErr     = color.RGBA{0xF7, 0x76, 0x8E, 0xFF}
-)
-
-type app struct {
-	opt   Options
-	split float32
-
-	// UI-thread only: the frame is built from v, a copy of the shared state
-	// taken under mu, because giu runs widget callbacks while the frame is
-	// being built — callbacks that themselves take mu.
-	filter string
-	v      shared
-
-	mu sync.Mutex
-	shared
+// job is one CLI invocation and its output.
+type job struct {
+	ID      int
+	Label   string
+	Argv    []string // after the binary, for display
+	Lines   []string
+	Partial string
+	Running bool
+	Stream  bool
+	Code    int
+	Err     string
+	Started time.Time
+	Ended   time.Time
 }
 
-// coreName is the pinned core row. Its buttons run the CLI's no-service forms.
-const coreName = "core"
+func (j job) ok() bool { return !j.Running && j.Err == "" }
 
-// shared is the state background goroutines write.
+type toast struct {
+	Text  string
+	Kind  int // 0 info, 1 ok, 2 fail
+	Until time.Time
+}
+
+const (
+	toastInfo = iota
+	toastOK
+	toastFail
+)
+
+// layerAddrs are a service's addresses on one layer.
+type layerAddrs struct {
+	Layer, Label string
+	Addrs        []network.ServiceAddress
+}
+
+type setupResult struct {
+	Form *setupForm
+	Err  string
+	Gen  int
+}
+
+type choiceResult struct {
+	Items []string
+	Err   string
+}
+
+// shared is the state background goroutines write. Maps and slices in it are
+// replaced, never modified in place, so a snapshot of them stays valid.
 type shared struct {
-	core     []ContainerState
-	services []service.Service
-	selected string
-	busy     string // label of the running action; one at a time
-	status   string
-	failed   bool
-	logs     string
-	logsFor  string
+	services    []service.Service
+	core        []ContainerState
+	layers      []string // configured: ts + enabled extensions
+	layerObjs   []network.NetworkLayer
+	exts        []extState
+	backups     []backup.Listing
+	backupsErr  string
+	discoverErr string
+	loaded      bool
+	lastRefresh time.Time
+
+	addrs   map[string][]layerAddrs // by service
+	setup   map[string]setupResult  // by service, "" = root
+	choices map[string]choiceResult // by Input.Source
+	jobs    []job
+	toasts  []toast
+}
+
+type app struct {
+	opt Options
+
+	mu      sync.Mutex
+	shared  // guarded by mu
+	cancels map[int]context.CancelFunc
+	nextJob int
+	setupN  int
+
+	v  shared // the frame's snapshot; UI thread only
+	ui uiState
 }
 
 // Run opens the window and blocks until it is closed.
 func Run(opt Options) error {
-	a := &app{opt: opt, split: 360}
-	a.refresh()
+	a := &app{opt: opt, cancels: map[int]context.CancelFunc{}}
+	a.ui.init()
+	mw := g.NewMasterWindow("homelab", 1360, 860, 0)
+	setupTheme(mw)
+	// After the window exists: these call g.Update, which needs its context.
+	go a.refresh()
 	go func() {
 		for range time.Tick(refreshEvery) {
 			a.refresh()
-			g.Update()
 		}
 	}()
-	g.NewMasterWindow("homelab", 1180, 720, 0).Run(a.loop)
+	go a.animate()
+	mw.Run(a.loop)
+	a.stopAll()
 	return nil
 }
+
+// animate keeps frames coming while something moves: a running job's spinner
+// or a toast that must disappear.
+func (a *app) animate() {
+	for range time.Tick(100 * time.Millisecond) {
+		a.mu.Lock()
+		live := slices.ContainsFunc(a.jobs, func(j job) bool { return j.Running })
+		now := time.Now()
+		n := len(a.toasts)
+		a.toasts = slices.DeleteFunc(slices.Clone(a.toasts), func(t toast) bool { return now.After(t.Until) })
+		expired := n != len(a.toasts)
+		a.mu.Unlock()
+		if live || expired || n > 0 {
+			g.Update()
+		}
+	}
+}
+
+// ── background state ──────────────────────────────────────────────────────────
 
 func (a *app) refresh() {
 	svcs, err := a.opt.Discover()
@@ -83,70 +166,335 @@ func (a *app) refresh() {
 	if a.opt.Core != nil {
 		core = a.opt.Core()
 	}
+	var layerObjs []network.NetworkLayer
+	if a.opt.Layers != nil {
+		layerObjs = a.opt.Layers()
+	}
+	var layerNames []string
+	for _, l := range layerObjs {
+		layerNames = append(layerNames, l.Name())
+	}
+	states := map[string]string{}
+	for _, c := range core {
+		states[c.Name] = c.State
+	}
+	var exts []extState
+	for _, l := range a.opt.AllLayers {
+		if l.Name() == "ts" {
+			continue
+		}
+		exts = append(exts, extState{
+			Name: l.Name(), Label: l.Label(), Container: l.ContainerName(),
+			Enabled: slices.Contains(layerNames, l.Name()), Running: states[l.ContainerName()] == "running",
+		})
+	}
+	bl, berr := backup.List(backup.DefaultDir(a.opt.Root))
+
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.core = core
+	a.core, a.layers, a.layerObjs, a.exts = core, layerNames, layerObjs, exts
+	a.backups, a.backupsErr = bl, ""
+	if berr != nil {
+		a.backupsErr = berr.Error()
+	}
+	a.discoverErr = ""
 	if err != nil {
-		a.status, a.failed = err.Error(), true
-		return
+		a.discoverErr = err.Error()
+	} else {
+		a.services = svcs
 	}
-	a.services = svcs
-	if a.selected == "" {
-		a.selected = coreName
-	}
+	a.loaded, a.lastRefresh = true, time.Now()
+	a.mu.Unlock()
+	g.Update()
 }
 
-// do runs `homelab <args>` in the background and reports its result in the
-// status line. The CLI's last output line is its error message.
-func (a *app) do(label string, args ...string) {
-	a.mu.Lock()
-	if a.busy != "" {
-		a.mu.Unlock()
-		return
-	}
-	a.busy, a.status, a.failed = label, "", false
-	a.mu.Unlock()
-
+// resolveAddrs looks up a service's addresses on each layer it is exposed
+// on. Slow (it may shell into containers), so always in the background.
+func (a *app) resolveAddrs(name string) {
 	go func() {
-		argv := append(append([]string{}, a.opt.CLI...), args...)
-		out, err := exec.Command(argv[0], argv[1:]...).CombinedOutput()
 		a.mu.Lock()
-		a.busy = ""
-		if err != nil {
-			a.status, a.failed = lastLine(string(out)), true
-		} else {
-			a.status, a.failed = label+" — done", false
+		var svc *service.Service
+		for i := range a.services {
+			if a.services[i].Name == name {
+				s := a.services[i]
+				svc = &s
+			}
 		}
+		objs := a.layerObjs
 		a.mu.Unlock()
-		a.refresh()
+		if svc == nil || a.opt.Env == nil {
+			return
+		}
+		env := a.opt.Env(name)
+		var out []layerAddrs
+		for _, l := range objs {
+			if !svc.On(service.LayerName(l.Name())) {
+				continue
+			}
+			out = append(out, layerAddrs{Layer: l.Name(), Label: l.Label(), Addrs: l.ServiceAddresses(name, env)})
+		}
+		a.mu.Lock()
+		m := maps.Clone(a.addrs)
+		if m == nil {
+			m = map[string][]layerAddrs{}
+		}
+		m[name] = out
+		a.addrs = m
+		a.mu.Unlock()
 		g.Update()
 	}()
 }
 
-func (a *app) selectService(name string) {
+// loadSetup reads `setup [svc] --json` into a form.
+func (a *app) loadSetup(svc string) {
+	go func() {
+		argv := append(slices.Clone(a.opt.CLI), loadSetupArgs(svc)...)
+		cmd := exec.Command(argv[0], argv[1:]...)
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		out, err := cmd.Output()
+		res := setupResult{}
+		if err != nil {
+			res.Err = strings.TrimSpace(lastLine(stderr.String() + "\n" + err.Error()))
+		} else if f, perr := parseSetup(out); perr != nil {
+			res.Err = "unreadable setup --json output: " + perr.Error()
+		} else {
+			res.Form = f
+		}
+		a.mu.Lock()
+		a.setupN++
+		res.Gen = a.setupN
+		m := maps.Clone(a.setup)
+		if m == nil {
+			m = map[string]setupResult{}
+		}
+		m[svc] = res
+		a.setup = m
+		a.mu.Unlock()
+		g.Update()
+	}()
+}
+
+// loadChoices resolves a dynamic Choice source (groups, backups).
+func (a *app) loadChoices(in actions.Input) {
+	go func() {
+		items, err := actions.Choices(a.opt.Root, in)
+		res := choiceResult{Items: items}
+		if err != nil {
+			res.Err = err.Error()
+		}
+		a.mu.Lock()
+		m := maps.Clone(a.choices)
+		if m == nil {
+			m = map[string]choiceResult{}
+		}
+		m[in.Source] = res
+		a.choices = m
+		a.mu.Unlock()
+		g.Update()
+	}()
+}
+
+func (a *app) notify(text string, kind int) {
 	a.mu.Lock()
-	a.selected, a.logsFor, a.logs = name, "", ""
+	a.toasts = append(slices.Clone(a.toasts), toast{Text: text, Kind: kind, Until: time.Now().Add(4 * time.Second)})
+	if len(a.toasts) > 4 {
+		a.toasts = a.toasts[len(a.toasts)-4:]
+	}
+	a.mu.Unlock()
+	g.Update()
+}
+
+// ── jobs ──────────────────────────────────────────────────────────────────────
+
+const maxJobs = 30
+
+// start runs `homelab <args>` in the background, streaming its combined
+// output into a job. stdin, when not nil, is written to the process (secrets
+// for setup --secrets-stdin). done runs after it exits, off the UI thread.
+func (a *app) start(label string, args []string, stdin []byte, stream bool, done func(ok bool)) int {
+	ctx, cancel := context.WithCancel(context.Background())
+	a.mu.Lock()
+	a.nextJob++
+	id := a.nextJob
+	a.jobs = append(slices.Clone(a.jobs), job{ID: id, Label: label, Argv: slices.Clone(args), Running: true, Stream: stream, Started: time.Now()})
+	for len(a.jobs) > maxJobs {
+		i := slices.IndexFunc(a.jobs, func(j job) bool { return !j.Running })
+		if i < 0 {
+			break
+		}
+		a.jobs = slices.Delete(a.jobs, i, i+1)
+	}
+	a.cancels[id] = cancel
+	a.mu.Unlock()
+	g.Update()
+
+	go func() {
+		argv := append(slices.Clone(a.opt.CLI), args...)
+		cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+		// Own process group, so Stop also ends docker compose under the CLI.
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM) }
+		cmd.WaitDelay = 3 * time.Second
+		if stdin != nil {
+			cmd.Stdin = bytes.NewReader(stdin)
+		}
+		pr, pw := io.Pipe()
+		cmd.Stdout, cmd.Stderr = pw, pw
+		err := cmd.Start()
+		if err == nil {
+			go func() {
+				err := cmd.Wait()
+				_ = pw.CloseWithError(err)
+				a.finish(id, err, ctx.Err() != nil, label, done)
+			}()
+			a.pump(id, pr)
+			return
+		}
+		_ = pw.Close()
+		a.finish(id, err, false, label, done)
+	}()
+	return id
+}
+
+// pump copies output lines into the job.
+func (a *app) pump(id int, r io.Reader) {
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 64*1024), 1024*1024)
+	last := time.Now()
+	for sc.Scan() {
+		line := cleanLine(sc.Text())
+		a.mu.Lock()
+		if i := a.jobIndex(id); i >= 0 {
+			jobs := slices.Clone(a.jobs)
+			jobs[i].Lines = appendCapped(jobs[i].Lines, line)
+			a.jobs = jobs
+		}
+		a.mu.Unlock()
+		if time.Since(last) > 50*time.Millisecond {
+			last = time.Now()
+			g.Update()
+		}
+	}
+	g.Update()
+}
+
+func (a *app) jobIndex(id int) int {
+	return slices.IndexFunc(a.jobs, func(j job) bool { return j.ID == id })
+}
+
+func (a *app) finish(id int, err error, stopped bool, label string, done func(bool)) {
+	a.mu.Lock()
+	delete(a.cancels, id)
+	var stream bool
+	var tail string
+	if i := a.jobIndex(id); i >= 0 {
+		jobs := slices.Clone(a.jobs)
+		j := &jobs[i]
+		j.Running, j.Ended = false, time.Now()
+		stream = j.Stream
+		if err != nil && !stopped {
+			j.Err = err.Error()
+			if ee, ok := err.(*exec.ExitError); ok {
+				j.Code = ee.ExitCode()
+			}
+			for k := len(j.Lines) - 1; k >= 0; k-- {
+				if s := strings.TrimSpace(j.Lines[k]); s != "" {
+					tail = s
+					break
+				}
+			}
+		}
+		if stopped {
+			j.Lines = appendCapped(j.Lines, "— stopped —")
+		}
+		a.jobs = jobs
+	}
+	a.mu.Unlock()
+	ok := err == nil || stopped
+	switch {
+	case stopped:
+	case ok && !stream:
+		a.notify(label+" — done", toastOK)
+	case !ok:
+		msg := label + " failed"
+		if tail != "" {
+			msg += ": " + tail
+		}
+		a.notify(msg, toastFail)
+	}
+	if done != nil {
+		done(ok)
+	}
+	if !stream {
+		a.refresh()
+	}
+}
+
+func (a *app) stop(id int) {
+	a.mu.Lock()
+	c := a.cancels[id]
+	a.mu.Unlock()
+	if c != nil {
+		c()
+	}
+}
+
+func (a *app) stopAll() {
+	a.mu.Lock()
+	cs := slices.Collect(maps.Values(a.cancels))
+	a.mu.Unlock()
+	for _, c := range cs {
+		c()
+	}
+}
+
+func (a *app) clearJob(id int) {
+	a.mu.Lock()
+	if i := a.jobIndex(id); i >= 0 {
+		jobs := slices.Clone(a.jobs)
+		jobs[i].Lines = nil
+		a.jobs = jobs
+	}
 	a.mu.Unlock()
 }
 
-// loadLogs fetches the last lines of a service's logs, like `homelab logs -n`.
-func (a *app) loadLogs(name string) {
+// clearFinished drops every job that is not running.
+func (a *app) clearFinished() {
 	a.mu.Lock()
-	a.logsFor, a.logs = name, "loading…"
+	a.jobs = slices.DeleteFunc(slices.Clone(a.jobs), func(j job) bool { return !j.Running })
 	a.mu.Unlock()
+}
+
+// ── outside the window ───────────────────────────────────────────────────────
+
+// openTerminal runs the CLI argv in a terminal emulator. ok is false when
+// none is installed; the caller then shows the command to copy.
+func (a *app) openTerminal(label string, args []string) bool {
+	full := append(slices.Clone(a.opt.CLI), args...)
+	argv, ok := terminalArgv(full, os.Getenv, exec.LookPath)
+	if !ok {
+		return false
+	}
+	cmd := exec.Command(argv[0], argv[1:]...)
+	if err := cmd.Start(); err != nil {
+		a.notify("Could not open a terminal: "+err.Error(), toastFail)
+		return true
+	}
+	a.notify(label+" — opened in a terminal", toastInfo)
+	go func() { _ = cmd.Wait(); a.refresh() }()
+	return true
+}
+
+// openURL opens a link or directory with the desktop's handler.
+func (a *app) openURL(target string) {
 	go func() {
-		args := []string{"logs", "-n", "200"}
-		if name != coreName {
-			args = append(args, name)
+		opener := "xdg-open"
+		if _, err := exec.LookPath(opener); err != nil {
+			opener = "open" // macOS
 		}
-		argv := append(append([]string{}, a.opt.CLI...), args...)
-		out, _ := exec.Command(argv[0], argv[1:]...).CombinedOutput()
-		a.mu.Lock()
-		if a.logsFor == name {
-			a.logs = string(out)
+		if err := exec.Command(opener, target).Run(); err != nil {
+			a.notify(fmt.Sprintf("Could not open %s: %v", target, err), toastFail)
 		}
-		a.mu.Unlock()
-		g.Update()
 	}()
 }
 
@@ -155,245 +503,11 @@ func lastLine(s string) string {
 	return strings.TrimSpace(lines[len(lines)-1])
 }
 
-// ── layout ────────────────────────────────────────────────────────────────────
+// ── snapshot ──────────────────────────────────────────────────────────────────
 
-func (a *app) loop() {
+func (a *app) snapshot() {
 	a.mu.Lock()
 	a.v = a.shared
+	a.v.jobs = slices.Clone(a.jobs)
 	a.mu.Unlock()
-
-	g.SingleWindow().Layout(
-		a.statusLine(),
-		g.Separator(),
-		g.SplitLayout(g.DirectionVertical, &a.split, a.listPane(), a.detailPane()),
-	)
-}
-
-func (a *app) statusLine() g.Widget {
-	var running, installed int
-	for _, s := range a.v.services {
-		if s.Installed {
-			installed++
-			if s.Running > 0 {
-				running++
-			}
-		}
-	}
-	summary := g.Label(strconv.Itoa(running) + " running · " + strconv.Itoa(installed) + " installed")
-	switch {
-	case a.v.busy != "":
-		return g.Row(summary, g.Style().SetColor(g.StyleColorText, colPartial).To(g.Label("  "+a.v.busy+"…")))
-	case a.v.failed:
-		return g.Row(summary, g.Style().SetColor(g.StyleColorText, colErr).To(g.Label("  "+a.v.status)))
-	default:
-		return g.Row(summary, g.Style().SetColor(g.StyleColorText, colMuted).To(g.Label("  "+a.v.status)))
-	}
-}
-
-func (a *app) listPane() g.Widget {
-	rows := []*g.TableRowWidget{}
-	f := strings.ToLower(a.filter)
-	if strings.Contains(coreName, f) {
-		running := 0
-		for _, c := range a.v.core {
-			if c.State == "running" {
-				running++
-			}
-		}
-		col := colRunning
-		if running < len(a.v.core) {
-			col = colPartial
-		}
-		rows = append(rows, g.TableRow(
-			g.Selectable(coreName).Selected(a.v.selected == coreName).
-				Flags(g.SelectableFlagsSpanAllColumns).OnClick(func() { a.selectService(coreName) }),
-			g.Style().SetColor(g.StyleColorText, col).To(g.Label(strconv.Itoa(running)+"/"+strconv.Itoa(len(a.v.core))+" running")),
-			g.Label("core stack"),
-		))
-	}
-	for _, s := range a.v.services {
-		if f != "" && !strings.Contains(strings.ToLower(s.Name), f) {
-			continue
-		}
-		name := s.Name
-		state, col := "available", color.Color(colMuted)
-		if s.Installed {
-			state, col = stateText(s)
-		}
-		layers := make([]string, 0, 5)
-		for _, l := range s.ActiveLayers() {
-			layers = append(layers, string(l))
-		}
-		rows = append(rows, g.TableRow(
-			g.Selectable(name).Selected(name == a.v.selected).
-				Flags(g.SelectableFlagsSpanAllColumns).
-				OnClick(func() { a.selectService(name) }),
-			g.Style().SetColor(g.StyleColorText, col).To(g.Label(state)),
-			g.Label(strings.Join(layers, " ")),
-		))
-	}
-	return g.Layout{
-		g.InputText(&a.filter).Hint("filter services").Size(-1),
-		g.Table().Flags(g.TableFlagsRowBg|g.TableFlagsScrollY|g.TableFlagsBordersInnerV).
-			Freeze(0, 1).
-			Columns(g.TableColumn("Service"), g.TableColumn("State"), g.TableColumn("Exposed on")).
-			Rows(rows...),
-	}
-}
-
-func stateText(s service.Service) (string, color.Color) {
-	switch {
-	case s.Total > 0 && s.Running == s.Total:
-		return "running", colRunning
-	case s.Running > 0:
-		return strconv.Itoa(s.Running) + "/" + strconv.Itoa(s.Total) + " running", colPartial
-	default:
-		return "stopped", colMuted
-	}
-}
-
-func (a *app) detailPane() g.Widget {
-	if a.v.selected == coreName {
-		return a.coreDetail()
-	}
-	var svc *service.Service
-	for i := range a.v.services {
-		if a.v.services[i].Name == a.v.selected {
-			svc = &a.v.services[i]
-		}
-	}
-	if svc == nil {
-		return g.Label("Select a service.")
-	}
-	if !svc.Installed {
-		name := svc.Name
-		return g.Layout{
-			g.Label(name + " — not installed"),
-			g.Separator(),
-			g.Button("Install").Disabled(a.v.busy != "").OnClick(func() { a.do("homelab add "+name, "add", name) }),
-			g.Style().SetColor(g.StyleColorText, colMuted).To(
-				g.Label("Then configure it in a terminal: homelab setup " + name).Wrapped(true)),
-		}
-	}
-
-	name := svc.Name
-	state, col := stateText(*svc)
-	var buttons []g.Widget
-	for _, verb := range []string{"up", "stop", "restart", "down", "update"} {
-		buttons = append(buttons, g.Button(verb).Disabled(a.v.busy != "").
-			OnClick(func() { a.do("homelab "+verb+" "+name, verb, name) }))
-	}
-	lifecycle := g.Row(buttons...)
-
-	if a.v.logsFor != name {
-		a.loadLogs(name)
-	}
-
-	return g.Layout{
-		g.Row(g.Label(name), g.Style().SetColor(g.StyleColorText, col).To(g.Label(state))),
-		g.Separator(),
-		lifecycle,
-		g.Spacing(),
-		g.Label("Network layers"),
-		a.layerToggles(svc),
-		g.Spacing(),
-		a.containers(svc),
-		g.Spacing(),
-		g.Row(g.Label("Logs"), g.Button("Reload").OnClick(func() { a.loadLogs(name) })),
-		g.InputTextMultiline(&a.v.logs).Flags(g.InputTextFlagsReadOnly).Size(-1, -1),
-	}
-}
-
-// coreDetail shows the core containers and the core actions. Stop and down
-// are left to a shell: the core serves every route, this GUI's included.
-func (a *app) coreDetail() g.Widget {
-	var buttons []g.Widget
-	for _, verb := range []string{"up", "restart", "update"} {
-		buttons = append(buttons, g.Button(verb).Disabled(a.v.busy != "").
-			OnClick(func() { a.do("homelab "+verb, verb) }))
-	}
-	rows := make([]*g.TableRowWidget, 0, len(a.v.core))
-	for _, c := range a.v.core {
-		state, col := c.State, color.Color(colRunning)
-		if state != "running" {
-			col = colPartial
-		}
-		if state == "" {
-			state, col = "not running", colMuted
-		}
-		rows = append(rows, g.TableRow(g.Label(c.Name), g.Style().SetColor(g.StyleColorText, col).To(g.Label(state))))
-	}
-	if a.v.logsFor != coreName {
-		a.loadLogs(coreName)
-	}
-	return g.Layout{
-		g.Label("core stack"),
-		g.Separator(),
-		g.Row(buttons...),
-		g.Style().SetColor(g.StyleColorText, colMuted).To(
-			g.Label("update refreshes the core files, pulls and rebuilds. Stop/down the core from a shell.").Wrapped(true)),
-		g.Spacing(),
-		g.Table().Size(-1, float32(len(rows)+1)*24+4).
-			Columns(g.TableColumn("Container"), g.TableColumn("State")).Rows(rows...),
-		g.Spacing(),
-		g.Row(g.Label("Logs"), g.Button("Reload").OnClick(func() { a.loadLogs(coreName) })),
-		g.InputTextMultiline(&a.v.logs).Flags(g.InputTextFlagsReadOnly).Size(-1, -1),
-	}
-}
-
-// layerToggles shows one checkbox per configured layer, ticked when the
-// service is exposed on it, plus the addresses that layer resolves. Ticking
-// runs `homelab enable <svc> [--flag]`; unticking runs `homelab disable`.
-func (a *app) layerToggles(svc *service.Service) g.Widget {
-	active := map[string]bool{}
-	for _, l := range svc.ActiveLayers() {
-		active[string(l)] = true
-	}
-	env := a.opt.Env("")
-	name := svc.Name
-	var out g.Layout
-	for _, l := range a.opt.Layers {
-		layer := l.Name()
-		flag := []string{}
-		if l.Flag() != "" {
-			flag = []string{"--" + l.Flag()}
-		}
-		on := active[layer]
-		label := layer + " — " + l.Label()
-		out = append(out, g.Checkbox(label, &on).OnChange(func() {
-			verb := "disable"
-			if on {
-				verb = "enable"
-			}
-			a.do("homelab "+verb+" "+name+" "+strings.Join(flag, " "), append([]string{verb, name}, flag...)...)
-		}))
-		if active[layer] {
-			for _, addr := range l.ServiceAddresses(name, env) {
-				text := addr.URL
-				if addr.Note != "" {
-					text = strings.TrimSpace(text + " (" + addr.Note + ")")
-				}
-				out = append(out, g.Style().SetColor(g.StyleColorText, colMuted).To(g.Label("    "+text)))
-			}
-		}
-	}
-	return out
-}
-
-func (a *app) containers(svc *service.Service) g.Widget {
-	if len(svc.Containers) == 0 {
-		return g.Label("No containers — press up to create them.")
-	}
-	cs := append([]docker.ContainerDetail{}, svc.Containers...)
-	sort.Slice(cs, func(i, j int) bool { return cs[i].Name < cs[j].Name })
-	rows := make([]*g.TableRowWidget, 0, len(cs))
-	for _, c := range cs {
-		col := color.Color(colMuted)
-		if c.State == "running" {
-			col = colRunning
-		}
-		rows = append(rows, g.TableRow(g.Label(c.Name), g.Style().SetColor(g.StyleColorText, col).To(g.Label(c.State))))
-	}
-	return g.Table().Size(-1, float32(len(rows)+1)*24+4).
-		Columns(g.TableColumn("Container"), g.TableColumn("State")).Rows(rows...)
 }
