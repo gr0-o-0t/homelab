@@ -82,7 +82,7 @@ func runServiceStatus(dir, name string, env map[string]string) error {
 		label   string
 		enabled bool
 	}{
-		{"private", "Tailnet", svc.Enabled},
+		{"ts", "Tailnet", svc.Enabled},
 		{"cf", "Cloudflare", svc.PublicEnabled},
 		{"tor", "Tor", svc.HasTor}, // URL resolved below — use torOnionAddress when running
 		{"i2p", "I2P", svc.HasI2P},

@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/groot/homelab/internal/caddy"
 	"github.com/groot/homelab/internal/configgen"
 	"github.com/groot/homelab/internal/routing"
 	"github.com/groot/homelab/internal/run"
@@ -70,13 +69,14 @@ func runDisable(cmd *cobra.Command, args []string) error {
 		"cf": disableCf || disableAll, "i2p": disableI2P || disableAll,
 		"tor": disableTor || disableAll, "ygg": disableYgg || disableAll,
 	}
+	mgr, quiet, explain := quietCaddy(root)
 	hasSpecific := disableCf || disableI2P || disableTor || disableYgg
 
 	fmt.Printf("\n%s\n\n", styles.Header.Render(fmt.Sprintf("Disable: %s", svcName)))
 
 	// Private tailnet: the default target, and part of --all.
 	if !hasSpecific || disableAll {
-		if err := routing.DisablePrivate(root, svcName, nil); err != nil && !disableAll {
+		if err := routing.DisablePrivate(root, svcName, quiet); err != nil && !disableAll {
 			return err
 		}
 		fmt.Printf("  %s  Private: removed\n", styles.Warning.Render("→"))
@@ -97,7 +97,7 @@ func runDisable(cmd *cobra.Command, args []string) error {
 		fmt.Printf("  %s  %s: removed\n", styles.Warning.Render("→"), configgen.ExtensionLabel(ext))
 	}
 
-	if err := caddy.New(root).Reload(); err != nil {
+	if err := explain(mgr.Reload()); err != nil {
 		fmt.Printf("  %s  Caddy reload: %v\n", styles.Warning.Render("!"), err)
 	}
 

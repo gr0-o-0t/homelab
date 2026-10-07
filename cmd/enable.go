@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"fmt"
 	"sort"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/groot/homelab/internal/configgen"
 	"github.com/groot/homelab/internal/network"
 	"github.com/groot/homelab/internal/routing"
+	"github.com/groot/homelab/internal/run"
 	"github.com/groot/homelab/internal/service"
 	"github.com/groot/homelab/internal/tui/styles"
 	"github.com/spf13/cobra"
@@ -108,7 +110,7 @@ func runEnable(cmd *cobra.Command, args []string) error {
 	// next unrelated Caddy reload — a failed `--all` could make a service
 	// public through the tunnel without anyone noticing.
 	before := activeLayerSet(root, svcName)
-	mgr := caddy.New(root)
+	mgr, quiet, explain := quietCaddy(root)
 	snap, err := mgr.Snapshot() // Caddy's dirs, restored if this run fails
 	if err != nil {
 		return err
@@ -118,7 +120,7 @@ func runEnable(cmd *cobra.Command, args []string) error {
 		_ = snap.Restore()
 		for _, l := range added {
 			if l == "ts" {
-				_ = routing.DisablePrivate(root, svcName, nil)
+				_ = routing.DisablePrivate(root, svcName, quiet)
 				continue
 			}
 			_ = configgen.RemoveAllPortFiles(root, l, svcName)
@@ -133,7 +135,7 @@ func runEnable(cmd *cobra.Command, args []string) error {
 	}
 
 	// ── Private tailnet (always enabled) ───────────────────────────────
-	if err := routing.EnablePrivate(root, svcName, enableName, enablePorts, nil); err != nil {
+	if err := routing.EnablePrivate(root, svcName, enableName, enablePorts, quiet); err != nil {
 		return err
 	}
 	if !before["ts"] {
@@ -148,7 +150,7 @@ func runEnable(cmd *cobra.Command, args []string) error {
 	// ── Extension layers ───────────────────────────────────────────────
 	if !hasExts {
 		fmt.Println()
-		if err := mgr.ReloadOrRestore(snap); err != nil {
+		if err := explain(mgr.ReloadOrRestore(snap)); err != nil {
 			return rollback(err)
 		}
 		return nil
@@ -171,7 +173,7 @@ func runEnable(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Println()
-	if err := mgr.ReloadOrRestore(snap); err != nil {
+	if err := explain(mgr.ReloadOrRestore(snap)); err != nil {
 		return rollback(err)
 	}
 	return nil
@@ -276,8 +278,29 @@ func buildExtensionList() []string {
 }
 
 func caddyReload() error {
-	mgr := caddy.New(configDir())
-	return mgr.Reload()
+	mgr, _, explain := quietCaddy(configDir())
+	return explain(mgr.Reload())
+}
+
+// quietCaddy returns a Caddy manager whose docker output — validate and reload
+// emit a screenful of JSON log lines — is captured instead of streamed, the
+// runner it uses (for routing calls that reload through their own manager),
+// and explain, which attaches the tail of that output to an error. On success
+// the logs are noise; on failure they are the explanation.
+func quietCaddy(root string) (*caddy.Manager, *run.Commander, func(error) error) {
+	var buf bytes.Buffer
+	r := &run.Commander{Stdout: &buf, Stderr: &buf}
+	explain := func(err error) error {
+		if err == nil || buf.Len() == 0 {
+			return err
+		}
+		lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+		if len(lines) > 8 {
+			lines = lines[len(lines)-8:]
+		}
+		return fmt.Errorf("%w\n%s", err, strings.Join(lines, "\n"))
+	}
+	return caddy.NewWithRunner(root, r), r, explain
 }
 
 // ── Extension-specific enable helpers ───────────────────────────────────────

@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/groot/homelab/internal/caddy"
 	"github.com/groot/homelab/internal/configgen"
 	"github.com/groot/homelab/internal/routing"
 	"github.com/groot/homelab/internal/tui/styles"
@@ -63,6 +62,8 @@ func deleteOne(root, svcName string) error {
 		}
 	}
 
+	active := activeLayerSet(root, svcName) // read before anything is removed
+
 	// 1. Containers first. If they cannot be taken down, stop here: with the
 	// compose file deleted, nothing could take them down afterwards.
 	fmt.Printf("  %s  Removing containers…\n", styles.Muted.Render("→"))
@@ -73,22 +74,22 @@ func deleteOne(root, svcName string) error {
 		fmt.Printf("  %s  down failed, continuing (--force): %v\n", styles.Warning.Render("!"), err)
 	}
 
-	// 2. Every network layer. Each layer's Disable removes its files before
-	// reloading its daemon, so a stopped daemon still gets cleaned up — a
-	// leftover torrc entry would bring the service back on the same onion if
-	// one with this name is ever added again.
+	// 2. Every network layer the service is on. Caddy blocks are removed for
+	// all layers, but a layer's own Disable — which restarts its daemon and
+	// drops every connection on it — runs only where the service is actually
+	// exposed. The onion key goes too: disable keeps it so a re-enable gets
+	// the same address, but after delete it is just private key material.
 	fmt.Printf("  %s  Removing network config…\n", styles.Muted.Render("→"))
-	_ = routing.DisablePrivate(root, svcName, nil)
+	mgr, quiet, explain := quietCaddy(root)
+	_ = routing.DisablePrivate(root, svcName, quiet)
 	for _, ext := range []string{"cf", "i2p", "tor", "ygg"} {
 		_ = configgen.RemoveAllPortFiles(root, ext, svcName)
-		if layer, ok := extRegistry().Get(ext); ok {
+		if layer, ok := extRegistry().Get(ext); ok && active[ext] {
 			_ = layer.Disable(svcName)
 		}
 	}
-	if l, err := i2pLayer(); err == nil {
-		_ = l.RemoveTunnel(svcName)
-	}
-	if err := caddy.New(root).Reload(); err != nil {
+	_ = os.RemoveAll(filepath.Join(root, "tor", "hidden_service", svcName))
+	if err := explain(mgr.Reload()); err != nil {
 		fmt.Printf("  %s  Caddy reload: %v\n", styles.Warning.Render("!"), err)
 	}
 
