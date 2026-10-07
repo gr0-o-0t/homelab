@@ -1,9 +1,9 @@
-//go:build gui
+//go:build !nogui
 
 // Package gui is the desktop front end, `homelab --gui`, built on Dear ImGui
-// via giu. It is compiled only with `-tags gui` (see `make gui`): giu needs
-// cgo and the OpenGL/X11 development headers, which the default, pure-Go
-// build must not.
+// via giu. It is part of the default build, which therefore needs cgo and the
+// OpenGL/X11 development headers; `-tags nogui` (make build-headless) leaves it
+// out for servers, giving a pure-Go binary with no graphics libraries linked.
 //
 // Like the terminal dashboard it has no logic of its own: every button is an
 // action from internal/actions, run as the homelab CLI command it describes,

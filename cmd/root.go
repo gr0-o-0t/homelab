@@ -74,7 +74,7 @@ func init() {
 	rootCmd.PersistentFlags().BoolVar(&rootFlags.noColor, "no-color", false,
 		"disable coloured output")
 	rootCmd.Flags().BoolVar(&rootFlags.gui, "gui", false,
-		"Open the experimental desktop GUI (needs a build with `make gui`)")
+		"Open the desktop GUI")
 	rootCmd.PersistentFlags().BoolVar(&rootFlags.json, "json", false,
 		"output as JSON (on commands that support it)")
 

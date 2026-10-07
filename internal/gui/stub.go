@@ -1,11 +1,11 @@
-//go:build !gui
+//go:build nogui
 
 package gui
 
 import "errors"
 
-// Run reports that this binary was built without the GUI.
+// Run reports that this is a headless build.
 func Run(Options) error {
-	return errors.New("this homelab was built without the GUI — build it with `make gui` " +
-		"(needs cgo and the OpenGL/X11 development headers)")
+	return errors.New("this is a headless homelab build without the desktop GUI — use the " +
+		"standard build (`make build`, or the release binary without _headless) on a desktop")
 }

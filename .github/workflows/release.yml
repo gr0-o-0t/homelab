@@ -26,30 +26,52 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Build Linux amd64
+      # The default build includes the desktop GUI (giu), which needs cgo and
+      # the OpenGL/X11 development headers.
+      - name: Install GUI build dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libgl1-mesa-dev xorg-dev
+
+      - name: Build Linux amd64 (with GUI)
         run: make build-linux-amd64
 
-      - name: Build Linux arm64
+      - name: Build Linux amd64 headless
+        run: make build-linux-amd64-headless
+
+      - name: Build Linux arm64 (headless)
         run: make build-linux-arm64
+
+      # Release notes are the CHANGELOG.md section for this tag, followed by
+      # install instructions. A tag without a section fails here rather than
+      # publishing an empty release.
+      - name: Release notes
+        run: |
+          awk -v tag="${GITHUB_REF_NAME}" '
+            /^## / { if (found) exit; if (index($0, "## " tag) == 1) { found = 1; next } }
+            found { print }
+          ' CHANGELOG.md > notes.md
+          test -s notes.md || { echo "CHANGELOG.md has no section for ${GITHUB_REF_NAME}"; exit 1; }
+          cat >> notes.md <<'NOTES'
+
+          ### Install
+
+          ```bash
+          VERSION=${{ github.ref_name }}
+          # Desktop (amd64, includes `homelab --gui`; needs libGL and X11 at runtime):
+          wget https://github.com/${{ github.repository }}/releases/download/$VERSION/homelab_${VERSION}_linux_amd64
+          # Server without a desktop: use homelab_${VERSION}_linux_amd64_headless
+          # Raspberry Pi / ARM64 (headless): use homelab_${VERSION}_linux_arm64
+          chmod +x homelab_${VERSION}_linux_*
+          sudo mv homelab_${VERSION}_linux_* /usr/local/bin/homelab
+          ```
+
+          Then run `homelab setup` to configure, or `homelab update` to refresh an existing core.
+          NOTES
 
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
           name: "homelab ${{ github.ref_name }}"
-          generate_release_notes: true
-          body: |
-            ### Install
-
-            ```bash
-            VERSION=${{ github.ref_name }}
-            wget https://github.com/${{ github.repository }}/releases/download/$VERSION/homelab_${VERSION}_linux_amd64
-            chmod +x homelab_${VERSION}_linux_amd64
-            sudo mv homelab_${VERSION}_linux_amd64 /usr/local/bin/homelab
-            ```
-
-            Swap `amd64` for `arm64` on a Raspberry Pi or other ARM64 host.
-
-            Then run `homelab setup` to configure.
+          body_path: notes.md
           files: |
             homelab_*
           draft: false

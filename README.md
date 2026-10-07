@@ -47,8 +47,9 @@ See [docs/architecture.md](docs/architecture.md) for the full design rationale.
 ```bash
 git clone https://github.com/you/homelab
 cd homelab
-make build        # builds homelab binary in current directory
-make gui          # same, plus the experimental `homelab --gui` (needs cgo + OpenGL/X11 headers)
+make build           # homelab binary with the desktop GUI (needs cgo + OpenGL/X11 headers:
+                     #   Debian/Ubuntu: sudo apt install libgl1-mesa-dev xorg-dev)
+make build-headless  # pure Go, no GUI — for servers without a desktop
 make install      # go install → puts 'homelab' on your PATH
 ```
 
@@ -135,7 +136,7 @@ homelab status [service]        Show status overview or per-service detail (alia
 homelab logs [service]          Print logs like docker compose logs (-f, -n, -t, --since, --until; --tui)
 homelab exec <svc> <cmd...>     Run a command in a service container (-u, -w, -e, -T)
 homelab doctor [service]        Environment health check
-homelab --gui                   Experimental desktop GUI (build with `make gui`)
+homelab --gui                   Desktop GUI (not in headless builds)
 ```
 
 With no service, lifecycle commands act on the core stack. Several services may

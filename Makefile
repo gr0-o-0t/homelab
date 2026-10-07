@@ -15,28 +15,36 @@ endif
 
 LDFLAGS := -ldflags="-X github.com/groot/homelab/cmd.Version=$(VERSION)"
 
-.PHONY: build gui build-linux-amd64 build-linux-arm64 release install tidy test test-race lint lint-full ci catalog version
+.PHONY: build build-headless build-linux-amd64 build-linux-amd64-headless build-linux-arm64 release install tidy test test-race lint lint-full ci catalog version
 
+# The default build includes the desktop GUI (`homelab --gui`), which needs
+# cgo plus the OpenGL and X11 development headers
+# (Debian/Ubuntu: libgl1-mesa-dev xorg-dev). The result links libGL/libX11 and
+# will not start on a host without them — use build-headless for servers.
 build:
-	go build $(LDFLAGS) -o homelab .
+	CGO_ENABLED=1 go build $(LDFLAGS) -o homelab .
 
-# Experimental desktop GUI (`homelab --gui`). giu needs cgo plus the OpenGL
-# and X11 development headers (Debian/Ubuntu: libgl1-mesa-dev xorg-dev).
-gui:
-	CGO_ENABLED=1 go build -tags gui $(LDFLAGS) -o homelab .
+# Pure Go, no GUI, no graphics libraries: for servers and cross-compiling.
+build-headless:
+	CGO_ENABLED=0 go build -tags nogui $(LDFLAGS) -o homelab .
 
 build-linux-amd64:
-	GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o "homelab_$(VERSION)_linux_amd64" .
+	CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o "homelab_$(VERSION)_linux_amd64" .
 
+build-linux-amd64-headless:
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -tags nogui $(LDFLAGS) -o "homelab_$(VERSION)_linux_amd64_headless" .
+
+# ARM64 is built headless: cross-compiling the cgo GUI needs an ARM sysroot,
+# and ARM64 hosts here are servers and Raspberry Pis.
 build-linux-arm64:
-	GOOS=linux GOARCH=arm64 go build $(LDFLAGS) -o "homelab_$(VERSION)_linux_arm64" .
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -tags nogui $(LDFLAGS) -o "homelab_$(VERSION)_linux_arm64" .
 
-release: build-linux-amd64 build-linux-arm64
+release: build-linux-amd64 build-linux-amd64-headless build-linux-arm64
 	@echo "Release binaries:"
 	@ls -lh homelab_$(VERSION)_linux_*
 
 install:
-	go install $(LDFLAGS) .
+	CGO_ENABLED=1 go install $(LDFLAGS) .
 
 tidy:
 	go mod tidy
@@ -53,7 +61,8 @@ lint:
 lint-full:
 	golangci-lint run
 
-ci: lint lint-full test-race build
+# The headless build is part of CI so the nogui stub keeps compiling.
+ci: lint lint-full test-race build-headless build
 
 # Export the embedded service catalog to a root services/ directory for local browsing.
 # The canonical copy is assets/services/ — edit there, then run `make catalog`.

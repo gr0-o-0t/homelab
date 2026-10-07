@@ -9,8 +9,8 @@ A modular self-hosted infrastructure stack managed by a Go CLI (`homelab`). All 
 ## Building
 
 ```bash
-make build      # go build -o homelab .   (pure Go, no cgo)
-make gui        # go build -tags gui — adds the experimental `homelab --gui` (cgo + OpenGL/X11 headers)
+make build           # default build, includes the desktop GUI (cgo + OpenGL/X11 headers; links libGL/libX11)
+make build-headless  # -tags nogui: pure Go, no GUI — servers and cross-compiling
 make install    # go install .
 make tidy       # go mod tidy
 make test       # go test ./...
@@ -54,7 +54,7 @@ configuration, not container state: `down` leaves routes in place (they answer
 
 ```bash
 homelab                                            # interactive TUI (service browser)
-homelab --gui                                      # experimental desktop GUI (giu; needs `make gui`)
+homelab --gui                                      # desktop GUI (giu; absent from -tags nogui builds)
 homelab ls [-q]                                    # list installed services (table, --json, -q names)
 homelab status [service]   (alias: ps)             # show status overview or per-service detail
 homelab logs [service]                             # print logs like docker compose (-f, -n, -t, --since, --until, --tui)
@@ -378,7 +378,7 @@ homelab down --group media            # stop all media services
 | `internal/tui/logs` | Bubble Tea streaming log viewer |
 | `internal/tui/wizard` | Multi-step new-service scaffold wizard |
 | `internal/tui/spinner` | Goroutine spinner (TTY-aware) |
-| `internal/gui` | Experimental giu (Dear ImGui) desktop front end, `homelab --gui`; compiled only with `-tags gui` |
+| `internal/gui` | giu (Dear ImGui) desktop front end, `homelab --gui`; in the default build, left out with `-tags nogui` |
 | `internal/tui/styles` | Lipgloss Tokyo Night palette, shared across TUI and plain output |
 
 ### Front-end action registry (`internal/actions`)
