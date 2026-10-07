@@ -26,6 +26,12 @@
 	# Disable the Caddy admin API on the public interface; bind only to
 	# localhost inside the container's network namespace (= Tailscale namespace)
 	admin localhost:2019
+
+	# No automatic http→https redirects. :80 is shared with the tunnels
+	# (cloudflared, i2p), and the redirect for a tailnet-only site would
+	# answer a tunnel client with that private hostname. Tailnet clients use
+	# https:// directly; unmatched plain-HTTP hosts hit the catch-alls below.
+	auto_https disable_redirects
 }
 
 # ── Wildcard TLS snippet ──────────────────────────────────────────────────────
