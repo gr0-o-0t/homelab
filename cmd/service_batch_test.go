@@ -154,20 +154,6 @@ func TestResolveTargets_Group_NoConfigFile(t *testing.T) {
 	assert.Contains(t, err.Error(), "no groups")
 }
 
-// ── firstOrEmpty ──────────────────────────────────────────────────────────────
-
-func TestFirstOrEmpty_WithArg(t *testing.T) {
-	assert.Equal(t, "jellyfin", firstOrEmpty([]string{"jellyfin"}))
-}
-
-func TestFirstOrEmpty_NilArgs(t *testing.T) {
-	assert.Equal(t, "<service>", firstOrEmpty(nil))
-}
-
-func TestFirstOrEmpty_EmptySlice(t *testing.T) {
-	assert.Equal(t, "<service>", firstOrEmpty([]string{}))
-}
-
 // ── removeBrokenSymlinks ──────────────────────────────────────────────────────
 
 func TestRemoveBrokenSymlinks_NonexistentDirectory(t *testing.T) {

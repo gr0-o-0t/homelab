@@ -9,15 +9,15 @@ import (
 )
 
 var restartCmd = &cobra.Command{
-	Use:   "restart [service]",
-	Short: "Restart core stack or service(s)",
+	Use:   "restart [service...]",
+	Short: "Restart containers (no service: the core stack)",
 	Long: `Restart containers.
 
   homelab restart              # core stack
-  homelab restart jellyfin     # one service
-  homelab restart --all        # every installed service
+  homelab restart jellyfin immich  # these services
+  homelab restart -a           # every installed service
   homelab restart --group media  # all services in the "media" group`,
-	Args:              cobra.MaximumNArgs(1),
+	Args:              cobra.ArbitraryArgs,
 	ValidArgsFunction: completeServiceNames,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		dir := configDir()
@@ -45,7 +45,7 @@ var restartCmd = &cobra.Command{
 var restartFlags = batchFlags{}
 
 func init() {
-	restartCmd.Flags().BoolVar(&restartFlags.all, "all", false, "Restart all installed services")
+	restartCmd.Flags().BoolVarP(&restartFlags.all, "all", "a", false, "Restart all installed services")
 	restartCmd.Flags().StringVar(&restartFlags.group, "group", "", "Restart a named service group")
 	restartCmd.Flags().BoolVar(&restartFlags.build, "build", false, "Rebuild images before restarting")
 	_ = restartCmd.RegisterFlagCompletionFunc("group", completeGroupNames)

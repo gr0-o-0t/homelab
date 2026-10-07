@@ -1,31 +1,29 @@
 package cmd
 
 import (
-	"fmt"
 	"os"
 
 	"github.com/groot/homelab/internal/run"
-	"github.com/groot/homelab/internal/tui/styles"
 	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 )
 
 var execFlags struct {
-	interactive bool
-	tty         bool
+	tty, noTTY    bool
+	user, workdir string
+	env           []string
 }
 
 var execCmd = &cobra.Command{
 	Use:   "exec <service> <command> [args...]",
 	Short: "Execute a command in a running service container",
 	Long: `Execute a command in a running service container (equivalent to 'docker compose exec').
-TTY is auto-detected — use --interactive/--tty to override.
+A TTY is allocated when stdin and stdout are terminals; -T disables it.
 
   homelab exec jellyfin sh              # interactive shell
-  homelab exec jellyfin cat /etc/hosts  # run command, see output
-  homelab exec -i jellyfin ls -la       # non-interactive, no TTY
-
-Flags are passed through to 'docker compose exec'.`,
+  homelab exec jellyfin ls -la /config  # flags after the service go to the command
+  homelab exec -u root jellyfin id      # as another user
+  homelab exec -T jellyfin cat x > y    # no TTY, for piping`,
 	Args:              cobra.MinimumNArgs(1),
 	ValidArgsFunction: completeServiceNames,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -38,27 +36,27 @@ Flags are passed through to 'docker compose exec'.`,
 		}
 
 		var composeExecArgs []string
-
-		interactive := execFlags.interactive
-		tty := execFlags.tty
-		if !cmd.Flags().Changed("interactive") && !cmd.Flags().Changed("tty") {
-			if isatty.IsTerminal(os.Stdin.Fd()) && isatty.IsTerminal(os.Stdout.Fd()) {
-				interactive = true
-				tty = true
-			}
+		// compose exec allocates a TTY by default. Turn it off when there is
+		// no terminal (piping) or when asked, as docker's -T does.
+		tty := isatty.IsTerminal(os.Stdin.Fd()) && isatty.IsTerminal(os.Stdout.Fd())
+		if cmd.Flags().Changed("tty") {
+			tty = execFlags.tty
 		}
-
-		if interactive {
-			composeExecArgs = append(composeExecArgs, "--interactive")
+		if !tty || execFlags.noTTY {
+			composeExecArgs = append(composeExecArgs, "-T")
 		}
-		if tty {
-			composeExecArgs = append(composeExecArgs, "--tty")
+		if execFlags.user != "" {
+			composeExecArgs = append(composeExecArgs, "--user", execFlags.user)
 		}
-
+		if execFlags.workdir != "" {
+			composeExecArgs = append(composeExecArgs, "--workdir", execFlags.workdir)
+		}
+		for _, e := range execFlags.env {
+			composeExecArgs = append(composeExecArgs, "--env", e)
+		}
 		composeExecArgs = append(composeExecArgs, name)
 		composeExecArgs = append(composeExecArgs, cmdArgs...)
 
-		fmt.Printf("%s Executing in %s…\n", styles.Primary.Render("→"), styles.Bold.Render(name))
 		return run.Default().DockerComposeEnv(
 			run.ServiceComposeFile(root, name),
 			buildEnv(root, name),
@@ -68,6 +66,12 @@ Flags are passed through to 'docker compose exec'.`,
 }
 
 func init() {
-	execCmd.Flags().BoolVarP(&execFlags.interactive, "interactive", "i", false, "Keep stdin open (auto-detected)")
+	// Everything after the service name belongs to the command, as with
+	// docker exec: `homelab exec svc ls -la` must not parse -la as ours.
+	execCmd.Flags().SetInterspersed(false)
+	execCmd.Flags().BoolVarP(&execFlags.noTTY, "no-tty", "T", false, "Disable pseudo-TTY allocation")
+	execCmd.Flags().StringVarP(&execFlags.user, "user", "u", "", "Run as this user")
+	execCmd.Flags().StringVarP(&execFlags.workdir, "workdir", "w", "", "Working directory inside the container")
+	execCmd.Flags().StringArrayVarP(&execFlags.env, "env", "e", nil, "Set environment variables")
 	execCmd.Flags().BoolVarP(&execFlags.tty, "tty", "t", false, "Allocate a pseudo-TTY (auto-detected)")
 }

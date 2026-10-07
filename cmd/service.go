@@ -2,14 +2,14 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
-	"time"
 
-	"github.com/groot/homelab/internal/caddy"
 	"github.com/groot/homelab/internal/config"
 	"github.com/groot/homelab/internal/docker"
 	"github.com/groot/homelab/internal/run"
@@ -19,133 +19,42 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var serviceCmd = &cobra.Command{
-	Use:     "service",
-	Aliases: []string{"svc"},
-	Hidden:  true,
-	Short:   "Manage services",
-	Long:    "Start, stop, expose, and inspect individual service stacks.",
-	RunE:    runServiceList,
-}
-
-// ── list ─────────────────────────────────────────────────────────────────────
-
-var serviceListCmd = &cobra.Command{
-	Use:   "list",
-	Short: "List all services and their exposure status",
-	RunE:  runServiceList,
-}
-
-func runServiceList(_ *cobra.Command, _ []string) error {
-	root := configDir()
-	if isTTY() && !rootFlags.json {
-		return runListTUI(root)
-	}
-	svcs, err := discoverServices(root)
-	if err != nil {
-		return err
-	}
-	if rootFlags.json {
-		return printServiceJSON(svcs)
-	}
-	env := buildEnv(root, "")
-	printServiceTable(svcs, env, false)
-	return nil
-}
-
-// ── up ────────────────────────────────────────────────────────────────────────
-
-var serviceUpCmd = &cobra.Command{
-	Use:               "up [service]",
-	Short:             "Start a service stack",
-	Long:              `Start one or more service containers.`,
-	Args:              cobra.MaximumNArgs(1),
-	ValidArgsFunction: completeServiceNames,
-	RunE:              runServiceUp,
-}
-
-// ── down ──────────────────────────────────────────────────────────────────────
-
-var serviceDownCmd = &cobra.Command{
-	Use:               "down [service]",
-	Short:             "Stop a service stack and remove it from all Caddy routing",
-	Args:              cobra.MaximumNArgs(1),
-	ValidArgsFunction: completeServiceNames,
-	RunE:              runServiceDown,
-}
-
-// ── restart ───────────────────────────────────────────────────────────────────
-
-var serviceRestartCmd = &cobra.Command{
-	Use:               "restart [service]",
-	Short:             "Restart a service stack",
-	Args:              cobra.MaximumNArgs(1),
-	ValidArgsFunction: completeServiceNames,
-	RunE:              runServiceRestart,
-}
-
-// ── logs ──────────────────────────────────────────────────────────────────────
-
-var logsFlags struct {
-	follow bool
-	tail   string
-	since  string
-}
-
-var serviceLogsCmd = &cobra.Command{
-	Use:               "logs <service>",
-	Short:             "Tail service logs",
-	Args:              cobra.ExactArgs(1),
-	ValidArgsFunction: completeServiceNames,
-	RunE:              runServiceLogs,
-}
-
-// ── ps ────────────────────────────────────────────────────────────────────────
-
-var servicePsCmd = &cobra.Command{
-	Use:               "ps <service>",
-	Short:             "Show container status for a service",
-	Args:              cobra.ExactArgs(1),
-	ValidArgsFunction: completeServiceNames,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		name := args[0]
+// lsCmd lists installed services as a table, like `docker compose ls` — never
+// the dashboard, so it is safe in scripts and on a TTY alike.
+var lsCmd = &cobra.Command{
+	Use:   "ls",
+	Short: "List installed services",
+	Args:  cobra.NoArgs,
+	RunE: func(_ *cobra.Command, _ []string) error {
 		root := configDir()
-		if err := validateService(root, name); err != nil {
+		svcs, err := discoverServices(root)
+		if err != nil {
 			return err
 		}
-
-		dc, err := docker.New()
-		if err != nil {
-			// Fall back to docker compose ps if SDK unavailable.
-			return run.Default().DockerComposeEnv(
-				run.ServiceComposeFile(root, name),
-				buildEnv(root, name),
-				"ps",
-			)
+		switch {
+		case lsQuiet:
+			for _, s := range svcs {
+				fmt.Println(s.Name)
+			}
+		case rootFlags.json:
+			return printServiceJSON(svcs)
+		default:
+			printServiceTable(svcs, buildEnv(root, ""), false)
 		}
-		defer func() { _ = dc.Close() }()
-
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-
-		summaries, err := dc.ServiceContainers(ctx, name)
-		if err != nil || len(summaries) == 0 {
-			fmt.Printf("\n  %s %s — %s\n\n",
-				styles.Dot(false, false),
-				styles.Bold.Render(name),
-				styles.Muted.Render("no containers found"),
-			)
-			return err
-		}
-
-		details, err := dc.InspectContainers(ctx, summaries)
-		if err != nil {
-			details = nil
-		}
-
-		printPsTable(name, summaries, details)
 		return nil
 	},
+}
+
+var lsQuiet bool
+
+func init() {
+	lsCmd.Flags().BoolVarP(&lsQuiet, "quiet", "q", false, "Only print service names")
+	rootCmd.AddCommand(lsCmd)
+}
+
+var logsFlags struct {
+	follow, timestamps, tui bool
+	tail, since, until      string
 }
 
 // ── new ───────────────────────────────────────────────────────────────────────
@@ -198,20 +107,6 @@ func init() {
 	serviceNewCmd.Flags().StringVar(&newFlags.port, "port", "", "Port the container listens on")
 	serviceNewCmd.Flags().BoolVar(&newFlags.dryRun, "dry-run", false, "Print generated files without writing them")
 
-	// restart batch flags
-	serviceRestartCmd.Flags().BoolVar(&restartFlags.all, "all", false, "Restart all installed services")
-	serviceRestartCmd.Flags().StringVar(&restartFlags.group, "group", "", "Restart a named service group")
-	_ = serviceRestartCmd.RegisterFlagCompletionFunc("group", completeGroupNames)
-
-	// logs flags
-	serviceLogsCmd.Flags().BoolVarP(&logsFlags.follow, "follow", "f", false, "Follow log output")
-	serviceLogsCmd.Flags().StringVar(&logsFlags.tail, "tail", "", `Number of lines to show from the end (e.g. "100", "all")`)
-	serviceLogsCmd.Flags().StringVar(&logsFlags.since, "since", "", `Show logs since timestamp or relative duration (e.g. "30m", "2h", "2006-01-02T15:04:05Z")`)
-
-	serviceCmd.AddCommand(
-		serviceListCmd,
-		servicePsCmd,
-	)
 }
 
 func runServiceUp(_ *cobra.Command, args []string) error {
@@ -220,61 +115,49 @@ func runServiceUp(_ *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	for _, name := range names {
-		if err := validateService(root, name); err != nil {
-			return err
-		}
-		// Auto-configure root databases section for shared DB services.
-		if err := config.EnsureRootDBConfig(rootConfigFile(), name); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: auto-configuring databases: %v\n", err)
-		}
-		if err := ensureDBDependencies(context.Background(), root, name); err != nil {
-			return err
-		}
-		fmt.Printf("%s Starting %s…\n", styles.Primary.Render("→"), styles.Bold.Render(name))
-		composeFile := run.ServiceComposeFile(root, name)
-		env := buildEnv(root, name)
-		warnPortCollisions([]string{composeFile}, env, nil)
-		upArgs := []string{"up", "-d"}
-		if upFlags.build {
-			upArgs = append(upArgs, "--build")
-		}
-		if err := run.Default().DockerComposeEnv(composeFile, env, upArgs...); err != nil {
-			return err
-		}
+	extra := []string{}
+	if upFlags.build {
+		extra = append(extra, "--build")
 	}
-	return nil
+	return forEachService(root, names, func(name string) error { return upOne(root, name, extra...) })
 }
 
+// upOne is `up` for one service: shared databases first, then compose up.
+// `update` goes through here too, so a pulled service gets the same database
+// provisioning as a started one.
+func upOne(root, name string, extraArgs ...string) error {
+	// Auto-configure root databases section for shared DB services.
+	if err := config.EnsureRootDBConfig(rootConfigFile(), name); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: auto-configuring databases: %v\n", err)
+	}
+	if err := ensureDBDependencies(context.Background(), root, name); err != nil {
+		return err
+	}
+	fmt.Printf("%s Starting %s…\n", styles.Primary.Render("→"), styles.Bold.Render(name))
+	composeFile := run.ServiceComposeFile(root, name)
+	env := buildEnv(root, name)
+	warnPortCollisions([]string{composeFile}, env, nil)
+	return run.Default().DockerComposeEnv(composeFile, env, append([]string{"up", "-d"}, extraArgs...)...)
+}
+
+// runServiceDown removes a service's containers. Routing is left alone, as
+// `docker compose down` leaves port mappings in the compose file: exposure is
+// configuration, so `down` then `up` brings a service back exactly as it was.
+// While the service is down its routes answer 502. `disable` removes them.
 func runServiceDown(_ *cobra.Command, args []string) error {
 	root := configDir()
 	names, err := resolveTargets(root, downFlags.all, downFlags.group, args)
 	if err != nil {
 		return err
 	}
-	for _, name := range names {
-		if err := validateService(root, name); err != nil {
-			return err
-		}
-		// Always clean up routing before stopping — leaves Caddy in a valid state.
-		if err := runWithSpinner(
-			fmt.Sprintf("Disabling %s routes…", name),
-			func(r *run.Commander) error {
-				return caddy.NewWithRunner(root, r).DisableBoth(name)
-			},
-		); err != nil {
-			fmt.Printf("  %s\n", styles.Muted.Render(fmt.Sprintf("(routing cleanup: %v)", err)))
-		}
-		fmt.Printf("%s Stopping %s…\n", styles.Warning.Render("→"), styles.Bold.Render(name))
-		if err := run.Default().DockerComposeEnv(
+	return forEachService(root, names, func(name string) error {
+		fmt.Printf("%s Removing %s…\n", styles.Warning.Render("→"), styles.Bold.Render(name))
+		return run.Default().DockerComposeEnv(
 			run.ServiceComposeFile(root, name),
 			buildEnv(root, name),
 			"down",
-		); err != nil {
-			return err
-		}
-	}
-	return nil
+		)
+	})
 }
 
 func runServiceRestart(_ *cobra.Command, args []string) error {
@@ -283,36 +166,21 @@ func runServiceRestart(_ *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	for _, name := range names {
-		if err := validateService(root, name); err != nil {
-			return err
-		}
+	return forEachService(root, names, func(name string) error {
 		// Same reasoning as `up`: restarting a service whose database is down
 		// just produces connection errors.
 		if err := ensureDBDependencies(context.Background(), root, name); err != nil {
 			return err
 		}
+		composeArgs := []string{"restart"}
+		verb := "Restarting"
 		if restartFlags.build {
-			fmt.Printf("%s Rebuilding and recreating %s…\n", styles.Primary.Render("→"), styles.Bold.Render(name))
-			if err := run.Default().DockerComposeEnv(
-				run.ServiceComposeFile(root, name),
-				buildEnv(root, name),
-				"up", "-d", "--build",
-			); err != nil {
-				return err
-			}
-		} else {
-			fmt.Printf("%s Restarting %s…\n", styles.Primary.Render("→"), styles.Bold.Render(name))
-			if err := run.Default().DockerComposeEnv(
-				run.ServiceComposeFile(root, name),
-				buildEnv(root, name),
-				"restart",
-			); err != nil {
-				return err
-			}
+			composeArgs = []string{"up", "-d", "--build"}
+			verb = "Rebuilding and recreating"
 		}
-	}
-	return nil
+		fmt.Printf("%s %s %s…\n", styles.Primary.Render("→"), verb, styles.Bold.Render(name))
+		return run.Default().DockerComposeEnv(run.ServiceComposeFile(root, name), buildEnv(root, name), composeArgs...)
+	})
 }
 
 func runServiceLogs(_ *cobra.Command, args []string) error {
@@ -321,30 +189,35 @@ func runServiceLogs(_ *cobra.Command, args []string) error {
 	if err := validateService(root, name); err != nil {
 		return err
 	}
-	// Use the interactive TUI only when on a TTY with no explicit log flags.
-	if isTTY() && !logsFlags.follow && logsFlags.tail == "" && logsFlags.since == "" {
+	if logsFlags.tui {
 		return runLogTUI(root, name)
-	}
-	logArgs := []string{"logs"}
-	if logsFlags.follow {
-		logArgs = append(logArgs, "-f")
-	}
-	if logsFlags.tail != "" {
-		logArgs = append(logArgs, "--tail", logsFlags.tail)
-	}
-	if logsFlags.since != "" {
-		logArgs = append(logArgs, "--since", logsFlags.since)
 	}
 	return run.Default().DockerComposeEnv(
 		run.ServiceComposeFile(root, name),
 		buildEnv(root, name),
-		logArgs...,
+		logsArgs()...,
 	)
 }
 
-// ── helpers ───────────────────────────────────────────────────────────────────
+// logsArgs translates homelab's logs flags into `docker compose logs` flags;
+// they are the same flags, so this is a straight pass-through.
+func logsArgs() []string {
+	a := []string{"logs"}
+	if logsFlags.follow {
+		a = append(a, "-f")
+	}
+	if logsFlags.timestamps {
+		a = append(a, "-t")
+	}
+	for _, kv := range [][2]string{{"--tail", logsFlags.tail}, {"--since", logsFlags.since}, {"--until", logsFlags.until}} {
+		if kv[1] != "" {
+			a = append(a, kv[0], kv[1])
+		}
+	}
+	return a
+}
 
-// resolveTargets returns the service names to operate on based on --all, --group, or positional args.
+// ── helpers ───────────────────────────────────────────────────────────────────
 
 // resolveTargets returns the service names to operate on based on --all, --group, or positional args.
 func resolveTargets(root string, all bool, group string, args []string) ([]string, error) {
@@ -355,7 +228,7 @@ func resolveTargets(root string, all bool, group string, args []string) ([]strin
 		return nil, fmt.Errorf("cannot combine a service name with --all or --group")
 	}
 	if len(args) > 0 {
-		return []string{args[0]}, nil
+		return args, nil
 	}
 	if !all && group == "" {
 		return nil, fmt.Errorf("service name, --all, or --group <name> required\n\n  Examples:\n    homelab up jellyfin\n    homelab up --all\n    homelab up --group media")
@@ -395,16 +268,6 @@ func resolveTargets(root string, all bool, group string, args []string) ([]strin
 	return members, nil
 }
 
-// firstOrEmpty returns the first element of args or a placeholder string.
-
-// firstOrEmpty returns the first element of args or a placeholder string.
-func firstOrEmpty(args []string) string {
-	if len(args) > 0 {
-		return args[0]
-	}
-	return "<service>"
-}
-
 // ── output helpers ────────────────────────────────────────────────────────────
 
 // discoverServices tries the Docker SDK first for live container data, then
@@ -418,11 +281,45 @@ func discoverServices(root string) ([]service.Service, error) {
 	return service.DiscoverWithDocker(root, dc)
 }
 
-// printPsTable renders a rich container table for `service ps`.
-// Ports and Restart columns added alongside existing health/uptime/image columns.
+// serviceNameRE is what a service name may look like. Names become path
+// segments, Caddy site addresses and compose project names, so anything else
+// ("../core", "*", a space) is refused before it reaches any of them.
+var serviceNameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
 
-// validateService checks that services/<name>/ and its docker-compose.yml exist.
+func validName(name string) error {
+	if !serviceNameRE.MatchString(name) {
+		return fmt.Errorf("invalid service name %q: use lowercase letters, digits, '-' and '_'", name)
+	}
+	return nil
+}
+
+// forEachService runs fn for every target and keeps going past failures, the
+// way `docker compose` does: one broken service must not leave the rest of a
+// `down --all` running. Failures are reported inline and returned together.
+func forEachService(root string, names []string, fn func(name string) error) error {
+	var errs []error
+	for _, name := range names {
+		err := validateService(root, name)
+		if err == nil {
+			err = fn(name)
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%s %s: %v\n", styles.Err.Render("✗"), name, err)
+			errs = append(errs, fmt.Errorf("%s: %w", name, err))
+		}
+	}
+	if len(errs) > 1 {
+		return fmt.Errorf("%d of %d services failed", len(errs), len(names))
+	}
+	return errors.Join(errs...)
+}
+
+// validateService checks the name, and that services/<name>/ and its
+// docker-compose.yml exist.
 func validateService(root, name string) error {
+	if err := validName(name); err != nil {
+		return err
+	}
 	svcDir := filepath.Join(root, "services", name)
 	if _, err := os.Stat(svcDir); os.IsNotExist(err) {
 		svcs, _ := service.Discover(root)

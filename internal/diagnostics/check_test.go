@@ -81,8 +81,8 @@ func TestRunServiceRoutingChecks_NonExistentService(t *testing.T) {
 	g := diagnostics.RunServiceRoutingChecks("/nonexistent", "nosuchservice")
 	assert.Equal(t, "Service Routing", g.Title)
 	assert.NotEmpty(t, g.Results)
-	// Without dir, Caddy routes won't be active
-	assert.Equal(t, diagnostics.StatusFail, g.Results[0].Status)
+	// Not exposed is a valid state: a warning, never a failure --fix "repairs".
+	assert.Equal(t, diagnostics.StatusWarn, g.Results[0].Status)
 }
 
 func TestCheckGroup_EmptyResults(t *testing.T) {

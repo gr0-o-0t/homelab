@@ -7,10 +7,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestDisableFlags_ShorthandAMapsToAll guards the documented behavior
-// ("homelab disable <svc> -a  # remove all layers + stop container"):
-// -a must be the shorthand for --all, not --stop, and --all must resolve to
-// removing every extension layer plus stopping the container.
+// TestDisableFlags_ShorthandAMapsToAll guards -a as the shorthand for --all
+// (every layer), with --stop a separate, unabbreviated opt-in.
 func TestDisableFlags_ShorthandAMapsToAll(t *testing.T) {
 	flag := disableCmd.Flags().ShorthandLookup("a")
 	require.NotNil(t, flag, "expected -a to be a registered shorthand")
@@ -21,31 +19,25 @@ func TestDisableFlags_ShorthandAMapsToAll(t *testing.T) {
 	assert.Empty(t, stopFlag.Shorthand, "--stop should have no shorthand of its own")
 }
 
-// TestDisableAll_ImpliesStop calls the real runDisable (against a
-// nonexistent service in a temp config dir, which every layer handles
-// gracefully — see TestDisableCommand_MissingService) with only -a set, and
-// checks that it flipped disableCf/i2p/tor/ygg/stop itself. This exercises
-// runDisable's actual resolution block rather than a re-implementation of it.
-func TestDisableAll_ImpliesStop(t *testing.T) {
-	origCf, origI2P, origTor, origYgg, origAll, origStop :=
-		disableCf, disableI2P, disableTor, disableYgg, disableAll, disableStop
-	t.Cleanup(func() {
-		disableCf, disableI2P, disableTor, disableYgg, disableAll, disableStop =
-			origCf, origI2P, origTor, origYgg, origAll, origStop
-	})
-
-	disableCf, disableI2P, disableTor, disableYgg, disableStop = false, false, false, false, false
-	disableAll = true
-
+// TestDisableAll_DoesNotStop checks that -a only removes layers: against a
+// service with no compose file, stopping would fail, so -a alone must succeed
+// and -a --stop must not.
+func TestDisableAll_DoesNotStop(t *testing.T) {
+	origAll, origStop := disableAll, disableStop
 	origConfigDir := rootFlags.configDir
+	t.Cleanup(func() {
+		disableAll, disableStop = origAll, origStop
+		rootFlags.configDir = origConfigDir
+	})
 	rootFlags.configDir = t.TempDir()
-	t.Cleanup(func() { rootFlags.configDir = origConfigDir })
 
+	disableAll, disableStop = true, false
 	require.NoError(t, runDisable(disableCmd, []string{"nonexistent"}))
 
-	assert.True(t, disableCf)
-	assert.True(t, disableI2P)
-	assert.True(t, disableTor)
-	assert.True(t, disableYgg)
-	assert.True(t, disableStop)
+	disableStop = true
+	assert.Error(t, runDisable(disableCmd, []string{"nonexistent"}), "--stop must take the service down")
+}
+
+func TestDisable_RejectsPathNames(t *testing.T) {
+	assert.Error(t, runDisable(disableCmd, []string{"../core"}))
 }

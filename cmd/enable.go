@@ -3,12 +3,14 @@ package cmd
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/groot/homelab/internal/caddy"
 	"github.com/groot/homelab/internal/config"
 	"github.com/groot/homelab/internal/configgen"
 	"github.com/groot/homelab/internal/network"
 	"github.com/groot/homelab/internal/routing"
+	"github.com/groot/homelab/internal/service"
 	"github.com/groot/homelab/internal/tui/styles"
 	"github.com/spf13/cobra"
 )
@@ -67,6 +69,15 @@ func init() {
 func runEnable(cmd *cobra.Command, args []string) error {
 	svcName := args[0]
 	root := configDir()
+	if err := validName(svcName); err != nil {
+		return err
+	}
+	// --name becomes a Caddy site address: "*" would be a catch-all.
+	if enableName != "" {
+		if err := validName(enableName); err != nil {
+			return fmt.Errorf("--name: %w", err)
+		}
+	}
 
 	exts := buildExtensionList()
 	hasExts := len(exts) > 0
@@ -92,9 +103,41 @@ func runEnable(cmd *cobra.Command, args []string) error {
 		displayName = enableName
 	}
 
+	// Layers this run turns on, so a failure part-way can take them back off.
+	// Without that, the blocks already written stay on disk and go live on the
+	// next unrelated Caddy reload — a failed `--all` could make a service
+	// public through the tunnel without anyone noticing.
+	before := activeLayerSet(root, svcName)
+	mgr := caddy.New(root)
+	snap, err := mgr.Snapshot() // Caddy's dirs, restored if this run fails
+	if err != nil {
+		return err
+	}
+	var added []string
+	rollback := func(cause error) error {
+		_ = snap.Restore()
+		for _, l := range added {
+			if l == "ts" {
+				_ = routing.DisablePrivate(root, svcName, nil)
+				continue
+			}
+			_ = configgen.RemoveAllPortFiles(root, l, svcName)
+			if layer, ok := extRegistry().Get(l); ok {
+				_ = layer.Disable(svcName)
+			}
+		}
+		if len(added) > 0 {
+			fmt.Printf("  %s  rolled back: %s\n", styles.Warning.Render("!"), strings.Join(added, ", "))
+		}
+		return cause
+	}
+
 	// ── Private tailnet (always enabled) ───────────────────────────────
 	if err := routing.EnablePrivate(root, svcName, enableName, enablePorts, nil); err != nil {
 		return err
+	}
+	if !before["ts"] {
+		added = append(added, "ts")
 	}
 	fmt.Printf("  %s  Private: %s.%s.%s\n",
 		styles.Success.Render("✓"),
@@ -105,12 +148,21 @@ func runEnable(cmd *cobra.Command, args []string) error {
 	// ── Extension layers ───────────────────────────────────────────────
 	if !hasExts {
 		fmt.Println()
-		return caddyReload()
+		if err := mgr.ReloadOrRestore(snap); err != nil {
+			return rollback(err)
+		}
+		return nil
 	}
 
 	for _, ext := range exts {
 		if err := enableExtension(root, svcName, displayName, ext); err != nil {
-			return fmt.Errorf("%s: %w", ext, err)
+			if !before[ext] {
+				added = append(added, ext) // may be half-written
+			}
+			return rollback(fmt.Errorf("%s: %w", ext, err))
+		}
+		if !before[ext] {
+			added = append(added, ext)
 		}
 		fmt.Printf("  %s  %s: enabled\n",
 			styles.Success.Render("✓"),
@@ -119,7 +171,24 @@ func runEnable(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Println()
-	return caddyReload()
+	if err := mgr.ReloadOrRestore(snap); err != nil {
+		return rollback(err)
+	}
+	return nil
+}
+
+// activeLayerSet is the set of layers a service is currently exposed on.
+func activeLayerSet(root, name string) map[string]bool {
+	set := map[string]bool{}
+	svcs, _ := service.Discover(root)
+	for _, s := range svcs {
+		if s.Name == name {
+			for _, l := range s.ActiveLayers() {
+				set[string(l)] = true
+			}
+		}
+	}
+	return set
 }
 
 // enableExtension configures one layer for a service: the layer's own config

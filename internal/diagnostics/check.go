@@ -8,13 +8,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
-	"github.com/groot/homelab/internal/caddy"
 	"github.com/groot/homelab/internal/config"
 	"github.com/groot/homelab/internal/docker"
 	"github.com/groot/homelab/internal/run"
 	"github.com/groot/homelab/internal/secrets"
+	"github.com/groot/homelab/internal/service"
 )
 
 // Status represents the outcome of a single diagnostic check.
@@ -347,22 +348,27 @@ func RunServiceContainerChecks(name string, dc *docker.Client) CheckGroup {
 }
 
 // RunServiceRoutingChecks checks whether a service has active Caddy routes.
+// RunServiceRoutingChecks reports which layers a service is exposed on.
+//
+// Not being exposed is a valid state — `homelab disable` exists to get there —
+// so it is a warning, never a failure. It used to fail, and `doctor --fix`
+// "repaired" it by re-enabling every deliberately disabled service. Exposure is
+// read through service discovery, which understands generated route files as
+// well as the legacy symlinks; the old symlink-only check called every
+// port-declared service unexposed.
 func RunServiceRoutingChecks(dir, name string) CheckGroup {
-	mgr := caddy.New(dir)
-	enabled, _ := mgr.IsEnabled(name)
-	pubEnabled, _ := mgr.IsPublicEnabled(name)
-
-	var results []CheckResult
-	if enabled || pubEnabled {
-		results = append(results, CheckResult{
-			Name: "Caddy routes", Status: StatusPass,
-			Message: "at least one Caddy route active",
-		})
-	} else {
-		results = append(results, CheckResult{
-			Name: "Caddy routes", Status: StatusFail, Message: "at least one Caddy route active",
-		})
+	var layers []string
+	svcs, _ := service.Discover(dir)
+	for _, s := range svcs {
+		if s.Name == name {
+			for _, l := range s.ActiveLayers() {
+				layers = append(layers, string(l))
+			}
+		}
 	}
-
-	return CheckGroup{Title: "Service Routing", Results: results}
+	r := CheckResult{Name: "Caddy routes", Status: StatusPass, Message: "exposed on " + strings.Join(layers, ", ")}
+	if len(layers) == 0 {
+		r.Status, r.Message = StatusWarn, "not exposed — run homelab enable "+name
+	}
+	return CheckGroup{Title: "Service Routing", Results: []CheckResult{r}}
 }

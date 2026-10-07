@@ -228,21 +228,6 @@ func runSetup(_ *cobra.Command, _ []string) error {
 
 // ── homelab service setup ─────────────────────────────────────────────────────
 
-var serviceSetupCmd = &cobra.Command{
-	Use:               "setup <service>",
-	Short:             "Configure variables and secrets for a service",
-	Args:              cobra.ExactArgs(1),
-	ValidArgsFunction: completeServiceNames,
-	Long: `Interactive wizard for a single service's configuration.
-
-Non-secret values are saved to services/<name>/config.yaml in the config dir.
-Secrets are stored in the system keyring.
-
-Variables declared in the root config.yaml are inherited automatically
-and only need to be set here if you want to override them for this service.`,
-	RunE: runServiceSetup,
-}
-
 func runServiceSetup(_ *cobra.Command, args []string) error {
 	name := args[0]
 	dir := configDir()
@@ -351,7 +336,6 @@ func runServiceSetup(_ *cobra.Command, args []string) error {
 }
 
 func init() {
-	serviceCmd.AddCommand(serviceSetupCmd)
 }
 
 func step(icon, msg string) {

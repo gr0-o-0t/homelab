@@ -10,16 +10,16 @@ import (
 )
 
 var upCmd = &cobra.Command{
-	Use:   "up [service]",
-	Short: "Create and start containers (primary lifecycle)",
+	Use:   "up [service...]",
+	Short: "Create and start containers (no service: the core stack)",
 	Long: `Create and start service containers (equivalent to 'docker compose up -d').
 
   homelab up                    # core stack
-  homelab up jellyfin           # one service
-  homelab up --all              # every installed service
+  homelab up jellyfin immich  # these services
+  homelab up -a                 # every installed service
   homelab up --group media      # all services in the "media" group
   homelab up --build            # rebuild images before starting`,
-	Args:              cobra.MaximumNArgs(1),
+	Args:              cobra.ArbitraryArgs,
 	ValidArgsFunction: completeServiceNames,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		dir := configDir()
@@ -55,7 +55,7 @@ var upCmd = &cobra.Command{
 var upFlags = batchFlags{}
 
 func init() {
-	upCmd.Flags().BoolVar(&upFlags.all, "all", false, "Start all installed services")
+	upCmd.Flags().BoolVarP(&upFlags.all, "all", "a", false, "Start all installed services")
 	upCmd.Flags().StringVar(&upFlags.group, "group", "", "Start a named service group")
 	upCmd.Flags().BoolVar(&upFlags.build, "build", false, "Rebuild images before starting")
 	_ = upCmd.RegisterFlagCompletionFunc("group", completeGroupNames)

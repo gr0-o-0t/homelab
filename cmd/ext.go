@@ -40,6 +40,8 @@ Extensions:
   ygg  Yggdrasil mesh     (IPv6 mesh)
 
 Commands:
+  ext enable <ext>         Turn an extension on and start its container
+  ext disable <ext>        Stop its container and turn it off
   ext list                 List extensions and their enabled/disabled status
   ext status [ext]         Show container status for all or one extension
   ext logs [ext]           Stream logs for all or one extension
@@ -281,12 +283,67 @@ func runExtStartStop(args []string, stop bool, build bool) error {
 	)
 }
 
+// ── enable / disable ─────────────────────────────────────────────────────────
+
+var extEnableCmd = &cobra.Command{
+	Use:               "enable <ext>",
+	Short:             "Turn an extension on and start its container",
+	Args:              cobra.ExactArgs(1),
+	ValidArgsFunction: completeExtNames,
+	RunE:              func(_ *cobra.Command, args []string) error { return setExtEnabled(args[0], true) },
+}
+
+var extDisableCmd = &cobra.Command{
+	Use:               "disable <ext>",
+	Short:             "Stop an extension's container and turn it off",
+	Args:              cobra.ExactArgs(1),
+	ValidArgsFunction: completeExtNames,
+	RunE:              func(_ *cobra.Command, args []string) error { return setExtEnabled(args[0], false) },
+}
+
+// setExtEnabled records the extension in config.yaml — the same list `homelab
+// setup` edits — and starts or stops its container to match. Services still
+// need `homelab enable <svc> --<ext>` to be exposed on it.
+func setExtEnabled(ext string, on bool) error {
+	if _, ok := extContainer[ext]; !ok {
+		return fmt.Errorf("unknown extension %q\n\nAvailable: %s", ext, strings.Join(validExtNames(), ", "))
+	}
+	ext = config.ResolveExtension(ext)
+	cfgFile := rootConfigFile()
+	cfg, err := config.Load(cfgFile)
+	if err != nil {
+		return err
+	}
+	if cfg == nil {
+		return fmt.Errorf("no config.yaml — run homelab setup first")
+	}
+	if !on {
+		if err := runExtStartStop([]string{ext}, true, false); err != nil {
+			return err
+		}
+		cfg.DisableExtension(ext)
+		return config.Save(cfgFile, cfg)
+	}
+	cfg.EnableExtension(ext)
+	if err := config.Save(cfgFile, cfg); err != nil {
+		return err
+	}
+	if err := runExtStartStop([]string{ext}, false, false); err != nil {
+		return err
+	}
+	fmt.Printf("%s %s enabled — expose a service with %s\n", styles.Success.Render("✓"),
+		config.ExtensionLabel(ext), styles.Primary.Render("homelab enable <svc> --"+ext))
+	return nil
+}
+
 // ── init ──────────────────────────────────────────────────────────────────────
 
 func init() {
 	extStartCmd.Flags().BoolVar(&extBuild, "build", false, "Rebuild images before starting")
 
 	extCmd.AddCommand(
+		extEnableCmd,
+		extDisableCmd,
 		extListCmd,
 		extStatusCmd,
 		extLogsCmd,

@@ -97,11 +97,6 @@ func ensureDBDependencies(ctx context.Context, root, name string) error {
 // healthy. Installation is left to the user: the shared databases need a root
 // password in the keyring before they will initialise, so silently installing
 // one would just produce a container that crash-loops.
-
-// startSharedDB brings up the shared instance for dbType and waits for it to be
-// healthy. Installation is left to the user: the shared databases need a root
-// password in the keyring before they will initialise, so silently installing
-// one would just produce a container that crash-loops.
 func startSharedDB(ctx context.Context, root string, dbType config.DBType, p *db.Provisioner) error {
 	shared := config.SharedDBName(dbType)
 	composeFile := run.ServiceComposeFile(root, shared)

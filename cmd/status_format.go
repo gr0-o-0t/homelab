@@ -32,9 +32,6 @@ func tailscaleFQDN() (string, bool) {
 
 // mergedCoreState returns a styled state string that merges container state
 // with Docker healthcheck status for core table entries.
-
-// mergedCoreState returns a styled state string that merges container state
-// with Docker healthcheck status for core table entries.
 func mergedCoreState(state, health string) string {
 	switch {
 	case state != "running":
@@ -49,12 +46,6 @@ func mergedCoreState(state, health string) string {
 		return styles.Success.Render("running")
 	}
 }
-
-// mergedState returns a styled state string that merges container state
-// with Docker healthcheck status. Used by the services sub-table.
-//
-// Returns one of: healthy, running, starting, unhealthy, restarting,
-// stopped, partial (N/M).
 
 // mergedState returns a styled state string that merges container state
 // with Docker healthcheck status. Used by the services sub-table.

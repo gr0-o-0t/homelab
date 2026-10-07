@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/groot/homelab/internal/docker"
 	"github.com/groot/homelab/internal/service"
 	"github.com/groot/homelab/internal/tui/styles"
 )
@@ -99,72 +98,6 @@ func printServiceTable(svcs []service.Service, env map[string]string, wide bool)
 // discoverServices tries the Docker SDK first for live container data, then
 // falls back to plain filesystem discovery if the daemon is unavailable.
 
-// printPsTable renders a rich container table for `service ps`.
-// Ports and Restart columns added alongside existing health/uptime/image columns.
-func printPsTable(name string, summaries []docker.ContainerSummary, details []docker.ContainerDetail) {
-	fmt.Printf("\n  %s %s\n\n",
-		styles.Header.Render("Service:"),
-		styles.Bold.Render(name),
-	)
-
-	const (
-		wName    = 24
-		wState   = 12
-		wHealth  = 12
-		wUptime  = 14
-		wPorts   = 22
-		wRestart = 8
-	)
-
-	fmt.Printf("  %s  %s  %s  %s  %s  %s  %s\n",
-		styles.TableHeader.Render(styles.Width(wName).Render("CONTAINER")),
-		styles.TableHeader.Render(styles.Width(wState).Render("STATE")),
-		styles.TableHeader.Render(styles.Width(wHealth).Render("HEALTH")),
-		styles.TableHeader.Render(styles.Width(wUptime).Render("UPTIME")),
-		styles.TableHeader.Render(styles.Width(wPorts).Render("PORTS")),
-		styles.TableHeader.Render(styles.Width(wRestart).Render("RESTART")),
-		styles.TableHeader.Render("IMAGE"),
-	)
-	fmt.Println(styles.Divider.Render("  " + strings.Repeat("─", wName+wState+wHealth+wUptime+wPorts+wRestart+36)))
-
-	for i, s := range summaries {
-		cName := styles.Width(wName).Render(truncate(s.Name, wName-1))
-		cState := styles.Width(wState).Render(styles.StateTag(s.State))
-		cImage := styles.Muted.Render(truncate(s.Image, 36))
-
-		var cHealth, cUptime, cPorts, cRestart string
-		if details != nil && i < len(details) {
-			d := details[i]
-			cHealth = styles.Width(wHealth).Render(styles.HealthTag(d.Health))
-			if d.State == containerStateRunning && !d.StartedAt.IsZero() {
-				cUptime = styles.Width(wUptime).Render(
-					styles.Success.Render("↑ " + formatUptime(time.Since(d.StartedAt))))
-			} else if !d.FinishedAt.IsZero() && d.FinishedAt.Year() > 1 {
-				cUptime = styles.Width(wUptime).Render(
-					styles.Muted.Render("↓ " + formatUptime(time.Since(d.FinishedAt))))
-			} else {
-				cUptime = styles.Width(wUptime).Render(styles.Muted.Render("–"))
-			}
-			if len(d.Ports) > 0 {
-				cPorts = styles.Width(wPorts).Render(truncate(strings.Join(d.Ports, ", "), wPorts-1))
-			} else {
-				cPorts = styles.Width(wPorts).Render(styles.Muted.Render("–"))
-			}
-			cRestart = styles.Width(wRestart).Render(fmt.Sprintf("%d", d.RestartCount))
-		} else {
-			cHealth = styles.Width(wHealth).Render(styles.Muted.Render("–"))
-			cUptime = styles.Width(wUptime).Render(styles.Muted.Render(s.Status))
-			cPorts = styles.Width(wPorts).Render(styles.Muted.Render("–"))
-			cRestart = styles.Width(wRestart).Render(styles.Muted.Render("–"))
-		}
-
-		fmt.Printf("  %s  %s  %s  %s  %s  %s  %s\n", cName, cState, cHealth, cUptime, cPorts, cRestart, cImage)
-	}
-	fmt.Println()
-}
-
-// formatUptime converts a duration into a human-readable uptime string.
-
 // formatUptime converts a duration into a human-readable uptime string.
 func formatUptime(d time.Duration) string {
 	if d < 0 {
@@ -184,16 +117,12 @@ func formatUptime(d time.Duration) string {
 }
 
 // truncate shortens s to max chars, appending … if needed.
-
-// truncate shortens s to max chars, appending … if needed.
 func truncate(s string, max int) string {
 	if len(s) <= max {
 		return s
 	}
 	return s[:max-1] + "…"
 }
-
-// serviceJSON is the machine-readable shape of a service entry.
 
 // serviceJSON is the machine-readable shape of a service entry.
 type serviceJSON struct {

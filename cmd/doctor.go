@@ -12,7 +12,6 @@ import (
 	"github.com/groot/homelab/internal/config"
 	"github.com/groot/homelab/internal/diagnostics"
 	"github.com/groot/homelab/internal/docker"
-	"github.com/groot/homelab/internal/routing"
 	"github.com/groot/homelab/internal/run"
 	"github.com/groot/homelab/internal/service"
 	"github.com/groot/homelab/internal/tui/spinner"
@@ -73,7 +72,9 @@ func runDoctor(_ *cobra.Command, args []string) error {
 			return nil
 		}
 		// Single service
-		runServiceDoctorFor(dir, args[0], doctorFixFlag)
+		if !runServiceDoctorFor(dir, args[0], doctorFixFlag) {
+			return fmt.Errorf("%s: some checks failed", args[0])
+		}
 		return nil
 	}
 
@@ -295,22 +296,6 @@ func runServiceDoctorFor(dir, name string, fix bool) bool {
 	renderCheckGroup(diagnostics.RunServiceConfigChecks(dir, name), &pass)
 	renderCheckGroup(diagnostics.RunServiceContainerChecks(name, dc), &pass)
 	renderCheckGroup(diagnostics.RunServiceRoutingChecks(dir, name), &pass)
-
-	// --fix auto-repair for the private Caddy route. Reuses enablePrivate
-	// (cmd/enable.go), which already dispatches correctly between the
-	// legacy static-caddy.conf path and the modern configgen/ports: path —
-	// this used to only handle the legacy path directly, so --fix was a
-	// silent no-op for any service using the modern routing.
-	if !pass && fix {
-		mgr := caddy.New(dir)
-		enabled, _ := mgr.IsEnabled(name)
-		if !enabled {
-			if err := routing.EnablePrivate(dir, name, "", nil, nil); err == nil {
-				fmt.Printf("  %s  private route re-enabled\n", styles.Success.Render("✓"))
-				pass = true
-			}
-		}
-	}
 
 	fmt.Println()
 	if pass {

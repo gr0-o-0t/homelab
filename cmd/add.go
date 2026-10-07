@@ -107,7 +107,7 @@ func runServiceAdd(_ *cobra.Command, args []string) error {
 	fmt.Printf("%s\n", styles.Muted.Render("Next steps:"))
 	fmt.Printf("  1. %s\n", styles.Primary.Render(fmt.Sprintf("homelab setup %s", name)))
 	fmt.Printf("  2. %s\n", styles.Primary.Render(fmt.Sprintf("homelab up %s", name)))
-	fmt.Printf("  3. %s\n\n", styles.Primary.Render(fmt.Sprintf("homelab enable %s --private", name)))
+	fmt.Printf("  3. %s\n\n", styles.Primary.Render(fmt.Sprintf("homelab enable %s", name)))
 	return nil
 }
 
@@ -144,7 +144,6 @@ func printCatalog() error {
 }
 
 func init() {
-	serviceCmd.AddCommand(serviceAddCmd)
 }
 
 // catalogNames returns the list of service names in the embedded catalog.
