@@ -47,8 +47,13 @@ func runSetup(_ *cobra.Command, _ []string) error {
 	fmt.Printf("  %s\n", styles.Muted.Render("Non-secret values → "+cfgFile))
 	fmt.Printf("  %s\n\n", styles.Muted.Render("Secrets → system keyring"))
 
-	// Load existing config for defaults.
-	cfg, _ := config.Load(cfgFile)
+	// Load existing config for defaults. A parse error must stop setup: it
+	// would otherwise fall through to the defaults below and overwrite the
+	// file, losing groups, extensions and databases over one typo.
+	cfg, err := config.Load(cfgFile)
+	if err != nil {
+		return fmt.Errorf("%w — fix the file, setup will not overwrite it", err)
+	}
 	if cfg == nil {
 		cfg = &config.Config{
 			Vars: map[string]config.VarEntry{

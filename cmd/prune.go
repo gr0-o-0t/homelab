@@ -98,9 +98,13 @@ func runPrune(_ *cobra.Command, args []string) error {
 		}
 	}
 
-	if volumeCount > 0 {
+	// Any run that removes volumes gets the typed confirmation, not just one
+	// whose plan lists some: the plan only knows volumes with an explicit
+	// name:, while `compose down --volumes` also removes anonymous and
+	// default-named ones. A plan saying "0 volumes" is not evidence of no data.
+	if !pruneFlags.keepVolumes {
 		fmt.Printf("\n  %s\n", styles.Err.Render(fmt.Sprintf(
-			"%d volume(s) will be DELETED. This destroys data and cannot be undone.", volumeCount)))
+			"%d named volume(s), plus any unnamed ones, will be DELETED. This destroys data and cannot be undone.", volumeCount)))
 		fmt.Printf("  %s Back up first: %s\n",
 			styles.Muted.Render("→"), styles.Primary.Render("homelab backup "+joinNames(names)))
 

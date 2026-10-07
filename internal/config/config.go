@@ -630,6 +630,14 @@ func Load(path string) (*Config, error) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parsing %s: %w", path, err)
 	}
+	// A file without a vars:/secrets: section is valid; callers write into
+	// these maps, so they must never be nil.
+	if cfg.Vars == nil {
+		cfg.Vars = map[string]VarEntry{}
+	}
+	if cfg.Secrets == nil {
+		cfg.Secrets = map[string]SecretEntry{}
+	}
 	return &cfg, nil
 }
 

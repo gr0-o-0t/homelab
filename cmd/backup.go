@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -88,14 +89,22 @@ func runBackup(_ *cobra.Command, args []string) error {
 	fmt.Printf("\n%s\n\n", styles.Header.Render("Backup"))
 	fmt.Printf("  %s %s\n\n", styles.Muted.Render("→"), dest)
 
-	var records []backup.ServiceRecord
+	var (
+		records []backup.ServiceRecord
+		failed  []error
+	)
 	for _, name := range names {
 		if err := validateService(root, name); err != nil {
 			return err
 		}
+		// A failure is recorded and the loop goes on: the manifest must still
+		// be written for every service that did back up, or none of them can
+		// be restored.
 		plan, err := backup.PlanFor(root, name)
 		if err != nil {
-			return err
+			failed = append(failed, fmt.Errorf("%s: %w", name, err))
+			fmt.Printf("  %s %s — %v\n", styles.Err.Render("✗"), name, err)
+			continue
 		}
 		if plan.Empty() {
 			fmt.Printf("  %s %s — nothing to back up\n", styles.Muted.Render("·"), name)
@@ -104,7 +113,9 @@ func runBackup(_ *cobra.Command, args []string) error {
 
 		rec, err := backupOne(engine, root, name, plan, dest)
 		if err != nil {
-			return err
+			failed = append(failed, fmt.Errorf("%s: %w", name, err))
+			fmt.Printf("  %s %s — %v\n", styles.Err.Render("✗"), name, err)
+			continue
 		}
 		records = append(records, rec)
 
@@ -118,7 +129,7 @@ func runBackup(_ *cobra.Command, args []string) error {
 	}
 
 	if len(records) == 0 {
-		return fmt.Errorf("no service produced a backup")
+		return errors.Join(append(failed, fmt.Errorf("no service produced a backup"))...)
 	}
 	if err := engine.WriteManifest(dest, records); err != nil {
 		return err
@@ -128,7 +139,7 @@ func runBackup(_ *cobra.Command, args []string) error {
 	fmt.Printf("  %s Restore with: %s\n\n",
 		styles.Muted.Render("→"),
 		styles.Primary.Render(fmt.Sprintf("homelab restore %s", dest)))
-	return nil
+	return errors.Join(failed...)
 }
 
 // backupOne stops the service around its own snapshot unless --live was passed,

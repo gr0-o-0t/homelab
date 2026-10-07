@@ -206,19 +206,27 @@ func (e *Engine) Restore(rec ServiceRecord, srcDir string, restoreConfig bool) e
 //
 // The existing contents are cleared first: untarring over a live volume merges
 // the two, which silently leaves files that the backup did not contain — the
-// opposite of a restore.
+// opposite of a restore. The archive is read end to end before anything is
+// cleared, so a missing or truncated archive fails with the volume untouched.
 func (e *Engine) restoreVolume(v VolumeRecord, srcDir string) error {
 	err := e.Exec.Run("docker", "run", "--rm",
 		"-v", v.Volume+":/to",
 		"-v", srcDir+":/from:ro",
 		helperImage,
-		"sh", "-c", "rm -rf /to/..?* /to/.[!.]* /to/* 2>/dev/null; tar xzf /from/"+v.File+" -C /to",
+		"sh", "-c", restoreVolumeScript, "sh", "/from/"+v.File,
 	)
 	if err != nil {
 		return fmt.Errorf("restoring volume %q: %w", v.Volume, err)
 	}
 	return nil
 }
+
+// restoreVolumeScript verifies the archive ($1) before replacing /to with it.
+const restoreVolumeScript = `set -e
+test -f "$1"
+tar tzf "$1" >/dev/null
+rm -rf /to/..?* /to/.[!.]* /to/*
+tar xzf "$1" -C /to`
 
 // restoreDatabase loads a dump back into the shared instance. The database and
 // role must already exist — `homelab setup <service>` creates them, and on a new

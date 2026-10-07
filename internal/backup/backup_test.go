@@ -212,9 +212,13 @@ func TestRestore_ClearsVolumeBeforeUnpacking(t *testing.T) {
 	require.True(t, ok, "volume should be mounted writable")
 	line := c.line()
 	assert.Contains(t, line, "rm -rf", "existing contents must be removed first")
-	assert.Contains(t, line, "tar xzf /from/app_data.tar.gz -C /to")
+	assert.Contains(t, line, `tar xzf "$1" -C /to`)
+	assert.True(t, strings.HasSuffix(line, " sh /from/app_data.tar.gz"),
+		"the archive is passed as $1, not spliced into the script")
 	assert.Less(t, strings.Index(line, "rm -rf"), strings.Index(line, "tar xzf"),
 		"the clear must precede the unpack")
+	assert.Less(t, strings.Index(line, "tar tzf"), strings.Index(line, "rm -rf"),
+		"the archive must be verified before anything is cleared")
 	assert.Contains(t, line, filepath.Join(src, "volumes")+":/from:ro",
 		"the archive directory is mounted read-only")
 }
