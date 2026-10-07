@@ -125,6 +125,9 @@ func runBackup(_ *cobra.Command, args []string) error {
 		if plan.SkippedRedis > 0 {
 			fmt.Printf(" %s", styles.Muted.Render("(redis not dumped — cache/queue only)"))
 		}
+		if plan.S3Buckets > 0 {
+			fmt.Printf(" %s", styles.Muted.Render("(files are in the shared garage — back up garage too)"))
+		}
 		fmt.Println()
 	}
 

@@ -1,6 +1,18 @@
 # ─────────────────────────────────────────────────────────────────
 # Shared Redis for homelab services
 # ─────────────────────────────────────────────────────────────────
+# One instance for the whole catalog. Services declare
+# `databases: - redis: ...` in their config.yaml and are isolated by
+# database number: the provisioner gives each (service, instance) its
+# own number out of 1..63, recorded in <config-dir>/redis-dbs.yaml and
+# released on `homelab delete`. Database 0 is never handed out — it is
+# what a client that cannot select a database falls back to.
+#
+# Auth: one shared password (REDIS_PASSWORD), generated into the
+# keyring by `homelab up redis` and injected into every consumer.
+# Redis overwrites its process title on start, so the password in
+# `command:` does not show up in `ps`.
+# ─────────────────────────────────────────────────────────────────
 
 networks:
   home-services:
@@ -12,12 +24,25 @@ services:
     image: redis:${REDIS_VERSION:-8-alpine}
     container_name: homelab-redis
     restart: always
+    # The image entrypoint still drops to the redis user for redis-server.
+    # `:?` makes compose refuse to start an unauthenticated instance.
+    command:
+      - redis-server
+      - --requirepass
+      - ${REDIS_PASSWORD:?REDIS_PASSWORD is not set — run `homelab up redis`}
+      - --databases
+      - "64"
+    environment:
+      # redis-cli inside the container (healthcheck, provisioner) authenticates
+      # with this automatically.
+      REDISCLI_AUTH: ${REDIS_PASSWORD}
     volumes:
       - redis-data:/data
     networks:
       - home-services
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      # redis-cli exits 0 even on a NOAUTH error reply, so match the reply.
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
       interval: 10s
       timeout: 5s
       retries: 5

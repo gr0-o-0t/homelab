@@ -108,6 +108,9 @@ func startSharedDB(ctx context.Context, root string, dbType config.DBType, p *db
 	fmt.Printf("%s Starting %s (required by this service)…\n",
 		styles.Primary.Render("→"), styles.Bold.Render(shared))
 
+	if err := ensureGeneratedSecrets(p, shared); err != nil {
+		return err
+	}
 	if err := run.Default().DockerComposeEnv(
 		composeFile,
 		buildEnv(root, shared),
@@ -119,6 +122,93 @@ func startSharedDB(ctx context.Context, root string, dbType config.DBType, p *db
 	if err := p.WaitHealthy(ctx, dbType, sharedDBStartTimeout); err != nil {
 		return err
 	}
+	if err := p.Bootstrap(ctx, dbType); err != nil {
+		return fmt.Errorf("initialising %s: %w", shared, err)
+	}
 	fmt.Printf("  %s %s is ready\n", styles.Success.Render("✓"), shared)
 	return nil
+}
+
+// ensureGeneratedSecrets mints the secrets a service's config.yaml marks
+// `generate:` (the shared redis password, Garage's rpc secret) before its
+// containers are created with them.
+func ensureGeneratedSecrets(p *db.Provisioner, name string) error {
+	created, err := p.EnsureGeneratedSecrets(name)
+	for _, k := range created {
+		fmt.Printf("  %s generated %s/%s (stored in keyring)\n", styles.Success.Render("✓"), name, k)
+	}
+	if err != nil {
+		return fmt.Errorf("generating secrets for %s: %w", name, err)
+	}
+	return nil
+}
+
+// prepareService is what `up` does before compose for any service: generate
+// its own secrets, then start and provision what it depends on.
+func prepareService(ctx context.Context, root, name string) error {
+	sm, err := secrets.Open()
+	if err != nil {
+		return fmt.Errorf("opening keyring: %w", err)
+	}
+	if err := ensureGeneratedSecrets(db.New(root, sm), name); err != nil {
+		return err
+	}
+	return ensureDBDependencies(ctx, root, name)
+}
+
+// bootstrapIfShared finishes bringing up a shared service started directly
+// with `homelab up <name>`: wait for it, then do its one-time initialisation
+// (Garage's cluster layout) so the first consumer does not have to.
+func bootstrapIfShared(ctx context.Context, root, name string) error {
+	dbType, ok := config.IsSharedDBService(name)
+	if !ok || dbType != config.DBS3 {
+		return nil
+	}
+	p := db.New(root, nil)
+	if err := p.WaitHealthy(ctx, dbType, sharedDBStartTimeout); err != nil {
+		return err
+	}
+	if err := p.Bootstrap(ctx, dbType); err != nil {
+		return fmt.Errorf("initialising %s: %w", name, err)
+	}
+	return nil
+}
+
+// releaseDBDependencies gives back what a deleted service held on the shared
+// instances that would otherwise leak: its redis database numbers and its
+// Garage access key. Data stays — the bucket, like a postgres database, is
+// only removed by hand. Best effort: a stopped garage only means the key
+// outlives the service, which is reported, not fatal.
+func releaseDBDependencies(ctx context.Context, root, name string) []error {
+	svcCfg, err := config.Load(config.ServiceConfigFile(root, name))
+	if err != nil || svcCfg == nil || svcCfg.Databases.Kind == 0 {
+		return nil
+	}
+	svcDB, err := svcCfg.ServiceDatabases()
+	if err != nil {
+		return []error{err}
+	}
+	sm, err := secrets.Open()
+	if err != nil {
+		return []error{fmt.Errorf("opening keyring: %w", err)}
+	}
+	p := db.New(root, sm)
+	var errs []error
+	for i := range svcDB {
+		entry := &svcDB[i]
+		switch entry.Type {
+		case config.DBRedis:
+		case config.DBS3:
+			if err := p.EnsureRunning(ctx, entry.Type); err != nil {
+				errs = append(errs, fmt.Errorf("garage key for %s not deleted: %w", name, err))
+				continue
+			}
+		default:
+			continue
+		}
+		if err := p.Deprovision(ctx, entry.Type, name, entry.ServiceDBDecl); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errs
 }

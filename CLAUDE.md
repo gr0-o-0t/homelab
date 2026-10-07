@@ -300,6 +300,35 @@ Layer daemons reload in place: tor and the Caddy config via their reload
 commands, i2pd and the yggdrasil socat forwarders on SIGHUP — enabling a
 service never restarts a router or drops mesh peerings.
 
+### Shared services — one instance of each, isolation inside it
+
+A service never bundles its own database, cache or object store. It declares a
+dependency under `databases:` in its `config.yaml` and is isolated inside the
+one shared instance. `homelab up <svc>` starts the shared instance if needed,
+waits for it, and provisions (`internal/db`); `BuildEnv` injects the
+connection values through the declaration's `env:` mapping.
+
+| type | shared service / container | per-service isolation | env keys |
+|---|---|---|---|
+| `postgres` | `postgres` / `homelab-postgres:5432` (VectorChord pg18) | database + owner role, generated password | host port user password database dsn |
+| `mariadb` | `mariadb` / `homelab-mariadb:3306` (no consumers today) | database + account | host port user password database dsn |
+| `redis` | `redis` / `homelab-redis:6379` | one shared password (`REDIS_PASSWORD`, generated, redis keyring namespace) + its own database number | host port password db dsn (`redis://:<pw>@host:port/<n>`) |
+| `s3` | `garage` / `homelab-garage:3900` (path-style, region `garage`) | bucket (`bucket:`, default service name) + an access key granted on that bucket only, kept in the service's keyring namespace | endpoint region bucket access_key secret_key host port |
+
+- Redis numbers come from `<config-dir>/redis-dbs.yaml`: lowest free of
+  1..63 (0 is never handed out), stable for the service's lifetime, released
+  by `homelab delete`. A service needing several databases declares several
+  `redis` entries with distinct `name:` (netbox: `tasks`, `cache`). `db`/`dsn`
+  are only injected once a number is allocated.
+- Garage needs a cluster layout before it accepts writes; the provisioner
+  applies one on first start (`garage layout assign … && layout apply`).
+  `homelab delete` removes the service's key; buckets and data stay.
+- Secrets with `generate: password|hex32` in a `config.yaml` are minted into
+  the keyring by `up`/`setup` and never prompted for.
+- `TestCatalogServices_NoBundledDatabases` fails if any catalog compose file
+  runs a postgres/mysql/mariadb/mongo/redis/valkey/keydb/minio/garage image
+  outside that shared service's own directory.
+
 ### Config Schema — Groups
 
 `config.yaml` supports an optional `groups` section for batch operations:

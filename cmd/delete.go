@@ -38,7 +38,7 @@ func init() {
 }
 
 // sharedDBServices are depended on by other services; deleting one breaks them.
-var sharedDBServices = map[string]bool{"postgres": true, "mariadb": true, "redis": true}
+var sharedDBServices = map[string]bool{"postgres": true, "mariadb": true, "redis": true, "garage": true}
 
 func runDelete(_ *cobra.Command, args []string) error {
 	root := configDir()
@@ -98,7 +98,13 @@ func deleteOne(root, svcName string) error {
 	}
 	_ = os.RemoveAll(filepath.Join(root, "tor", "hidden_service", svcName))
 
-	// 3. The service directory.
+	// 3. What it held on the shared instances: redis database numbers and its
+	// Garage key. Read from its config.yaml, so before the directory goes.
+	for _, err := range releaseDBDependencies(cmdContext(), root, svcName) {
+		fmt.Printf("  %s  %v\n", styles.Warning.Render("!"), err)
+	}
+
+	// 4. The service directory.
 	svcDir := filepath.Join(root, "services", svcName)
 	if err := os.RemoveAll(svcDir); err != nil {
 		return fmt.Errorf("removing service directory: %w", err)

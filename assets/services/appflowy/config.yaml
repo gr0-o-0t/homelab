@@ -19,16 +19,10 @@ secrets:
   APPFLOWY_GOTRUE_JWT_SECRET:
     required: true
     description: "Signs every auth token — changing it invalidates all sessions"
-  APPFLOWY_S3_ACCESS_KEY:
-    required: true
-    description: "MinIO root user (3+ chars)"
-  APPFLOWY_S3_SECRET_KEY:
-    required: true
-    description: "MinIO root password (8+ chars)"
 
-# Both on the shared instances. The connection parts are injected separately
-# rather than as a single dsn because GoTrue needs the same database with
-# `?search_path=auth` appended — see docker-compose.yml.
+# All three on the shared instances. The postgres connection parts are
+# injected separately rather than as a single dsn because GoTrue needs the same
+# database with `?search_path=auth` appended — see docker-compose.yml.
 #
 # Extensions are pre-created by the provisioner as the postgres superuser, so
 # AppFlowy's own `CREATE EXTENSION IF NOT EXISTS` calls become no-ops and its
@@ -50,9 +44,20 @@ databases:
         user: APPFLOWY_DB_USER
         password: APPFLOWY_DB_PASSWORD
         database: APPFLOWY_DB_NAME
+  # Its own database number on homelab-redis; the dsn carries the shared
+  # password and that number.
   - redis:
       env:
         dsn: APPFLOWY_REDIS_URI
+  # Bucket `appflowy` and an access key for it alone on homelab-garage.
+  - s3:
+      bucket: appflowy
+      env:
+        endpoint: APPFLOWY_S3_ENDPOINT
+        region: APPFLOWY_S3_REGION
+        bucket: APPFLOWY_S3_BUCKET
+        access_key: APPFLOWY_S3_ACCESS_KEY
+        secret_key: APPFLOWY_S3_SECRET_KEY
 
 ports:
   - 80

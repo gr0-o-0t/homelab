@@ -1,9 +1,10 @@
 // Package db manages shared database provisioning for homelab services.
 //
-// When a service declares a database dependency (postgres, mariadb, or redis)
-// in its config.yaml, the provisioner creates the database and user on the
-// shared instance via docker exec. Connection strings are injected at runtime
-// by config.BuildEnv().
+// When a service declares a dependency (postgres, mariadb, redis or s3) in its
+// config.yaml, the provisioner isolates it on the one shared instance via
+// docker exec: a database and role on postgres/mariadb, a database number on
+// redis, a bucket and access key on Garage. Connection details are injected at
+// runtime by config.BuildEnv().
 package db
 
 import (
@@ -22,12 +23,14 @@ type executor interface {
 	Run(name string, args ...string) error
 	RunFrom(r io.Reader, name string, args ...string) error
 	Output(name string, args ...string) ([]byte, error)
+	OutputFrom(r io.Reader, name string, args ...string) ([]byte, error)
 }
 
 // secretsManager abstracts the keyring so tests can inject fakes.
 type secretsManager interface {
 	Get(namespace, key string) (string, error)
 	Set(namespace, key, value string) error
+	Delete(namespace, key string) error
 }
 
 // Provisioner manages database lifecycle on shared instances.
@@ -49,30 +52,33 @@ func New(cfgDir string, sm secretsManager) *Provisioner {
 	}
 }
 
-// Provision creates a database and user for a service on the shared DB instance.
-// It generates a random password, stores it in the root keyring, and runs SQL
-// via docker exec. Idempotent — safe to call multiple times.
+// Provision isolates a service on the shared instance for dbType: a database
+// and role (postgres, mariadb), a database number (redis), or a bucket and
+// access key (s3). Generated credentials go to the keyring. Idempotent — safe
+// to call on every start.
 func (p *Provisioner) Provision(ctx context.Context, dbType config.DBType, svcName string, decl config.ServiceDBDecl) error {
-	password, err := p.ensurePassword(svcName)
-	if err != nil {
-		return fmt.Errorf("generating password for %s: %w", svcName, err)
-	}
-
 	switch dbType {
-	case config.DBPostgres:
-		return p.provisionPostgres(ctx, svcName, decl, password)
-	case config.DBMariaDB:
+	case config.DBPostgres, config.DBMariaDB:
+		password, err := p.ensurePassword(svcName)
+		if err != nil {
+			return fmt.Errorf("generating password for %s: %w", svcName, err)
+		}
+		if dbType == config.DBPostgres {
+			return p.provisionPostgres(ctx, svcName, decl, password)
+		}
 		return p.provisionMariaDB(ctx, svcName, decl, password)
 	case config.DBRedis:
-		// Redis needs no provisioning per se — just key namespace convention.
-		return nil
+		return p.provisionRedis(svcName, decl)
+	case config.DBS3:
+		return p.provisionGarage(svcName, decl)
 	default:
 		return fmt.Errorf("unsupported database type: %s", dbType)
 	}
 }
 
-// Deprovision removes a database user from the shared instance.
-// Leaves the database data intact for safety.
+// Deprovision undoes Provision's access grant, keeping data: the SQL engines
+// drop the role, Garage deletes the access key (the bucket and its objects
+// stay), and redis frees the database number for reuse.
 func (p *Provisioner) Deprovision(ctx context.Context, dbType config.DBType, svcName string, decl config.ServiceDBDecl) error {
 	switch dbType {
 	case config.DBPostgres:
@@ -80,10 +86,22 @@ func (p *Provisioner) Deprovision(ctx context.Context, dbType config.DBType, svc
 	case config.DBMariaDB:
 		return p.deprovisionMariaDB(ctx, decl)
 	case config.DBRedis:
-		return nil
+		return config.ReleaseRedisDB(p.ConfigDir, svcName, decl.Name)
+	case config.DBS3:
+		return p.deprovisionGarage(svcName)
 	default:
 		return fmt.Errorf("unsupported database type: %s", dbType)
 	}
+}
+
+// Bootstrap does the one-time setup a freshly started shared instance needs
+// before anything can be provisioned on it. Only Garage has any: a new node
+// has no cluster layout and refuses every write until one is applied.
+func (p *Provisioner) Bootstrap(ctx context.Context, dbType config.DBType) error {
+	if dbType == config.DBS3 {
+		return p.ensureGarageLayout()
+	}
+	return nil
 }
 
 // EnsureRunning checks that a shared DB container is healthy.
@@ -97,12 +115,12 @@ func (p *Provisioner) EnsureRunning(ctx context.Context, dbType config.DBType) e
 	out, err := p.RC.Output("docker", "inspect", "--format={{.State.Status}}", container)
 	if err != nil {
 		return fmt.Errorf("%s container %q not found or not running\n  Install: homelab add %s && homelab up %s",
-			dbType, container, dbType, dbType)
+			dbType, container, config.SharedDBName(dbType), config.SharedDBName(dbType))
 	}
 	status := strings.TrimSpace(string(out))
 	if status != "running" {
 		return fmt.Errorf("%s container %q is %s, not running\n  Start: homelab up %s",
-			dbType, container, status, dbType)
+			dbType, container, status, config.SharedDBName(dbType))
 	}
 	return nil
 }
@@ -170,16 +188,7 @@ func (p *Provisioner) WaitHealthy(ctx context.Context, dbType config.DBType, tim
 }
 
 func (p *Provisioner) containerName(dbType config.DBType) string {
-	switch dbType {
-	case config.DBPostgres:
-		return "homelab-postgres"
-	case config.DBMariaDB:
-		return "homelab-mariadb"
-	case config.DBRedis:
-		return "homelab-redis"
-	default:
-		return ""
-	}
+	return config.SharedDBContainer(dbType)
 }
 
 func (p *Provisioner) ensurePassword(svcName string) (string, error) {

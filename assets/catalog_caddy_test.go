@@ -10,6 +10,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/groot/homelab/assets"
+	"github.com/groot/homelab/internal/config"
 )
 
 // reverseProxyUpstream captures the host portion of `reverse_proxy host:port`.
@@ -44,6 +45,11 @@ func TestCatalogServices_CaddyUpstreamsResolve(t *testing.T) {
 		require.NoError(t, yaml.Unmarshal(compose, &cf), "service %q compose must parse", svc)
 
 		resolvable := make(map[string]bool)
+		// A declared shared dependency is on home-services too; appflowy
+		// routes presigned S3 URLs straight to homelab-garage.
+		for _, d := range catalogDatabases(t, svc) {
+			resolvable[config.SharedDBContainer(d.Type)] = true
+		}
 		for name, s := range cf.Services {
 			resolvable[name] = true // compose adds the service name as a network alias
 			if s.ContainerName != "" {

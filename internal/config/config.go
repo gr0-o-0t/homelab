@@ -23,8 +23,15 @@ type VarEntry struct {
 
 // SecretEntry declares a secret variable. Its value lives only in the system
 // keyring — never written to config.yaml or any file on disk.
+//
+// Generate marks a secret homelab mints itself instead of asking for: "password"
+// (32 alphanumerics) or "hex32" (32 random bytes, hex-encoded — Garage's
+// rpc_secret format). `homelab setup` skips prompting for it and `homelab up`
+// creates it in the keyring before the first start, so a shared service like
+// redis never needs the user to invent and type a credential.
 type SecretEntry struct {
-	Required bool `yaml:"required"`
+	Required bool   `yaml:"required"`
+	Generate string `yaml:"generate,omitempty"`
 }
 
 // PortEntry describes a single port a service exposes.
@@ -206,6 +213,9 @@ const (
 	DBPostgres DBType = "postgres"
 	DBMariaDB  DBType = "mariadb"
 	DBRedis    DBType = "redis"
+	// DBS3 is object storage on the shared Garage instance: one bucket and
+	// one access key per service.
+	DBS3 DBType = "s3"
 )
 
 // DBHostConfig defines how to reach a shared database instance.
@@ -219,6 +229,7 @@ type DatabaseConfig struct {
 	Postgres *DBHostConfig `yaml:"postgres,omitempty"`
 	MariaDB  *DBHostConfig `yaml:"mariadb,omitempty"`
 	Redis    *DBHostConfig `yaml:"redis,omitempty"`
+	S3       *DBHostConfig `yaml:"s3,omitempty"`
 }
 
 // ServiceDBDecl describes a single service's database dependency.
@@ -226,12 +237,19 @@ type DatabaseConfig struct {
 // (e.g. for local DB containers defined in the service's compose file).
 // DSNTemplate: custom DSN template; use {host}/{port}/{user}/{password}/{database}
 // placeholders. Omit to use the per-type default template.
+// Name: distinguishes several declarations of the same type in one service.
+// Redis uses it so one service can hold more than one database number (NetBox
+// keeps its task queue and its cache apart); the empty name is the default
+// instance.
+// Bucket: s3 only — the bucket to create; defaults to the service name.
 // Superuser: grant the service's role SUPERUSER on the shared instance. Only
 // for services that manage extensions themselves at runtime (Immich checks and
 // upgrades its vector extension on every start, and its backup path shells out
 // to pg_dumpall) — pre-creating extensions via Extensions is otherwise enough.
 type ServiceDBDecl struct {
+	Name        string            `yaml:"name,omitempty"`
 	Database    string            `yaml:"database,omitempty"`
+	Bucket      string            `yaml:"bucket,omitempty"`
 	User        string            `yaml:"user,omitempty"`
 	Host        string            `yaml:"host,omitempty"`
 	Port        int               `yaml:"port,omitempty"`
@@ -430,6 +448,10 @@ func (dc *DatabaseConfig) DBHost(t DBType) string {
 			if dc.Redis != nil && dc.Redis.Host != "" {
 				return dc.Redis.Host
 			}
+		case DBS3:
+			if dc.S3 != nil && dc.S3.Host != "" {
+				return dc.S3.Host
+			}
 		}
 	}
 	return SharedDBContainer(t)
@@ -453,6 +475,10 @@ func (dc *DatabaseConfig) DBPort(t DBType) int {
 			if dc.Redis != nil && dc.Redis.Port != 0 {
 				return dc.Redis.Port
 			}
+		case DBS3:
+			if dc.S3 != nil && dc.S3.Port != 0 {
+				return dc.S3.Port
+			}
 		}
 	}
 	switch t {
@@ -462,6 +488,8 @@ func (dc *DatabaseConfig) DBPort(t DBType) int {
 		return 3306
 	case DBRedis:
 		return 6379
+	case DBS3:
+		return 3900
 	}
 	return 0
 }
@@ -480,6 +508,8 @@ func SharedDBName(t DBType) string {
 		return "mariadb"
 	case DBRedis:
 		return "redis"
+	case DBS3:
+		return "garage"
 	default:
 		return ""
 	}
@@ -494,15 +524,19 @@ func SharedDBContainer(t DBType) string {
 		return "homelab-mariadb"
 	case DBRedis:
 		return "homelab-redis"
+	case DBS3:
+		return "homelab-garage"
 	default:
 		return ""
 	}
 }
 
 // IsSharedDBService reports whether a service name is one of the shared
-// database services (postgres, mariadb, redis).
+// database services (postgres, mariadb, redis, garage).
 func IsSharedDBService(name string) (DBType, bool) {
 	switch name {
+	case "garage":
+		return DBS3, true
 	case "postgres":
 		return DBPostgres, true
 	case "mariadb":
@@ -555,6 +589,8 @@ func EnsureRootDBConfig(rootCfgFile, svcName string) error {
 		rootDB.MariaDB = hc
 	case DBRedis:
 		rootDB.Redis = hc
+	case DBS3:
+		rootDB.S3 = hc
 	}
 
 	// Encode DatabaseConfig back into cfg.Databases yaml.Node.
@@ -729,7 +765,7 @@ func BuildEnv(rootConfigFile, configDir, svcName string, sm *secrets.Manager) (m
 		}
 		svcDB, err := svcCfg.ServiceDatabases()
 		if err == nil && svcDB != nil {
-			if err := injectDBEnv(env, rootDB, svcDB, svcName, sm); err != nil {
+			if err := injectDBEnv(env, configDir, rootDB, svcDB, svcName, sm); err != nil {
 				errs = append(errs, err)
 			}
 		}
@@ -746,43 +782,65 @@ func defaultDSNTemplate(t DBType) string {
 	case DBMariaDB:
 		return "mysql://{user}:{password}@{host}:{port}/{database}"
 	case DBRedis:
-		return "redis://{host}:{port}/0"
+		return "redis://:{password}@{host}:{port}/{db}"
 	default:
 		return ""
 	}
 }
 
+// dsnValues are the placeholders a DSN template may use.
+type dsnValues struct {
+	host, port, user, password, database, db string
+}
+
 // buildDSN renders a DSN template by substituting
-// {host}/{port}/{user}/{password}/{database} in a single pass via
+// {host}/{port}/{user}/{password}/{database}/{db} in a single pass via
 // strings.NewReplacer. Sequential strings.ReplaceAll calls would re-scan
 // already-substituted text, so a value that happens to contain another
 // placeholder's literal token (e.g. a user name containing the substring
 // "{database}") would get corrupted by a later substitution; NewReplacer
 // matches all patterns against the original string in one pass instead.
-func buildDSN(tmpl, host, portStr, user, password, database string) string {
+func buildDSN(tmpl string, v dsnValues) string {
 	replacer := strings.NewReplacer(
-		"{host}", host,
-		"{port}", portStr,
-		"{user}", user,
-		"{password}", password,
-		"{database}", database,
+		"{host}", v.host,
+		"{port}", v.port,
+		"{user}", v.user,
+		"{password}", v.password,
+		"{database}", v.database,
+		"{db}", v.db,
 	)
 	return replacer.Replace(tmpl)
 }
 
 // injectDBEnv appends database connection variables into env. Returns an
-// error only for a genuine keyring failure reading the DB password — never
-// for "not set", which Manager.Get already reports as a nil error.
-func injectDBEnv(env map[string]string, rootDB *DatabaseConfig, svcDB ServiceDatabases, svcName string, sm *secrets.Manager) error {
-	rootPassword := ""
-	if sm != nil {
-		pw, err := sm.Get("", DBPasswordKey(svcName))
-		if err != nil {
-			return fmt.Errorf("reading db password for %q: %w", svcName, err)
+// error only for a genuine keyring or state-file failure — never for "not
+// set", which Manager.Get already reports as a nil error.
+//
+// Logical env keys, by type:
+//
+//	all       host, port, dsn
+//	postgres  user, password (the service's role), database
+//	mariadb   user, password (the service's account), database
+//	redis     password (the one shared redis password), db (this
+//	          declaration's database number)
+//	s3        endpoint, region, bucket, access_key, secret_key
+//
+// A redis `db` and `dsn` are only injected once the provisioner has allocated
+// the number: guessing 0 would silently share keys with every other service.
+func injectDBEnv(env map[string]string, configDir string, rootDB *DatabaseConfig, svcDB ServiceDatabases, svcName string, sm *secrets.Manager) error {
+	get := func(ns, key string) (string, error) {
+		if sm == nil {
+			return "", nil
 		}
-		rootPassword = pw
+		return sm.Get(ns, key)
 	}
 
+	rootPassword, err := get("", DBPasswordKey(svcName))
+	if err != nil {
+		return fmt.Errorf("reading db password for %q: %w", svcName, err)
+	}
+
+	var redisDBs map[string]int
 	for i := range svcDB {
 		entry := &svcDB[i]
 		// Resolve host: explicit host overrides root config
@@ -799,7 +857,42 @@ func injectDBEnv(env map[string]string, rootDB *DatabaseConfig, svcDB ServiceDat
 		if port == 0 {
 			port = rootDB.DBPort(entry.Type)
 		}
-		portStr := fmt.Sprintf("%d", port)
+		v := dsnValues{
+			host:     host,
+			port:     fmt.Sprintf("%d", port),
+			user:     entry.User,
+			password: rootPassword,
+			database: entry.Database,
+		}
+
+		var accessKey, secretKey string
+		switch entry.Type {
+		case DBRedis:
+			if v.password, err = get(SharedDBName(DBRedis), RedisPasswordKey); err != nil {
+				return fmt.Errorf("reading shared redis password: %w", err)
+			}
+			if redisDBs == nil {
+				if redisDBs, err = LoadRedisDBs(configDir); err != nil {
+					return err
+				}
+			}
+			if n, ok := redisDBs[RedisDBKey(svcName, entry.Name)]; ok {
+				v.db = fmt.Sprintf("%d", n)
+			}
+		case DBS3:
+			v.password = ""
+			if accessKey, err = get(svcName, GarageAccessKeyIDKey); err != nil {
+				return fmt.Errorf("reading garage access key for %q: %w", svcName, err)
+			}
+			if secretKey, err = get(svcName, GarageSecretKeyKey); err != nil {
+				return fmt.Errorf("reading garage secret key for %q: %w", svcName, err)
+			}
+		}
+		bucket := entry.Bucket
+		if bucket == "" {
+			bucket = svcName
+		}
+		redisUnallocated := entry.Type == DBRedis && v.db == ""
 
 		for logical, target := range entry.Env {
 			if target == "" {
@@ -809,26 +902,46 @@ func injectDBEnv(env map[string]string, rootDB *DatabaseConfig, svcDB ServiceDat
 			case "host":
 				env[target] = host
 			case "port":
-				env[target] = portStr
+				env[target] = v.port
 			case "user":
 				env[target] = entry.User
 			case "password":
-				env[target] = rootPassword
+				env[target] = v.password
 			case "database":
 				env[target] = entry.Database
+			case "db":
+				if !redisUnallocated {
+					env[target] = v.db
+				}
+			case "endpoint":
+				env[target] = "http://" + host + ":" + v.port
+			case "region":
+				env[target] = S3Region
+			case "bucket":
+				env[target] = bucket
+			case "access_key":
+				env[target] = accessKey
+			case "secret_key":
+				env[target] = secretKey
 			case "dsn":
+				if redisUnallocated {
+					continue
+				}
 				// Build DSN from template (custom or per-type default)
 				tmpl := entry.DSNTemplate
 				if tmpl == "" {
 					tmpl = defaultDSNTemplate(entry.Type)
+					if entry.Type == DBRedis && v.password == "" {
+						tmpl = "redis://{host}:{port}/{db}"
+					}
 				}
 				if tmpl != "" {
-					env[target] = buildDSN(tmpl, host, portStr, entry.User, rootPassword, entry.Database)
+					env[target] = buildDSN(tmpl, v)
 				}
 			default:
 				// Legacy DSN template: logical is the template, target is the env var name
 				if strings.Contains(logical, "://") || strings.Contains(logical, "{user}") {
-					env[target] = buildDSN(logical, host, portStr, entry.User, rootPassword, entry.Database)
+					env[target] = buildDSN(logical, v)
 				}
 			}
 		}

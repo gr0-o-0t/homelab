@@ -12,8 +12,18 @@ secrets:
     required: true
     description: "Password for the admin account created on first start"
 
+# Shared homelab-postgres (database + owner role, generated password) and
+# shared homelab-redis.
+#
+# Redis database number: the official image's redis.config.php reads only
+# REDIS_HOST, REDIS_HOST_PORT, REDIS_HOST_PASSWORD and REDIS_HOST_USER — there
+# is no env var for `dbindex`, and that file replaces the whole 'redis' array,
+# so `occ config:system:set redis dbindex` is overridden on every request.
+# Nextcloud therefore uses database 0, which the allocator never hands to
+# anyone, and namespaces its own keys by instance id. The number allocated for
+# this declaration is simply unused.
 databases:
-  - mariadb:
+  - postgres:
       database: nextcloud
       user: nextcloud
       env:
@@ -25,5 +35,7 @@ databases:
   - redis:
       env:
         host: NC_REDIS_HOST
+        port: NC_REDIS_PORT
+        password: NC_REDIS_PASSWORD
 ports:
   - 80

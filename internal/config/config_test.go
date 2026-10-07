@@ -599,3 +599,112 @@ func TestParsePortString_Rejects(t *testing.T) {
 		assert.Error(t, err, spec)
 	}
 }
+
+// ── shared redis / garage injection ──────────────────────────────────────────
+
+func memSecrets(t *testing.T, kv map[[2]string]string) *secrets.Manager {
+	t.Helper()
+	sm := secrets.NewForTest(keyring.NewArrayKeyring(nil))
+	for k, v := range kv {
+		require.NoError(t, sm.Set(k[0], k[1], v))
+	}
+	return sm
+}
+
+func TestBuildEnv_RedisPasswordAndDBNumber(t *testing.T) {
+	dir := t.TempDir()
+	rootPath := filepath.Join(dir, "config.yaml")
+	writeFile(t, dir, "services/netbox/config.yaml", `
+databases:
+  - redis:
+      name: tasks
+      env:
+        host: REDIS_HOST
+        password: REDIS_PASSWORD
+        db: REDIS_DB_TASK
+        dsn: TASK_URL
+  - redis:
+      name: cache
+      env:
+        db: REDIS_DB_CACHE
+`)
+	_, _, err := config.AllocateRedisDB(dir, "other", "")
+	require.NoError(t, err)
+	tasks, _, err := config.AllocateRedisDB(dir, "netbox", "tasks")
+	require.NoError(t, err)
+	cache, _, err := config.AllocateRedisDB(dir, "netbox", "cache")
+	require.NoError(t, err)
+	require.Equal(t, []int{2, 3}, []int{tasks, cache})
+
+	sm := memSecrets(t, map[[2]string]string{
+		{"redis", config.RedisPasswordKey}:   "sharedpw",
+		{"", config.DBPasswordKey("netbox")}: "not-for-redis",
+	})
+	env, err := config.BuildEnv(rootPath, dir, "netbox", sm)
+	require.NoError(t, err)
+
+	assert.Equal(t, "homelab-redis", env["REDIS_HOST"])
+	assert.Equal(t, "sharedpw", env["REDIS_PASSWORD"], "redis gets the shared password, not the service's SQL password")
+	assert.Equal(t, "2", env["REDIS_DB_TASK"])
+	assert.Equal(t, "3", env["REDIS_DB_CACHE"])
+	assert.Equal(t, "redis://:sharedpw@homelab-redis:6379/2", env["TASK_URL"])
+}
+
+// Before the provisioner has allocated a number, guessing one would put the
+// service in a database another service owns.
+func TestBuildEnv_RedisUnallocated_InjectsNoDB(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "services/searxng/config.yaml", `
+databases:
+  - redis:
+      env:
+        db: REDIS_DB
+        dsn: REDIS_URL
+        host: REDIS_HOST
+`)
+	env, err := config.BuildEnv(filepath.Join(dir, "config.yaml"), dir, "searxng", nil)
+	require.NoError(t, err)
+	assert.NotContains(t, env, "REDIS_DB")
+	assert.NotContains(t, env, "REDIS_URL")
+	assert.Equal(t, "homelab-redis", env["REDIS_HOST"])
+}
+
+func TestBuildEnv_S3Keys(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "services/appflowy/config.yaml", `
+databases:
+  - s3:
+      env:
+        endpoint: S3_URL
+        region: S3_REGION
+        bucket: S3_BUCKET
+        access_key: S3_ACCESS
+        secret_key: S3_SECRET
+        password: SHOULD_BE_EMPTY
+`)
+	sm := memSecrets(t, map[[2]string]string{
+		{"appflowy", config.GarageAccessKeyIDKey}: "GKabc",
+		{"appflowy", config.GarageSecretKeyKey}:   "sekrit",
+		{"", config.DBPasswordKey("appflowy")}:    "sqlpw",
+	})
+	env, err := config.BuildEnv(filepath.Join(dir, "config.yaml"), dir, "appflowy", sm)
+	require.NoError(t, err)
+	assert.Equal(t, "http://homelab-garage:3900", env["S3_URL"])
+	assert.Equal(t, "garage", env["S3_REGION"])
+	assert.Equal(t, "appflowy", env["S3_BUCKET"], "bucket defaults to the service name")
+	assert.Equal(t, "GKabc", env["S3_ACCESS"])
+	assert.Equal(t, "sekrit", env["S3_SECRET"])
+	assert.Equal(t, "", env["SHOULD_BE_EMPTY"], "the SQL password must never reach an s3 mapping")
+}
+
+func TestSecretEntry_GenerateRoundTrips(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	writeFile(t, dir, "config.yaml", "secrets:\n  REDIS_PASSWORD:\n    required: true\n    generate: password\n")
+	cfg, err := config.Load(path)
+	require.NoError(t, err)
+	require.NoError(t, config.Save(path, cfg))
+	cfg, err = config.Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, "password", cfg.Secrets["REDIS_PASSWORD"].Generate, "setup rewrites config.yaml; generate: must survive")
+}

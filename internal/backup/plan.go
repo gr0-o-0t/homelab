@@ -57,6 +57,10 @@ type Plan struct {
 	// SkippedRedis records Redis dependencies that were intentionally not
 	// dumped, so the caller can say so rather than appear to have covered them.
 	SkippedRedis int
+	// S3Buckets counts buckets on the shared Garage. Their objects live in
+	// garage's own volumes, so they are captured by backing up garage, not
+	// this service.
+	S3Buckets int
 }
 
 // Empty reports whether there is nothing to back up.
@@ -120,6 +124,8 @@ func PlanFor(configDir, svcName string) (Plan, error) {
 				})
 			case config.DBRedis:
 				p.SkippedRedis++
+			case config.DBS3:
+				p.S3Buckets++
 			}
 		}
 	}

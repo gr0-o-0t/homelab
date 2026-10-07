@@ -40,15 +40,18 @@ This creates:
 
 Two rules:
 - Attach the main (UI-facing) container to the `home-services` external network.
-- Use a separate `internal: true` network for any databases or background workers.
+- Never bundle a database, cache or object store. Postgres, MariaDB, Redis and
+  S3 (Garage) each run once, shared; declare what you need under `databases:`
+  in `config.yaml` and the service gets its own database/role, redis database
+  number, or bucket + key inside the shared instance. (A catalog test fails on
+  a bundled postgres/mysql/mariadb/mongo/redis/valkey/keydb/minio/garage image.)
+  Use a separate `internal: true` network only for other background workers.
 
 ```yaml
 networks:
   home-services:
     name: home-services
     external: true
-  paperless-internal:
-    internal: true
 
 services:
   paperless:               # ← the generated routes proxy to <service>:<port>
@@ -56,38 +59,38 @@ services:
     container_name: paperless
     restart: always
     environment:
-      PAPERLESS_REDIS: redis://paperless-redis:6379
-      PAPERLESS_DBHOST: paperless-postgres
+      PAPERLESS_REDIS: ${PAPERLESS_REDIS}      # injected — see config.yaml
+      PAPERLESS_DBHOST: ${PAPERLESS_DBHOST}
+      PAPERLESS_DBUSER: ${PAPERLESS_DBUSER}
+      PAPERLESS_DBPASS: ${PAPERLESS_DBPASS}
       # ... other vars
     volumes:
       - paperless-data:/usr/src/paperless/data
       - paperless-media:/usr/src/paperless/media
     networks:
-      - home-services        # reachable by Caddy
-      - paperless-internal   # internal comms
-
-  paperless-redis:
-    image: redis:7-alpine
-    container_name: paperless-redis
-    networks:
-      - paperless-internal   # NOT reachable by Caddy — good
-
-  paperless-postgres:
-    image: postgres:15
-    container_name: paperless-postgres
-    environment:
-      POSTGRES_USER: paperless
-      POSTGRES_PASSWORD: ${DB_PASSWORD}
-      POSTGRES_DB: paperless
-    volumes:
-      - paperless-pgdata:/var/lib/postgresql/data
-    networks:
-      - paperless-internal
+      - home-services        # reachable by Caddy, and by the shared databases
 
 volumes:
   paperless-data:
+    name: paperless_data
   paperless-media:
-  paperless-pgdata:
+    name: paperless_media
+```
+
+And in `config.yaml`:
+
+```yaml
+databases:
+  - postgres:
+      database: paperless
+      user: paperless
+      env:
+        host: PAPERLESS_DBHOST
+        user: PAPERLESS_DBUSER
+        password: PAPERLESS_DBPASS   # generated, kept in the keyring
+  - redis:
+      env:
+        dsn: PAPERLESS_REDIS        # redis://:<shared pw>@homelab-redis:6379/<own db>
 ```
 
 ### 3. Declare the ports in `config.yaml` (routing)
@@ -253,7 +256,7 @@ For a working service:
 
 - [ ] The service directory name resolves on `home-services` (service name, `container_name` or alias)
 - [ ] Primary container is on `home-services` network
-- [ ] Databases / workers are on a separate `internal: true` network
+- [ ] No bundled database/cache/object store — shared ones declared under `databases:`
 - [ ] `config.yaml` has sensible defaults and clear descriptions
 - [ ] `homelab setup <name>` — configure vars and secrets
 - [ ] `homelab up <name>` — containers healthy

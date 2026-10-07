@@ -281,6 +281,12 @@ func runServiceSetup(_ *cobra.Command, args []string) error {
 	if len(svcCfg.Secrets) > 0 {
 		fmt.Printf("\n  %s\n\n", styles.Accent.Render("─── Secrets ────────────────────────────────────────"))
 		for k, e := range svcCfg.Secrets {
+			if e.Generate != "" {
+				// Minted by homelab (below / on `up`); asking would only invite
+				// a weaker hand-typed value.
+				step(styles.Muted.Render("·"), fmt.Sprintf("%s is generated automatically", k))
+				continue
+			}
 			lbl := k
 			if !e.Required {
 				lbl += " (optional)"
@@ -306,6 +312,9 @@ func runServiceSetup(_ *cobra.Command, args []string) error {
 	// ── Database provisioning ─────────────────────────────────────────────────
 	ctx := context.Background()
 	p := db.New(dir, sm)
+	if err := ensureGeneratedSecrets(p, name); err != nil {
+		return err
+	}
 
 	if svcCfg.Databases.Kind != 0 {
 		svcDB, err := svcCfg.ServiceDatabases()
@@ -316,14 +325,26 @@ func runServiceSetup(_ *cobra.Command, args []string) error {
 			fmt.Printf("\n  %s\n\n", styles.Accent.Render("─── Database Setup ──────────────────────────────────"))
 			for i := range svcDB {
 				entry := &svcDB[i]
+				shared := config.SharedDBName(entry.Type)
 				if err := p.EnsureRunning(ctx, entry.Type); err != nil {
-					step(styles.Warning.Render("!"), fmt.Sprintf("%s container not running — install and start first:", entry.Type))
-					fmt.Printf("    homelab add %s && homelab up %s\n", entry.Type, entry.Type)
+					step(styles.Warning.Render("!"), fmt.Sprintf("%s container not running — install and start first:", shared))
+					fmt.Printf("    homelab add %s && homelab up %s\n", shared, shared)
 					continue
 				}
 				if err := p.Provision(ctx, entry.Type, name, entry.ServiceDBDecl); err != nil {
 					step(styles.Err.Render("✗"), fmt.Sprintf("Failed to provision %s: %v", entry.Type, err))
-				} else {
+					continue
+				}
+				switch entry.Type {
+				case config.DBRedis:
+					step(styles.Success.Render("✓"), "redis database number allocated")
+				case config.DBS3:
+					bucket := entry.Bucket
+					if bucket == "" {
+						bucket = name
+					}
+					step(styles.Success.Render("✓"), fmt.Sprintf("garage bucket '%s' and access key ready", bucket))
+				default:
 					step(styles.Success.Render("✓"), fmt.Sprintf("%s database '%s' created with user '%s'",
 						entry.Type, entry.Database, entry.User))
 				}

@@ -28,6 +28,9 @@ type fakeCommander struct {
 	outputCalls []fakeCall
 	outputData  map[string][]byte // keyed by "name arg0 arg1 …"
 	outputErr   map[string]error
+	// outputFn, when set, answers Output calls before outputData/outputErr —
+	// for fakes whose reply depends on earlier calls (Garage state).
+	outputFn func(key string) ([]byte, error, bool)
 }
 
 func (f *fakeCommander) Run(name string, args ...string) error {
@@ -41,9 +44,28 @@ func (f *fakeCommander) RunFrom(r io.Reader, name string, args ...string) error 
 	return nil
 }
 
+func (f *fakeCommander) OutputFrom(r io.Reader, name string, args ...string) ([]byte, error) {
+	in, _ := io.ReadAll(r)
+	f.outputCalls = append(f.outputCalls, fakeCall{Name: name, Args: args, Stdin: string(in)})
+	key := name + " " + strings.Join(args, " ")
+	if err, ok := f.outputErr[key]; ok {
+		return nil, err
+	}
+	if data, ok := f.outputData[key]; ok {
+		return data, nil
+	}
+	// Default: a redis-cli session where every command succeeded.
+	return []byte(strings.Repeat("OK\n", strings.Count(string(in), "\n"))), nil
+}
+
 func (f *fakeCommander) Output(name string, args ...string) ([]byte, error) {
 	f.outputCalls = append(f.outputCalls, fakeCall{Name: name, Args: args})
 	key := name + " " + strings.Join(args, " ")
+	if f.outputFn != nil {
+		if data, err, ok := f.outputFn(key); ok {
+			return data, err
+		}
+	}
 	if err, ok := f.outputErr[key]; ok {
 		return nil, err
 	}
@@ -55,15 +77,24 @@ func (f *fakeCommander) Output(name string, args ...string) ([]byte, error) {
 
 // ── fakeSM ────────────────────────────────────────────────────────────────────
 
+// fakeSM stores root-namespace keys bare and service keys as "ns/key", so
+// tests written against the root namespace read naturally.
 type fakeSM struct {
 	store  map[string]string
 	getErr error
 }
 
-func (f *fakeSM) Get(_, key string) (string, error) { return f.store[key], f.getErr }
-func (f *fakeSM) Set(_, key, val string) error      { f.store[key] = val; return nil }
-func (f *fakeSM) IsSet(_, key string) bool          { _, ok := f.store[key]; return ok }
-func (f *fakeSM) Delete(_, key string) error        { delete(f.store, key); return nil }
+func smKey(ns, key string) string {
+	if ns == "" {
+		return key
+	}
+	return ns + "/" + key
+}
+
+func (f *fakeSM) Get(ns, key string) (string, error) { return f.store[smKey(ns, key)], f.getErr }
+func (f *fakeSM) Set(ns, key, val string) error      { f.store[smKey(ns, key)] = val; return nil }
+func (f *fakeSM) IsSet(ns, key string) bool          { _, ok := f.store[smKey(ns, key)]; return ok }
+func (f *fakeSM) Delete(ns, key string) error        { delete(f.store, smKey(ns, key)); return nil }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
@@ -589,17 +620,6 @@ func TestProvision(t *testing.T) {
 		}
 	})
 
-	t.Run("redis provision is no-op", func(t *testing.T) {
-		fc := &fakeCommander{}
-		p := &Provisioner{RC: fc}
-		if err := p.Provision(ctx, config.DBRedis, "mysvc", decl); err != nil {
-			t.Fatal(err)
-		}
-		if len(fc.runCalls) > 0 {
-			t.Errorf("expected no docker calls for Redis, got %d", len(fc.runCalls))
-		}
-	})
-
 	t.Run("unsupported db type returns error", func(t *testing.T) {
 		p := &Provisioner{RC: &fakeCommander{}}
 		err := p.Provision(ctx, config.DBType("mssql"), "mysvc", decl)
@@ -710,17 +730,6 @@ func TestDeprovision(t *testing.T) {
 		}
 		if !found {
 			t.Error("missing DROP USER for mariadb")
-		}
-	})
-
-	t.Run("redis deprovision is no-op", func(t *testing.T) {
-		fc := &fakeCommander{}
-		p := &Provisioner{RC: fc}
-		if err := p.Deprovision(ctx, config.DBRedis, "mysvc", decl); err != nil {
-			t.Fatal(err)
-		}
-		if len(fc.runCalls) > 0 {
-			t.Errorf("expected no docker calls for Redis, got %d", len(fc.runCalls))
 		}
 	})
 }

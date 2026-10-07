@@ -130,14 +130,18 @@ func upOne(root, name string, extraArgs ...string) error {
 	if err := config.EnsureRootDBConfig(rootConfigFile(), name); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: auto-configuring databases: %v\n", err)
 	}
-	if err := ensureDBDependencies(context.Background(), root, name); err != nil {
+	ctx := context.Background()
+	if err := prepareService(ctx, root, name); err != nil {
 		return err
 	}
 	fmt.Printf("%s Starting %s…\n", styles.Primary.Render("→"), styles.Bold.Render(name))
 	composeFile := run.ServiceComposeFile(root, name)
 	env := buildEnv(root, name)
 	warnPortCollisions([]string{composeFile}, env, nil)
-	return run.Default().DockerComposeEnv(composeFile, env, append([]string{"up", "-d"}, extraArgs...)...)
+	if err := run.Default().DockerComposeEnv(composeFile, env, append([]string{"up", "-d"}, extraArgs...)...); err != nil {
+		return err
+	}
+	return bootstrapIfShared(ctx, root, name)
 }
 
 // runServiceDown removes a service's containers. Routing is left alone, as

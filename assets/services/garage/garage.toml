@@ -1,0 +1,27 @@
+# Garage — single-node object store shared by the homelab catalog.
+# https://garagehq.deuxfleurs.fr/documentation/reference-manual/configuration/
+#
+# rpc_secret and admin_token are NOT in this file: Garage reads them from the
+# GARAGE_RPC_SECRET / GARAGE_ADMIN_TOKEN environment variables, which homelab
+# fills from the keyring.
+
+metadata_dir = "/var/lib/garage/meta"
+data_dir = "/var/lib/garage/data"
+# sqlite over the default lmdb: slower, but survives an unclean shutdown
+# without metadata corruption, which matters more on a homelab box.
+db_engine = "sqlite"
+
+# One node, one copy. Garage refuses writes until a layout exists; the homelab
+# provisioner applies one on first start (`garage layout assign/apply`).
+replication_factor = 1
+
+rpc_bind_addr = "[::]:3901"
+rpc_public_addr = "127.0.0.1:3901"
+
+[s3_api]
+# Every client must sign for this region (homelab injects it as `region`).
+s3_region = "garage"
+api_bind_addr = "[::]:3900"
+
+[admin]
+api_bind_addr = "[::]:3903"

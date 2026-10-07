@@ -107,6 +107,15 @@ func (c *Commander) Output(name string, args ...string) ([]byte, error) {
 	return cmd.Output()
 }
 
+// OutputFrom is Output with r fed to stdin: for commands whose input carries a
+// credential that must not appear in argv, and whose reply the caller checks.
+func (c *Commander) OutputFrom(r io.Reader, name string, args ...string) ([]byte, error) {
+	cmd := exec.Command(name, args...)
+	cmd.Stdin = r
+	cmd.Stderr = io.Discard
+	return cmd.Output()
+}
+
 // RunTo executes a command streaming its stdout into w. Use it instead of
 // Output when the payload can be large — a database dump must not be buffered
 // in memory in its entirety just to be written to a file.

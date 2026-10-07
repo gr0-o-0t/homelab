@@ -1,7 +1,7 @@
 # Service: SearXNG (privacy-respecting metasearch engine)
 # https://docs.searxng.org/admin/installation-docker.html
-# db: uses shared Redis (homelab-redis). REDIS_URL is auto-generated
-# from config.yaml `databases:` section at runtime.
+# db: uses shared Redis (homelab-redis) — redis://:<password>@homelab-redis:6379/<n>,
+# generated from config.yaml `databases:` at runtime.
 networks:
   home-services:
     name: home-services

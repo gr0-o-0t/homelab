@@ -32,10 +32,13 @@ databases:
         user: DB_USERNAME
         password: DB_PASSWORD
         database: DB_DATABASE_NAME
+  # Shared homelab-redis: the shared password, and a database number of its own.
   - redis:
       env:
         host: REDIS_HOSTNAME
         port: REDIS_PORT
+        password: REDIS_PASSWORD
+        db: REDIS_DBINDEX
 
 ports:
   - 2283

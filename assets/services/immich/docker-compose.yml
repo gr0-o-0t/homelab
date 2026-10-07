@@ -80,6 +80,8 @@ services:
       DB_VECTOR_EXTENSION: vectorchord
       REDIS_HOSTNAME: ${REDIS_HOSTNAME}
       REDIS_PORT: ${REDIS_PORT}
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      REDIS_DBINDEX: ${REDIS_DBINDEX}
       IMMICH_VERSION: ${IMMICH_VERSION:-release}
     volumes:
       # /data, not /usr/src/app/upload — see the media-location note above.

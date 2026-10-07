@@ -3,6 +3,8 @@ secrets:
   SECRET_KEY:
     required: true
     description: "Signs search request state - any long random string"
+# Shared homelab-redis; the dsn carries the shared password and this
+# service's own database number.
 databases:
   - redis:
       env:

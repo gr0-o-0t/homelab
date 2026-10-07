@@ -5,25 +5,22 @@
 # Database: uses shared PostgreSQL (homelab-postgres) via config.yaml
 # `databases:` section — NB_DB_HOST/NB_DB_PORT/NB_DB_NAME/etc.
 #
-# Redis/valkey: 2 instances via multi-instance databases spec.
-# Instance 1: netbox-redis (port 6379, main).
-# Instance 2: netbox-redis-cache (port 6380, cache).
-# Both stay local since shared homelab-redis can't split ports.
-# Env vars (NB_REDIS_HOST/NB_REDIS_PORT/NB_REDIS_CACHE_*) injected
-# from config.yaml at runtime.
-# Valkey runs without `user:`: its entrypoint chowns /data and drops to the
-# valkey user; as uid 1000 BGSAVE fails on /data and, with the default
-# stop-writes-on-bgsave-error, Valkey then refuses every write.
-# Both redis instances sit on netbox-internal only — not reachable from
-# other services on home-services, matching the isolation convention.
+# Redis: shared homelab-redis, two database numbers (task queue, cache)
+# from the two named `redis` declarations in config.yaml. The LinuxServer
+# image reads REDIS_HOST/PORT/PASSWORD plus REDIS_DB_TASK and REDIS_DB_CACHE
+# (init-netbox-config) — one host, two databases.
+#
+# ⚠ That init script only renders /config/configuration.py when the file does
+# not exist yet. An install from before this change keeps pointing at the
+# removed netbox-redis containers: edit the REDIS block in
+# /config/configuration.py (netbox_data volume) to match these values, or
+# move the file aside so the next start regenerates it.
 # ─────────────────────────────────────────────────────────────────────────────
 
 networks:
   home-services:
     name: home-services
     external: true
-  netbox-internal:
-    internal: true
 
 services:
   netbox:
@@ -32,11 +29,6 @@ services:
     # No `user:` — LinuxServer images boot s6-overlay as root and drop to
     # PUID/PGID (below) themselves; a forced uid breaks /init.
     restart: always
-    depends_on:
-      netbox-redis:
-        condition: service_healthy
-      netbox-redis-cache:
-        condition: service_healthy
     environment:
       PUID: ${PUID:-1000}
       PGID: ${PGID:-1000}
@@ -49,21 +41,16 @@ services:
       DB_NAME: ${NB_DB_NAME}
       DB_USER: ${NB_DB_USER}
       DB_PASSWORD: ${NB_DB_PASS}
-      # Local to this stack (see netbox-internal below), so these are constants
-      # rather than injected from config.yaml `databases:` — declaring them there
-      # would make `homelab up netbox` demand the shared homelab-redis container.
-      REDIS_HOST: netbox-redis
-      REDIS_PORT: "6379"
-      REDIS_PASSWORD: ""
-      REDIS_CACHE_HOST: netbox-redis-cache
-      REDIS_CACHE_PORT: "6380"
-      REDIS_CACHE_PASSWORD: ""
+      REDIS_HOST: ${NB_REDIS_HOST}
+      REDIS_PORT: ${NB_REDIS_PORT}
+      REDIS_PASSWORD: ${NB_REDIS_PASSWORD}
+      REDIS_DB_TASK: ${NB_REDIS_DB_TASK}
+      REDIS_DB_CACHE: ${NB_REDIS_DB_CACHE}
       SECRET_KEY: ${SECRET_KEY}
     volumes:
       - netbox-data:/config
     networks:
       - home-services
-      - netbox-internal
     healthcheck:
       test:
         [
@@ -74,32 +61,6 @@ services:
       timeout: 10s
       retries: 5
       start_period: 120s
-
-  netbox-redis:
-    image: docker.io/valkey/valkey:9-alpine
-    container_name: netbox-redis
-    restart: always
-    command: valkey-server --port 6379
-    networks:
-      - netbox-internal
-    healthcheck:
-      test: ["CMD-SHELL", "valkey-cli -p 6379 ping || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  netbox-redis-cache:
-    image: docker.io/valkey/valkey:9-alpine
-    container_name: netbox-redis-cache
-    restart: always
-    command: valkey-server --port 6380
-    networks:
-      - netbox-internal
-    healthcheck:
-      test: ["CMD-SHELL", "valkey-cli -p 6380 ping || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
 
 volumes:
   netbox-data:

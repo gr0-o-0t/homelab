@@ -9,7 +9,10 @@
 #     — see config.yaml `databases:`. The database, role, password and the
 #     `vector`/`uuid-ossp`/`pgcrypto` extensions are all created by
 #     `homelab setup appflowy`.
-#   - Redis is the shared homelab-redis.
+#   - Redis is the shared homelab-redis, on its own database number.
+#   - No minio container. Files go to a bucket on the shared homelab-garage
+#     (S3-compatible), with an access key scoped to that bucket — see
+#     config.yaml `databases:`. MinIO CE is archived and publishes no images.
 #   - No `ai` service and AI_ENABLED=false: it needs an OpenAI key to do
 #     anything. To turn AI on, add appflowyinc/appflowy_ai, flip AI_ENABLED,
 #     and set AI_OPENAI_API_KEY (an OpenAI-compatible base URL can point at
@@ -28,19 +31,22 @@ x-base-url: &base-url "https://appflowy.${HOME_SUBDOMAIN}.${DOMAIN}"
 # injected by config.yaml `databases:` rather than hardcoded.
 x-db-url: &db-url "postgres://${APPFLOWY_DB_USER}:${APPFLOWY_DB_PASSWORD}@${APPFLOWY_DB_HOST}:${APPFLOWY_DB_PORT}/${APPFLOWY_DB_NAME}"
 
-# Shared by every container that reads or writes user files. MinIO is addressed
-# by its internal host here; presigned URLs get signed against it, which is why
-# caddy.routes.conf has to rewrite Host on /minio-api.
+# Shared by every container that reads or writes user files. "use_minio" is
+# AppFlowy's name for "custom endpoint, path-style addressing", which is what
+# Garage needs; the region must match garage.toml's s3_region or Garage rejects
+# the signature. Every value is injected from config.yaml `databases: - s3:`.
 x-s3-env: &s3-env
   APPFLOWY_S3_USE_MINIO: "true"
-  APPFLOWY_S3_MINIO_URL: "http://appflowy-minio:9000"
+  APPFLOWY_S3_MINIO_URL: ${APPFLOWY_S3_ENDPOINT}
   APPFLOWY_S3_ACCESS_KEY: ${APPFLOWY_S3_ACCESS_KEY}
   APPFLOWY_S3_SECRET_KEY: ${APPFLOWY_S3_SECRET_KEY}
-  APPFLOWY_S3_BUCKET: appflowy
+  APPFLOWY_S3_BUCKET: ${APPFLOWY_S3_BUCKET}
+  APPFLOWY_S3_REGION: ${APPFLOWY_S3_REGION}
 
 networks:
   # Shared network — Caddy (via the Tailscale namespace) reaches services here,
-  # and it is also how these containers reach homelab-postgres and homelab-redis.
+  # and it is also how these containers reach homelab-postgres, homelab-redis
+  # and homelab-garage.
   home-services:
     name: home-services
     external: true
@@ -79,8 +85,13 @@ services:
       APPFLOWY_GOTRUE_BASE_URL: "http://appflowy-gotrue:9999"
       APPFLOWY_GOTRUE_JWT_SECRET: ${APPFLOWY_GOTRUE_JWT_SECRET}
       APPFLOWY_ACCESS_CONTROL: "true"
-      APPFLOWY_S3_CREATE_BUCKET: "true"
-      APPFLOWY_S3_PRESIGNED_URL_ENDPOINT: "https://appflowy.${HOME_SUBDOMAIN}.${DOMAIN}/minio-api"
+      # The provisioner creates the bucket; the service's key may not create
+      # buckets, so AppFlowy's own attempt would fail with AccessDenied.
+      APPFLOWY_S3_CREATE_BUCKET: "false"
+      # Presigned URLs are signed for APPFLOWY_S3_MINIO_URL, then AppFlowy
+      # swaps that prefix for this one before handing them to the browser.
+      # caddy.routes.conf maps /s3 back onto garage — see there.
+      APPFLOWY_S3_PRESIGNED_URL_ENDPOINT: "https://appflowy.${HOME_SUBDOMAIN}.${DOMAIN}/s3"
       APPFLOWY_SEARCH_SERVICE_URL: "http://appflowy-search:4002"
       AI_ENABLED: "false"
     depends_on:
@@ -206,32 +217,6 @@ services:
       retries: 12
       start_period: 40s
 
-  # S3-compatible object storage for uploads, attachments and collab blobs.
-  appflowy-minio:
-    # Pinned: MinIO dropped the web console from community releases after this
-    # tag. The /minio-api route (uploads) works on any version — only the
-    # /minio console route depends on the pin.
-    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
-    container_name: appflowy-minio
-    restart: always
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: ${APPFLOWY_S3_ACCESS_KEY}
-      MINIO_ROOT_PASSWORD: ${APPFLOWY_S3_SECRET_KEY}
-      MINIO_BROWSER_REDIRECT_URL: "https://appflowy.${HOME_SUBDOMAIN}.${DOMAIN}/minio"
-    volumes:
-      - appflowy-minio-data:/data
-    networks:
-      - home-services
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 20s
-
 volumes:
-  appflowy-minio-data:
-    name: appflowy_minio_data
   appflowy-keyword-index:
     name: appflowy_keyword_index

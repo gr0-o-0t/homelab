@@ -1,0 +1,56 @@
+# ─────────────────────────────────────────────────────────────────
+# Shared S3 object storage (Garage) for homelab services
+# https://garagehq.deuxfleurs.fr/
+# ─────────────────────────────────────────────────────────────────
+# Install:   homelab add garage
+# Start:     homelab up garage   (secrets are generated, and the
+#            single-node cluster layout is applied, automatically)
+#
+# Services that need object storage declare `databases: - s3: ...`
+# in their config.yaml. The provisioner creates one bucket and one
+# access key per service, grants that key on that bucket only, and
+# keeps the key in the service's keyring namespace. `homelab delete`
+# removes the key; the bucket and its objects stay.
+#
+# The S3 API (3900) is reachable only on home-services, as
+# http://homelab-garage:3900, path-style, region "garage". It is not
+# routed through Caddy: a service whose browser clients need presigned
+# URLs routes them itself (see appflowy's caddy.routes.conf).
+#
+# Inspect:   docker exec homelab-garage /garage status
+#            docker exec homelab-garage /garage bucket list
+# ─────────────────────────────────────────────────────────────────
+
+networks:
+  home-services:
+    name: home-services
+    external: true
+
+services:
+  garage:
+    image: dxflrs/garage:${GARAGE_VERSION:-v2.4.1}
+    container_name: homelab-garage
+    restart: always
+    environment:
+      GARAGE_RPC_SECRET: ${GARAGE_RPC_SECRET:?GARAGE_RPC_SECRET is not set — run `homelab up garage`}
+      GARAGE_ADMIN_TOKEN: ${GARAGE_ADMIN_TOKEN}
+    volumes:
+      - ./garage.toml:/etc/garage.toml:ro
+      - garage-meta:/var/lib/garage/meta
+      - garage-data:/var/lib/garage/data
+    networks:
+      - home-services
+    healthcheck:
+      # The image is just the binary — no shell, curl or wget. `garage status`
+      # talks to the node over RPC, so it fails until the daemon is up.
+      test: ["CMD", "/garage", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  garage-meta:
+    name: homelab_garage_meta
+  garage-data:
+    name: homelab_garage_data

@@ -34,14 +34,19 @@ databases:
         user: NB_DB_USER
         password: NB_DB_PASS
         database: NB_DB_NAME
-# NetBox's two Valkey instances are local to this stack (netbox-internal), so
-# they are deliberately NOT declared here: ensureDBDependencies checks the
-# *shared* container for every declared type, which made `homelab up netbox`
-# fail unless homelab-redis was running even though NetBox never touches it.
-# Their hostnames are constants in docker-compose.yml instead.
-#
-# Consolidating them onto shared homelab-redis would need REDIS_DB /
-# REDIS_CACHE_DB support in the LinuxServer image confirmed first — NetBox wants
-# two separate Redis databases, not two hosts.
+  # Shared homelab-redis. NetBox keeps its task queue and its cache in two
+  # separate databases, so it declares two named instances and gets two
+  # numbers; the host and shared password are the same for both.
+  - redis:
+      name: tasks
+      env:
+        host: NB_REDIS_HOST
+        port: NB_REDIS_PORT
+        password: NB_REDIS_PASSWORD
+        db: NB_REDIS_DB_TASK
+  - redis:
+      name: cache
+      env:
+        db: NB_REDIS_DB_CACHE
 ports:
   - 8000

@@ -2,8 +2,15 @@
 # Service: Nextcloud (self-hosted cloud storage and collaboration)
 # https://hub.docker.com/_/nextcloud
 # ─────────────────────────────────────────────────────────────────────────────
-# Database: uses shared MariaDB (homelab-mariadb) and shared Redis
+# Database: uses shared PostgreSQL (homelab-postgres) and shared Redis
 # (homelab-redis). Credentials auto-generated at `homelab setup nextcloud`.
+#
+# ⚠ An install created against the old shared MariaDB keeps dbtype=mysql in
+# config/config.php — the POSTGRES_* variables only drive the first-run
+# installer. Move it with Nextcloud's own converter before relying on postgres:
+#   homelab up postgres && homelab setup nextcloud   # creates db + role
+#   docker exec -u 1000 nextcloud php occ db:convert-type --all-apps \
+#       --password "<NC_DB_PASS>" pgsql nextcloud homelab-postgres nextcloud
 # Healthcheck uses curl: the image has no wget (busybox-static ships without
 # applet symlinks).
 # ─────────────────────────────────────────────────────────────────────────────
@@ -20,15 +27,17 @@ services:
     user: "${PUID:-1000}:${PGID:-1000}"
     restart: always
     environment:
-      MYSQL_HOST: ${NC_DB_HOST}
-      MYSQL_PORT: ${NC_DB_PORT}
-      MYSQL_DATABASE: ${NC_DB_NAME}
-      MYSQL_USER: ${NC_DB_USER}
-      MYSQL_PASSWORD: ${NC_DB_PASS}
+      # The installer takes the port as part of the host.
+      POSTGRES_HOST: ${NC_DB_HOST}:${NC_DB_PORT}
+      POSTGRES_DB: ${NC_DB_NAME}
+      POSTGRES_USER: ${NC_DB_USER}
+      POSTGRES_PASSWORD: ${NC_DB_PASS}
       NEXTCLOUD_ADMIN_USER: ${ADMIN_USER:-admin}
       NEXTCLOUD_ADMIN_PASSWORD: ${ADMIN_PASSWORD}
       NEXTCLOUD_TRUSTED_DOMAINS: nextcloud.${HOME_SUBDOMAIN}.${DOMAIN}
       REDIS_HOST: ${NC_REDIS_HOST}
+      REDIS_HOST_PORT: ${NC_REDIS_PORT}
+      REDIS_HOST_PASSWORD: ${NC_REDIS_PASSWORD}
       OVERWRITEPROTOCOL: https
     volumes:
       - nextcloud-data:/var/www/html
