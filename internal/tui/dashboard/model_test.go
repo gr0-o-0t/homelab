@@ -100,11 +100,12 @@ func Test_CursorBounds_Clamped(t *testing.T) {
 	m := newTestModel(stubServices())
 	m.width, m.height = 120, 40
 	m.state = stateNormal
-	m.cursor = 5 // last visible (paperless is at index 5, 0-based: 5 items)
+	last := len(m.visibleServices()) - 1
+	m.cursor = last
 
 	// Try moving past end
 	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
-	assert.Equal(t, 5, m2.(Model).cursor, "cursor should not go past last item")
+	assert.Equal(t, last, m2.(Model).cursor, "cursor should not go past last item")
 }
 
 // ── Filter ────────────────────────────────────────────────────────────────────
@@ -167,13 +168,14 @@ func Test_Filter_EmptyShowsAll(t *testing.T) {
 	m.width, m.height = 120, 40
 	m.filter = ""
 	visible := m.visibleServices()
-	assert.Equal(t, len(m.services), len(visible))
+	assert.Equal(t, len(m.services)+1, len(visible), "every service plus the pinned core row")
+	assert.True(t, isCore(&visible[0]))
 }
 
 // ── State transitions ─────────────────────────────────────────────────────────
 
 func Test_Refresh_SetsServices(t *testing.T) {
-	m := newTestModel(stubServices())
+	m := selectNamed(newTestModel(stubServices()), "caddy")
 	m.width, m.height = 120, 40
 
 	refreshed, cmd := m.Update(refreshedMsg{services: stubServices()})
@@ -223,7 +225,7 @@ func Test_EnablePrompt_CatalogServiceIgnored(t *testing.T) {
 	m := newTestModel(stubServices())
 	m.width, m.height = 120, 40
 	m.state = stateNormal
-	m.cursor = 4 // paperless — catalog only, not installed
+	m = selectNamed(m, "paperless") // catalog only, not installed
 
 	// Pressing 'e' on a non-installed service should be a no-op
 	prompted, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
@@ -351,7 +353,7 @@ func Test_CtrlD_ClampsAtBottom(t *testing.T) {
 func Test_ContainerDetailMsg_UpdatesDetailPane(t *testing.T) {
 	m := newTestModel(stubServices())
 	m.width, m.height = 120, 40
-	m.cursor = 0 // caddy — installed
+	m = selectNamed(m, "caddy")
 
 	upd, _ := m.Update(containerDetailMsg{
 		svcName: "caddy",
@@ -449,6 +451,16 @@ func layeredModel() Model {
 		fakeLayer{name: "cf", ctr: "cloudflared"},
 		fakeLayer{name: "tor", ctr: "tor"},
 	}
+	return selectNamed(m, "caddy")
+}
+
+// selectNamed puts the cursor on the named row.
+func selectNamed(m Model, name string) Model {
+	for i, s := range m.visibleServices() {
+		if s.Name == name && !isCore(&s) {
+			m.cursor = i
+		}
+	}
 	return m
 }
 
@@ -482,7 +494,7 @@ func Test_DisablePrompt_OffersOnlyActiveLayers(t *testing.T) {
 
 func Test_DisablePrompt_NothingActive(t *testing.T) {
 	m := layeredModel()
-	m.cursor = 2 // jellyfin: no layers enabled
+	m = selectNamed(m, "jellyfin") // no layers enabled
 	m = press(m, "d")
 	assert.Equal(t, stateNormal, m.state)
 	assert.Contains(t, m.lastErr, "no network layers")
@@ -543,4 +555,24 @@ func Test_View_FitsTerminalHeight(t *testing.T) {
 		}
 		assert.Equal(t, 12, strings.Count(m.View(), "\n")+1, "help=%v", help)
 	}
+}
+
+func Test_CoreRow_RunsNoServiceCommands(t *testing.T) {
+	m := layeredModel()
+	m.cursor = 0
+	require.True(t, isCore(m.selectedService()), "core is pinned first")
+
+	assert.Equal(t, "homelab restart…", press(m, "r").busyMsg)
+	assert.Equal(t, "homelab update…", press(m, "U").busyMsg)
+
+	stopped := press(m, "x")
+	assert.Equal(t, stateNormal, stopped.state, "down on the core is shell-only")
+	assert.Contains(t, stopped.lastErr, "homelab down")
+
+	assert.Equal(t, stateNormal, press(m, "e").state, "core has no layers to enable")
+	assert.True(t, press(m, "l").SelectedCoreLogs)
+}
+
+func Test_UpdateKey_RunsUpdate(t *testing.T) {
+	assert.Equal(t, "homelab update caddy…", press(layeredModel(), "U").busyMsg)
 }

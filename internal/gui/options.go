@@ -13,4 +13,9 @@ type Options struct {
 	Layers   []network.NetworkLayer
 	Env      func(svc string) map[string]string
 	CLI      []string
+	// Core reports the state of each core container by name, caddy first.
+	Core func() []ContainerState
 }
+
+// ContainerState is one core container and its docker state ("" = absent).
+type ContainerState struct{ Name, State string }

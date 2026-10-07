@@ -1,10 +1,12 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/mattn/go-isatty"
@@ -63,6 +65,10 @@ func runDashboardTUI(root string) error {
 			// Install the selected catalog service, then re-enter the dashboard.
 			if err := runServiceAdd(nil, []string{final.SelectedForInstall}); err != nil {
 				fmt.Fprintf(os.Stderr, "install failed: %v\n", err)
+			}
+		case final.SelectedCoreLogs:
+			if err := runLogTUI(root, ""); err != nil {
+				return err
 			}
 		case final.SelectedForLogs != "":
 			if err := runLogTUI(root, final.SelectedForLogs); err != nil {
@@ -176,10 +182,23 @@ func runGUI(root string) error {
 		defer func() { _ = dc.Close() }()
 	}
 	catalog := catalogNames()
+	layers := uiLayers(root)
 	return gui.Run(gui.Options{
 		Discover: func() ([]service.Service, error) { return discoverAll(root, dc, catalog) },
-		Layers:   uiLayers(root),
+		Layers:   layers,
 		Env:      func(name string) map[string]string { return buildEnv(root, name) },
 		CLI:      selfCLI(root),
+		Core: func() []gui.ContainerState {
+			if dc == nil {
+				return nil
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			out := []gui.ContainerState{{Name: "caddy", State: dc.ContainerState(ctx, "caddy")}}
+			for _, l := range layers {
+				out = append(out, gui.ContainerState{Name: l.ContainerName(), State: dc.ContainerState(ctx, l.ContainerName())})
+			}
+			return out
+		},
 	})
 }

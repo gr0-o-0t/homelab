@@ -153,3 +153,20 @@ func TestDetectServicePort_NeitherSource(t *testing.T) {
 	_, err := detectServicePort(root, "empty")
 	assert.ErrorContains(t, err, "no ports declared in config.yaml")
 }
+
+func TestInstallAssets_KeepsUserAndStateFiles(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, installAssets(dir))
+
+	tunnels := filepath.Join(dir, "i2p", "tunnels.conf")
+	caddyfile := filepath.Join(dir, "caddy", "Caddyfile")
+	require.NoError(t, os.WriteFile(tunnels, []byte("[svc]\ntype = http\n"), 0o600))
+	require.NoError(t, os.WriteFile(caddyfile, []byte("stale"), 0o600))
+
+	require.NoError(t, installAssets(dir))
+
+	got, _ := os.ReadFile(tunnels)
+	assert.Equal(t, "[svc]\ntype = http\n", string(got), "tunnels.conf holds live eepsites")
+	got, _ = os.ReadFile(caddyfile)
+	assert.NotEqual(t, "stale", string(got), "the Caddyfile is refreshed")
+}

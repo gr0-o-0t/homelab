@@ -342,9 +342,10 @@ func step(icon, msg string) {
 	fmt.Printf("  %s  %s\n", icon, msg)
 }
 
-// installAssets copies the embedded core and caddy trees from assets.CoreFS
-// into configDir. Existing files are overwritten so that `homelab setup` can
-// be re-run to update them.
+// installAssets copies the embedded core trees from assets.CoreFS into
+// configDir. Files homelab owns outright are overwritten so re-running setup,
+// or `homelab update`, picks up a new version; the rest are only created when
+// missing — see assetIsManaged.
 func installAssets(configDir string) error {
 	// Pre-create services/ so Docker (running as root) doesn't create it
 	// via the Caddy volume mount, which would make it root-owned and break
@@ -360,6 +361,9 @@ func installAssets(configDir string) error {
 		if d.IsDir() {
 			return os.MkdirAll(dest, 0o750)
 		}
+		if _, err := os.Stat(dest); err == nil && !assetIsManaged(path) {
+			return nil
+		}
 		data, err := assets.CoreFS.ReadFile(path)
 		if err != nil {
 			return err
@@ -369,6 +373,16 @@ func installAssets(configDir string) error {
 		}
 		return os.WriteFile(dest, data, 0o600)
 	})
+}
+
+// assetIsManaged reports whether an embedded core file is homelab's to
+// overwrite: the compose file, Dockerfiles and entrypoints, the Caddyfile, and
+// READMEs. Everything else under tor/, i2p/ and yggdrasil/ is a starting point
+// that becomes the user's — i2p/tunnels.conf holds every service's eepsite
+// tunnel, and torrc, i2pd.conf and yggdrasil.conf are meant to be edited — so
+// overwriting them on update would silently drop exposure or local changes.
+func assetIsManaged(path string) bool {
+	return strings.HasPrefix(path, "core/") || path == "caddy/Caddyfile" || filepath.Base(path) == "README"
 }
 
 // ── prompt helpers ────────────────────────────────────────────────────────────

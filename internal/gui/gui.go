@@ -48,8 +48,12 @@ type app struct {
 	shared
 }
 
+// coreName is the pinned core row. Its buttons run the CLI's no-service forms.
+const coreName = "core"
+
 // shared is the state background goroutines write.
 type shared struct {
+	core     []ContainerState
 	services []service.Service
 	selected string
 	busy     string // label of the running action; one at a time
@@ -75,15 +79,20 @@ func Run(opt Options) error {
 
 func (a *app) refresh() {
 	svcs, err := a.opt.Discover()
+	var core []ContainerState
+	if a.opt.Core != nil {
+		core = a.opt.Core()
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	a.core = core
 	if err != nil {
 		a.status, a.failed = err.Error(), true
 		return
 	}
 	a.services = svcs
-	if a.selected == "" && len(svcs) > 0 {
-		a.selected = svcs[0].Name
+	if a.selected == "" {
+		a.selected = coreName
 	}
 }
 
@@ -126,7 +135,11 @@ func (a *app) loadLogs(name string) {
 	a.logsFor, a.logs = name, "loading…"
 	a.mu.Unlock()
 	go func() {
-		argv := append(append([]string{}, a.opt.CLI...), "logs", "-n", "200", name)
+		args := []string{"logs", "-n", "200"}
+		if name != coreName {
+			args = append(args, name)
+		}
+		argv := append(append([]string{}, a.opt.CLI...), args...)
 		out, _ := exec.Command(argv[0], argv[1:]...).CombinedOutput()
 		a.mu.Lock()
 		if a.logsFor == name {
@@ -180,6 +193,24 @@ func (a *app) statusLine() g.Widget {
 func (a *app) listPane() g.Widget {
 	rows := []*g.TableRowWidget{}
 	f := strings.ToLower(a.filter)
+	if strings.Contains(coreName, f) {
+		running := 0
+		for _, c := range a.v.core {
+			if c.State == "running" {
+				running++
+			}
+		}
+		col := colRunning
+		if running < len(a.v.core) {
+			col = colPartial
+		}
+		rows = append(rows, g.TableRow(
+			g.Selectable(coreName).Selected(a.v.selected == coreName).
+				Flags(g.SelectableFlagsSpanAllColumns).OnClick(func() { a.selectService(coreName) }),
+			g.Style().SetColor(g.StyleColorText, col).To(g.Label(strconv.Itoa(running)+"/"+strconv.Itoa(len(a.v.core))+" running")),
+			g.Label("core stack"),
+		))
+	}
 	for _, s := range a.v.services {
 		if f != "" && !strings.Contains(strings.ToLower(s.Name), f) {
 			continue
@@ -222,6 +253,9 @@ func stateText(s service.Service) (string, color.Color) {
 }
 
 func (a *app) detailPane() g.Widget {
+	if a.v.selected == coreName {
+		return a.coreDetail()
+	}
 	var svc *service.Service
 	for i := range a.v.services {
 		if a.v.services[i].Name == a.v.selected {
@@ -245,7 +279,7 @@ func (a *app) detailPane() g.Widget {
 	name := svc.Name
 	state, col := stateText(*svc)
 	var buttons []g.Widget
-	for _, verb := range []string{"up", "stop", "restart", "down"} {
+	for _, verb := range []string{"up", "stop", "restart", "down", "update"} {
 		buttons = append(buttons, g.Button(verb).Disabled(a.v.busy != "").
 			OnClick(func() { a.do("homelab "+verb+" "+name, verb, name) }))
 	}
@@ -266,6 +300,43 @@ func (a *app) detailPane() g.Widget {
 		a.containers(svc),
 		g.Spacing(),
 		g.Row(g.Label("Logs"), g.Button("Reload").OnClick(func() { a.loadLogs(name) })),
+		g.InputTextMultiline(&a.v.logs).Flags(g.InputTextFlagsReadOnly).Size(-1, -1),
+	}
+}
+
+// coreDetail shows the core containers and the core actions. Stop and down
+// are left to a shell: the core serves every route, this GUI's included.
+func (a *app) coreDetail() g.Widget {
+	var buttons []g.Widget
+	for _, verb := range []string{"up", "restart", "update"} {
+		buttons = append(buttons, g.Button(verb).Disabled(a.v.busy != "").
+			OnClick(func() { a.do("homelab "+verb, verb) }))
+	}
+	rows := make([]*g.TableRowWidget, 0, len(a.v.core))
+	for _, c := range a.v.core {
+		state, col := c.State, color.Color(colRunning)
+		if state != "running" {
+			col = colPartial
+		}
+		if state == "" {
+			state, col = "not running", colMuted
+		}
+		rows = append(rows, g.TableRow(g.Label(c.Name), g.Style().SetColor(g.StyleColorText, col).To(g.Label(state))))
+	}
+	if a.v.logsFor != coreName {
+		a.loadLogs(coreName)
+	}
+	return g.Layout{
+		g.Label("core stack"),
+		g.Separator(),
+		g.Row(buttons...),
+		g.Style().SetColor(g.StyleColorText, colMuted).To(
+			g.Label("update refreshes the core files, pulls and rebuilds. Stop/down the core from a shell.").Wrapped(true)),
+		g.Spacing(),
+		g.Table().Size(-1, float32(len(rows)+1)*24+4).
+			Columns(g.TableColumn("Container"), g.TableColumn("State")).Rows(rows...),
+		g.Spacing(),
+		g.Row(g.Label("Logs"), g.Button("Reload").OnClick(func() { a.loadLogs(coreName) })),
 		g.InputTextMultiline(&a.v.logs).Flags(g.InputTextFlagsReadOnly).Size(-1, -1),
 	}
 }

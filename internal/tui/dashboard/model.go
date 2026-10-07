@@ -124,6 +124,7 @@ type Model struct {
 	lastKey string // for detecting multi-key sequences (gg)
 
 	// exit signals
+	SelectedCoreLogs   bool
 	SelectedForLogs    string
 	SelectedForNew     bool
 	SelectedForInstall string // catalog service name chosen for installation
@@ -149,6 +150,27 @@ func New(repoRoot string, dc *docker.Client, services []service.Service, catalog
 		cli:          cli,
 		spin:         sp,
 	}
+}
+
+// coreDir marks the pinned core row. Its actions run the CLI's no-service
+// forms — `homelab up`, `restart`, `update`, `logs` — which act on the core
+// stack. Dir is empty for catalog stubs and absolute for real services, so the
+// marker cannot collide with either.
+const coreDir = "@core"
+
+func isCore(svc *service.Service) bool { return svc != nil && svc.Dir == coreDir }
+
+// coreService is the core stack as a list row, counted from the header's
+// container states.
+func (m Model) coreService() service.Service {
+	s := service.Service{Name: "core", Installed: true, Dir: coreDir}
+	for _, c := range m.coreContainers() {
+		s.Total++
+		if m.core[c] == "running" {
+			s.Running++
+		}
+	}
+	return s
 }
 
 // coreContainers is caddy plus each configured layer's container.
@@ -326,6 +348,7 @@ func (m Model) handleKey(msg tea.KeyMsg, cmds []tea.Cmd) (Model, []tea.Cmd) {
 		}
 		svc := m.selectedService()
 		installed := svc != nil && svc.Installed
+		core := isCore(svc)
 
 		switch k {
 		case "q":
@@ -401,6 +424,9 @@ func (m Model) handleKey(msg tea.KeyMsg, cmds []tea.Cmd) (Model, []tea.Cmd) {
 		// named after — the hint text and the command are the same word.
 		case "enter":
 			switch {
+			case core:
+				m.SelectedCoreLogs = true
+				return m, append(cmds, tea.Quit)
 			case installed:
 				m.SelectedForLogs = svc.Name
 				return m, append(cmds, tea.Quit)
@@ -416,21 +442,38 @@ func (m Model) handleKey(msg tea.KeyMsg, cmds []tea.Cmd) (Model, []tea.Cmd) {
 			}
 
 		case "l":
+			if core {
+				m.SelectedCoreLogs = true
+				return m, append(cmds, tea.Quit)
+			}
 			if installed {
 				m.SelectedForLogs = svc.Name
 				return m, append(cmds, tea.Quit)
 			}
 
-		case "u", "s", "r", "x":
-			if installed {
-				verb := map[string]string{"u": "up", "s": "stop", "r": "restart", "x": "down"}[k]
-				done := map[string]string{"up": "started", "stop": "stopped", "restart": "restarted", "down": "taken down"}[verb]
-				m.busyOp(fmt.Sprintf("homelab %s %s…", verb, svc.Name))
-				cmds = append(cmds, m.cliCmd(svc.Name+" "+done, verb, svc.Name), m.spin.Tick)
+		case "u", "s", "r", "x", "U":
+			if !installed {
+				break
 			}
+			verb := map[string]string{"u": "up", "s": "stop", "r": "restart", "x": "down", "U": "update"}[k]
+			done := map[string]string{"up": "started", "stop": "stopped", "restart": "restarted",
+				"down": "taken down", "update": "updated"}[verb]
+			args := []string{verb, svc.Name}
+			if core {
+				// Stopping the core takes down every route, including the
+				// ones this dashboard's services are reached by: keep that a
+				// deliberate shell command.
+				if verb == "stop" || verb == "down" {
+					m.lastErr = "run `homelab " + verb + "` in a shell to " + verb + " the core stack"
+					break
+				}
+				args = []string{verb}
+			}
+			m.busyOp("homelab " + strings.Join(args, " ") + "…")
+			cmds = append(cmds, m.cliCmd(svc.Name+" "+done, args...), m.spin.Tick)
 
 		case "e", "d":
-			if !installed {
+			if !installed || core {
 				break
 			}
 			m.state = stateEnablePrompt
@@ -501,11 +544,14 @@ func (m Model) layerByName(name string) (network.NetworkLayer, bool) {
 }
 
 func (m Model) visibleServices() []service.Service {
-	if m.filter == "" {
-		return m.services
-	}
-	var out []service.Service
 	f := strings.ToLower(m.filter)
+	out := make([]service.Service, 0, len(m.services)+1)
+	if strings.Contains("core", f) {
+		out = append(out, m.coreService())
+	}
+	if f == "" {
+		return append(out, m.services...)
+	}
 	for _, s := range m.services {
 		if strings.Contains(strings.ToLower(s.Name), f) {
 			out = append(out, s)

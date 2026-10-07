@@ -24,7 +24,7 @@ import (
 
 func (m Model) fetchLogsCmd() tea.Cmd {
 	svc := m.selectedService()
-	if svc == nil || !svc.Installed {
+	if svc == nil || !svc.Installed || isCore(svc) {
 		return nil
 	}
 	name := svc.Name
@@ -124,7 +124,7 @@ func inspectTickCmd() tea.Cmd {
 
 func (m Model) fetchInspectCmd() tea.Cmd {
 	svc := m.selectedService()
-	if svc == nil || !svc.Installed {
+	if svc == nil || !svc.Installed || isCore(svc) {
 		return nil
 	}
 	return inspectCmd(m.repoRoot, m.dc, svc.Name)

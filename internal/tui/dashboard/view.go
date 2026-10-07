@@ -139,6 +139,9 @@ func (m Model) renderListPane(height int) string {
 	// Count installed vs catalog in the visible slice.
 	installedCount, catalogCount := 0, 0
 	for _, s := range visible {
+		if isCore(&s) {
+			continue
+		}
 		if s.Installed {
 			installedCount++
 		} else {
@@ -242,6 +245,12 @@ func (m Model) renderListItem(svc service.Service, selected bool) string {
 		cursor = styles.Primary.Render("▶ ")
 	}
 
+	if isCore(&svc) {
+		dot := styles.Dot(svc.Running == svc.Total && svc.Total > 0, true)
+		ns := lipgloss.NewStyle().Width(installedNameW).Bold(true).Foreground(styles.ColText)
+		return cursor + dot + " " + ns.Render("core") + " " +
+			styles.Muted.Render(fmt.Sprintf("%d/%d", svc.Running, svc.Total))
+	}
 	if !svc.Installed {
 		plus := styles.Muted.Render("+")
 		ns := lipgloss.NewStyle().Width(catalogNameW).Foreground(styles.ColMuted)
@@ -304,10 +313,56 @@ func (m Model) renderDetailPane(height, width int) string {
 			Render("  No service selected")
 	}
 
+	if isCore(svc) {
+		return m.renderCoreDetail(svc, height, width)
+	}
 	if !svc.Installed {
 		return m.renderCatalogDetail(svc, height, width)
 	}
 	return m.renderInstalledDetail(svc, height, width)
+}
+
+// renderCoreDetail shows each core container and what the core keys run.
+func (m Model) renderCoreDetail(svc *service.Service, height, width int) string {
+	var b strings.Builder
+	w := width - 2
+	tag := styles.Success.Render(fmt.Sprintf("● %d/%d running", svc.Running, svc.Total))
+	if svc.Running < svc.Total {
+		tag = styles.Warning.Render(fmt.Sprintf("● %d/%d running", svc.Running, svc.Total))
+	}
+	b.WriteString(" " + lipgloss.NewStyle().Width(w).Render(styles.Bold.Render("core stack")+"  "+tag) + "\n")
+	b.WriteString(" " + styles.PaneBorder.Render(strings.Repeat("─", max(w, 1))) + "\n")
+
+	b.WriteString("\n " + styles.PaneTitle.Render("Containers") + "\n")
+	for _, c := range m.coreContainers() {
+		state := m.core[c]
+		st := styles.Muted.Render("not running")
+		switch state {
+		case "running":
+			st = styles.Success.Render(state)
+		case "":
+		default:
+			st = styles.Warning.Render(state)
+		}
+		fmt.Fprintf(&b, "  %s %s\n", lipgloss.NewStyle().Width(14).Render(c), st)
+	}
+
+	b.WriteString("\n " + styles.PaneTitle.Render("Actions") + "\n")
+	for _, a := range [][2]string{
+		{"u", "homelab up        create/start the core"},
+		{"r", "homelab restart"},
+		{"U", "homelab update    refresh files, pull, rebuild"},
+		{"enter", "homelab logs -f   core logs"},
+	} {
+		fmt.Fprintf(&b, "  %s %s\n", lipgloss.NewStyle().Width(8).Render(key(a[0])), styles.Muted.Render(a[1]))
+	}
+	b.WriteString("  " + styles.Muted.Render("stop/down the core from a shell — it serves every route") + "\n")
+
+	content := b.String()
+	for strings.Count(content, "\n") < height {
+		content += "\n"
+	}
+	return lipgloss.NewStyle().Width(width).Render(content)
 }
 
 func (m Model) renderCatalogDetail(svc *service.Service, height, width int) string {
@@ -472,6 +527,8 @@ func (m Model) renderStatusBar() string {
 			hints = styles.Err.Render("✗ " + m.lastErr)
 		case m.lastMsg != "":
 			hints = styles.Success.Render("✓ " + m.lastMsg)
+		case isCore(svc):
+			hints = hintBar("u", "up", "r", "restart", "U", "update", "enter", "logs", "?", "help", "q", "quit")
 		case svc != nil && !svc.Installed:
 			hints = hintBar("enter", "install", "n", "new", "/", "filter", "?", "help", "q", "quit")
 		case svc != nil:
@@ -499,6 +556,7 @@ var helpKeys = [][2]string{
 	{"s", "stop     keep containers"},
 	{"r", "restart"},
 	{"x", "down     remove containers"},
+	{"U", "update   pull + recreate"},
 	{"e", "enable   add a layer"},
 	{"d", "disable  remove a layer"},
 	{"enter", "logs · install"},
