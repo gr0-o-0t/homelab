@@ -15,10 +15,15 @@ endif
 
 LDFLAGS := -ldflags="-X github.com/groot/homelab/cmd.Version=$(VERSION)"
 
-.PHONY: build build-linux-amd64 build-linux-arm64 release install tidy test test-race lint lint-full ci catalog version
+.PHONY: build gui build-linux-amd64 build-linux-arm64 release install tidy test test-race lint lint-full ci catalog version
 
 build:
 	go build $(LDFLAGS) -o homelab .
+
+# Experimental desktop GUI (`homelab --gui`). giu needs cgo plus the OpenGL
+# and X11 development headers (Debian/Ubuntu: libgl1-mesa-dev xorg-dev).
+gui:
+	CGO_ENABLED=1 go build -tags gui $(LDFLAGS) -o homelab .
 
 build-linux-amd64:
 	GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o "homelab_$(VERSION)_linux_amd64" .

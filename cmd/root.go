@@ -16,6 +16,7 @@ var rootFlags struct {
 	configFile string
 	noColor    bool
 	json       bool
+	gui        bool
 }
 
 var (
@@ -33,6 +34,9 @@ Run without arguments to open the interactive service browser.`,
 	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		dir := configDir()
+		if rootFlags.gui {
+			return runGUI(dir)
+		}
 		if isTTY() && !rootFlags.json {
 			return runDashboardTUI(dir)
 		}
@@ -69,6 +73,8 @@ func init() {
 		"root config file; overrides config-dir/config.yaml")
 	rootCmd.PersistentFlags().BoolVar(&rootFlags.noColor, "no-color", false,
 		"disable coloured output")
+	rootCmd.Flags().BoolVar(&rootFlags.gui, "gui", false,
+		"Open the experimental desktop GUI (needs a build with `make gui`)")
 	rootCmd.PersistentFlags().BoolVar(&rootFlags.json, "json", false,
 		"output as JSON (on commands that support it)")
 

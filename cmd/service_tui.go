@@ -11,6 +11,7 @@ import (
 
 	"github.com/groot/homelab/internal/config"
 	"github.com/groot/homelab/internal/docker"
+	"github.com/groot/homelab/internal/gui"
 	"github.com/groot/homelab/internal/network"
 	"github.com/groot/homelab/internal/service"
 	tuiDashboard "github.com/groot/homelab/internal/tui/dashboard"
@@ -158,3 +159,19 @@ func discoverAll(root string, dc *docker.Client, catalog []string) ([]service.Se
 
 // scaffoldService writes boilerplate for a new service using the embedded
 // templates in internal/scaffold. Used by the non-interactive CLI path.
+
+// runGUI opens the experimental desktop GUI with the same inputs as the
+// dashboard.
+func runGUI(root string) error {
+	dc, _ := docker.New()
+	if dc != nil {
+		defer func() { _ = dc.Close() }()
+	}
+	catalog := catalogNames()
+	return gui.Run(gui.Options{
+		Discover: func() ([]service.Service, error) { return discoverAll(root, dc, catalog) },
+		Layers:   uiLayers(root),
+		Env:      func(name string) map[string]string { return buildEnv(root, name) },
+		CLI:      selfCLI(root),
+	})
+}
