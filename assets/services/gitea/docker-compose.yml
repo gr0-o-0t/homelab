@@ -3,7 +3,7 @@
 # https://docs.gitea.com
 # ─────────────────────────────────────────────────────────────────────────────
 # Database: uses shared PostgreSQL (homelab-postgres). DB credentials are
-# auto-generated at `homelab service setup gitea` and injected at runtime.
+# auto-generated at `homelab setup gitea` and injected at runtime.
 # ─────────────────────────────────────────────────────────────────────────────
 
 networks:
@@ -13,7 +13,8 @@ networks:
 
 services:
   gitea:
-    image: gitea/gitea:latest
+    # Rootless image: the default one starts s6/sshd as root and breaks under `user:`.
+    image: gitea/gitea:latest-rootless
     container_name: gitea
     user: "${PUID:-1000}:${PGID:-1000}"
     restart: always
@@ -29,7 +30,7 @@ services:
       GITEA__server__ROOT_URL: https://gitea.${HOME_SUBDOMAIN}.${DOMAIN}
       GITEA__server__SSH_DOMAIN: gitea.${HOME_SUBDOMAIN}.${DOMAIN}
     volumes:
-      - gitea-data:/data
+      - gitea-data:/var/lib/gitea
       - gitea-config:/etc/gitea
       - /etc/timezone:/etc/timezone:ro
       - /etc/localtime:/etc/localtime:ro

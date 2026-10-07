@@ -12,11 +12,15 @@ services:
   stirlingpdf:
     image: stirlingtools/stirling-pdf:latest
     container_name: stirlingpdf
-    user: "${PUID:-1000}:${PGID:-1000}"
+    # No `user:`: /configs and /logs do not exist in the image, so the named
+    # volumes start root-owned. init.sh runs as root and drops to PUID/PGID.
     restart: always
     environment:
-      DOCKER_ENABLE_SECURITY: "false"
-      SECURITY_ENABLE_LOGIN: "false"
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      # Spring binds security.enableLogin from SECURITY_ENABLELOGIN; the old
+      # SECURITY_ENABLE_LOGIN / DOCKER_ENABLE_SECURITY names are ignored.
+      SECURITY_ENABLELOGIN: "false"
       LANGS: en_US
     volumes:
       - stirlingpdf-data:/usr/share/tessdata
@@ -28,12 +32,12 @@ services:
       test:
         [
           "CMD-SHELL",
-          "wget -q --spider http://localhost:8080/api/v1/info 2>/dev/null || exit 1",
+          "curl -fs --max-time 10 http://localhost:8080/api/v1/info/status || exit 1",
         ]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 30s
+      start_period: 120s
 
 volumes:
   stirlingpdf-data:

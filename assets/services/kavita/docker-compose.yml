@@ -12,13 +12,14 @@ services:
   kavita:
     image: jvmilazz0/kavita:latest
     container_name: kavita
-    user: "${PUID:-1000}:${PGID:-1000}"
+    # No `user:` — the image expects root (entrypoint.sh) and /kavita/config
+    # is root-owned, so uid 1000 cannot write its database.
     restart: always
     environment:
       TZ: ${TZ:-UTC}
     volumes:
       - kavita-config:/kavita/config
-      - ${BOOKS_PATH:-/mnt/media}/manga:/manga:ro
+      - ${MEDIA_PATH:-/mnt/media}/manga:/manga:ro
     networks:
       - home-services
     healthcheck:

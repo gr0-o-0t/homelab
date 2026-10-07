@@ -12,7 +12,8 @@ services:
   speedtest-tracker:
     image: lscr.io/linuxserver/speedtest-tracker:latest
     container_name: speedtest-tracker
-    user: "${PUID:-1000}:${PGID:-1000}"
+    # No `user:`: LinuxServer images boot s6 as root, chown /config, then drop
+    # to PUID/PGID. Forcing a uid breaks init and leaves /config unwritable.
     restart: always
     environment:
       PUID: ${PUID:-1000}
@@ -20,6 +21,7 @@ services:
       TZ: ${TZ:-UTC}
       DB_CONNECTION: sqlite
       APP_KEY: ${APP_KEY}
+      APP_URL: https://speedtest-tracker.${HOME_SUBDOMAIN}.${DOMAIN}
     volumes:
       - speedtest-tracker-data:/config
     networks:
@@ -28,7 +30,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          "wget -q --spider http://localhost:8888 2>/dev/null || exit 1",
+          "wget -q --spider http://localhost:80 2>/dev/null || exit 1",
         ]
       interval: 30s
       timeout: 10s

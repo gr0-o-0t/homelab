@@ -1,6 +1,9 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Service: Tandoor Recipes (self-hosted recipe manager)
 # https://docs.tandoor.dev/install/docker/
+#
+# Tandoor 2 bundles nginx: it listens on :80, serves media/static itself and
+# proxies the rest to gunicorn on a unix socket (the old :8080 is gone).
 # ─────────────────────────────────────────────────────────────────────────────
 # Database: uses shared PostgreSQL (homelab-postgres). Credentials
 # auto-generated at `homelab service setup tandoor`.
@@ -15,7 +18,8 @@ services:
   tandoor:
     image: vabene1111/recipes:latest
     container_name: tandoor
-    user: "${PUID:-1000}:${PGID:-1000}"
+    # No `user:`: staticfiles/mediafiles do not exist in the image, so the
+    # named volumes start root-owned and collectstatic would fail as non-root.
     restart: always
     environment:
       SECRET_KEY: ${SECRET_KEY}
@@ -26,7 +30,6 @@ services:
       POSTGRES_PASSWORD: ${TA_DB_PASS}
       POSTGRES_DB: ${TA_DB_NAME}
       ALLOWED_HOSTS: "*"
-      GUNICORN_MEDIA: 0
       TZ: ${TZ:-UTC}
     volumes:
       - tandoor-static:/opt/recipes/staticfiles
@@ -37,7 +40,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          "wget -q --spider http://localhost:9001 2>/dev/null || exit 1",
+          "wget -q --spider http://localhost:80 2>/dev/null || exit 1",
         ]
       interval: 30s
       timeout: 10s

@@ -1,4 +1,7 @@
 vars: {}
-secrets: {}
+secrets:
+  ENCRYPTION_KEY:
+    required: true
+    description: "Encrypts data at rest - generate with: openssl rand -base64 32. Losing it locks out every client"
 ports:
   - 1411

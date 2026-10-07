@@ -43,12 +43,10 @@ func TestServiceAdd_InstallsService(t *testing.T) {
 	_, err = os.Stat(composePath)
 	require.NoError(t, err, "docker-compose.yml should exist")
 
-	// uptime-kuma routes through caddy.routes.conf, not a static caddy.conf:
-	// it needs websocket headers, and the routes body is wrapped per layer
-	// rather than duplicated into one file per layer.
-	routes := filepath.Join(svcDir, "caddy.routes.conf")
-	_, err = os.Stat(routes)
-	require.NoError(t, err, "caddy.routes.conf should exist")
+	// Routing comes from the ports declared in config.yaml; Caddy proxies
+	// uptime-kuma's websockets without a routes override.
+	_, err = os.Stat(filepath.Join(svcDir, "config.yaml"))
+	require.NoError(t, err, "config.yaml should exist")
 }
 
 func TestServiceAdd_DuplicateFails(t *testing.T) {

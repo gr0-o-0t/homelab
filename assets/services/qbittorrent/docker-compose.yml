@@ -2,8 +2,8 @@
 # Service: qBittorrent (BitTorrent client with web UI)
 # https://github.com/linuxserver/docker-qbittorrent
 # ─────────────────────────────────────────────────────────────────────────────
-# NOTE: BitTorrent port 6881 should be exposed at host level for proper
-# peer connectivity. Uncomment the ports section below to enable it.
+# BitTorrent port 6881 is published on TORRENT_BIND_IP (loopback by default);
+# see the ports section below.
 
 networks:
   home-services:
@@ -14,7 +14,8 @@ services:
   qbittorrent:
     image: lscr.io/linuxserver/qbittorrent:latest
     container_name: qbittorrent
-    user: "${PUID:-1000}:${PGID:-1000}"
+    # No `user:`: LinuxServer images boot s6 as root, chown /config, then drop
+    # to PUID/PGID. Forcing a uid breaks init and leaves /config unwritable.
     restart: always
     environment:
       PUID: ${PUID:-1000}

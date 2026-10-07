@@ -12,7 +12,8 @@ services:
   mealie:
     image: ghcr.io/mealie-recipes/mealie:latest
     container_name: mealie
-    user: "${PUID:-1000}:${PGID:-1000}"
+    # PUID/PGID env, not `user:` — the entrypoint starts as root, fixes
+    # ownership of the root-owned /app/data volume, then gosu's to PUID:PGID.
     restart: always
     environment:
       BASE_URL: https://mealie.${HOME_SUBDOMAIN}.${DOMAIN}
@@ -25,16 +26,8 @@ services:
       - mealie-data:/app/data
     networks:
       - home-services
-    healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "wget -q --spider http://localhost:9000/api/app/about 2>/dev/null || exit 1",
-        ]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
+    # No healthcheck block: the image has no wget, and ships its own
+    # HEALTHCHECK ($MEALIE_HOME/healthcheck.sh) that Docker uses by default.
 
 volumes:
   mealie-data:

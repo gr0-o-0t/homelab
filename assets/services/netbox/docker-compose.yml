@@ -11,6 +11,9 @@
 # Both stay local since shared homelab-redis can't split ports.
 # Env vars (NB_REDIS_HOST/NB_REDIS_PORT/NB_REDIS_CACHE_*) injected
 # from config.yaml at runtime.
+# Valkey runs without `user:`: its entrypoint chowns /data and drops to the
+# valkey user; as uid 1000 BGSAVE fails on /data and, with the default
+# stop-writes-on-bgsave-error, Valkey then refuses every write.
 # Both redis instances sit on netbox-internal only — not reachable from
 # other services on home-services, matching the isolation convention.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -26,7 +29,8 @@ services:
   netbox:
     image: lscr.io/linuxserver/netbox:${NETBOX_VERSION:-latest}
     container_name: netbox
-    user: "${PUID:-1000}:${PGID:-1000}"
+    # No `user:` — LinuxServer images boot s6-overlay as root and drop to
+    # PUID/PGID (below) themselves; a forced uid breaks /init.
     restart: always
     depends_on:
       netbox-redis:
@@ -64,7 +68,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          "wget -q --spider http://localhost:8080 2>/dev/null || exit 1",
+          "wget -q --spider http://localhost:8000 2>/dev/null || exit 1",
         ]
       interval: 30s
       timeout: 10s
@@ -74,7 +78,6 @@ services:
   netbox-redis:
     image: docker.io/valkey/valkey:9-alpine
     container_name: netbox-redis
-    user: "${PUID:-1000}:${PGID:-1000}"
     restart: always
     command: valkey-server --port 6379
     networks:
@@ -88,7 +91,6 @@ services:
   netbox-redis-cache:
     image: docker.io/valkey/valkey:9-alpine
     container_name: netbox-redis-cache
-    user: "${PUID:-1000}:${PGID:-1000}"
     restart: always
     command: valkey-server --port 6380
     networks:

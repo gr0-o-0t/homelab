@@ -94,6 +94,9 @@ services:
     restart: always
     tty: true
     stdin_open: true
+    # privileged + SYS_RAWIO + /dev/cpu: xmrig's MSR mod writes CPU model-
+    # specific registers (rdmsr/wrmsr in config.json) for ~10-15% RandomX
+    # hashrate, and reserves 1GB hugepages. Drop all three to mine without it.
     privileged: true
     ulimits:
       memlock:

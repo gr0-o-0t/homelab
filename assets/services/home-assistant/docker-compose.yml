@@ -3,8 +3,24 @@
 # https://www.home-assistant.io/installation/linux#docker-compose
 #
 # NOTE: Uses the standard home-services network for Caddy reachability.
-# If you need full device/mDNS discovery, switch to `network_mode: host`
-# and update caddy.conf to reverse_proxy to the host IP instead.
+# mDNS/SSDP discovery (Chromecast, HomeKit, many LAN integrations) does not
+# cross a bridge network. If you need it, switch to `network_mode: host` and
+# add a caddy.routes.conf proxying to the host's IP:8123 — the generated
+# `home-assistant:8123` upstream only resolves on home-services.
+#
+# Behind Caddy, Home Assistant answers 400 Bad Request until it trusts the
+# proxy. Add this to /config/configuration.yaml once, then restart:
+#
+#   http:
+#     use_x_forwarded_for: true
+#     trusted_proxies:
+#       - 172.16.0.0/12   # Docker bridge networks (home-services)
+#
+# Runs as root: the image's s6-overlay init requires it, and the named
+# /config volume is root-owned. Not privileged — for a Zigbee/Z-Wave stick
+# or Bluetooth adapter, pass just that device, e.g.:
+#   devices:
+#     - /dev/ttyUSB0:/dev/ttyUSB0
 # ─────────────────────────────────────────────────────────────────────────────
 
 networks:
@@ -16,9 +32,7 @@ services:
   home-assistant:
     image: ghcr.io/home-assistant/home-assistant:stable
     container_name: home-assistant
-    user: "${PUID:-1000}:${PGID:-1000}"
     restart: always
-    privileged: true
     environment:
       TZ: ${TZ:-UTC}
     volumes:

@@ -12,7 +12,9 @@ services:
   homebox:
     image: ghcr.io/sysadminsmedia/homebox:latest
     container_name: homebox
-    user: "${PUID:-1000}:${PGID:-1000}"
+    # No `user:` — the image runs as root and never creates /data, so a fresh
+    # named volume is root-owned. (Upstream's `latest-rootless` tag is the
+    # non-root variant.)
     restart: always
     environment:
       HBOX_OPTIONS_ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-false}

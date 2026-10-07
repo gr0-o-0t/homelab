@@ -12,19 +12,20 @@ services:
   audiobookshelf:
     image: ghcr.io/advplyr/audiobookshelf:latest
     container_name: audiobookshelf
-    user: "${PUID:-1000}:${PGID:-1000}"
+    # No `user:` — /config and /metadata don't exist in the image, so fresh
+    # named volumes are root-owned and a non-root process can't initialise them.
     restart: always
     environment:
       TZ: ${TZ:-UTC}
     volumes:
       - ${AUDIOBOOKS_PATH:-/mnt/audiobooks}:/audiobooks:ro
-      - ${PODCASTS_PATH:-/mnt/podcasts}:/podcasts:ro
+      - ${PODCASTS_PATH:-/mnt/podcasts}:/podcasts # writable: podcast episodes are downloaded here
       - audiobookshelf-config:/config
       - audiobookshelf-metadata:/metadata
     networks:
       - home-services
     healthcheck:
-      test: ["CMD", "pgrep", "-f", "audiobookshelf"]
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:80/healthcheck || exit 1"]
       interval: 1m
       timeout: 10s
       retries: 3

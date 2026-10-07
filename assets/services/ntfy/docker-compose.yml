@@ -17,6 +17,10 @@ services:
     command: ["serve"]
     environment:
       TZ: ${TZ:-UTC}
+      # Rate-limit per real client (X-Forwarded-For) instead of lumping every
+      # visitor behind Caddy's IP; base-url is needed for attachments/web push.
+      NTFY_BEHIND_PROXY: "true"
+      NTFY_BASE_URL: https://ntfy.${HOME_SUBDOMAIN}.${DOMAIN}
     volumes:
       - ntfy-cache:/var/cache/ntfy
       - ntfy-config:/etc/ntfy

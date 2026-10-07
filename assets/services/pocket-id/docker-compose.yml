@@ -12,21 +12,23 @@ services:
   pocket-id:
     image: ghcr.io/pocket-id/pocket-id:latest
     container_name: pocket-id
-    user: "${PUID:-1000}:${PGID:-1000}"
     restart: always
+    # No `user:`: /app/data does not exist in the image, so the named volume
+    # starts root-owned. The entrypoint chowns it and drops to PUID/PGID.
     environment:
-      PUBLIC_APP_URL: "https://pocket-id.${HOME_SUBDOMAIN}.${DOMAIN}"
+      # PUBLIC_APP_URL was renamed APP_URL in v1; the old name is ignored.
+      APP_URL: "https://pocket-id.${HOME_SUBDOMAIN}.${DOMAIN}"
       TRUST_PROXY: "true"
+      # Required by current releases (upstream .env.example): encrypts data at rest.
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
     volumes:
       - pocket-id-data:/app/data
     networks:
       - home-services
     healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "wget -q --spider http://localhost:1411/healthz 2>/dev/null || exit 1",
-        ]
+      test: ["CMD", "/app/pocket-id", "healthcheck"]
       interval: 30s
       timeout: 10s
       retries: 3

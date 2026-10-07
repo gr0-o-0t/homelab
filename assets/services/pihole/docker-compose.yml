@@ -15,12 +15,16 @@ services:
   pihole:
     image: pihole/pihole:latest
     container_name: pihole
-    user: "${PUID:-1000}:${PGID:-1000}"
+    # No `user:` — start.sh must run as root (it fixes ownership and caps,
+    # then FTL drops to the image's pihole user).
     restart: always
     environment:
       TZ: ${TZ:-UTC}
-      WEBPASSWORD: ${WEB_PASSWORD}
-      VIRTUAL_HOST: pihole.${HOME_SUBDOMAIN}.${DOMAIN}
+      # Pi-hole v6 names (WEBPASSWORD / VIRTUAL_HOST were v5 and are ignored).
+      FTLCONF_webserver_api_password: ${WEB_PASSWORD}
+      # Queries arrive via a Docker port publish, so they are not from a
+      # "local" subnet; the default LOCAL mode would refuse them.
+      FTLCONF_dns_listeningMode: "all"
     volumes:
       - pihole-data:/etc/pihole
       - pihole-dnsmasq:/etc/dnsmasq.d

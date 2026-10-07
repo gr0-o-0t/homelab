@@ -12,7 +12,9 @@ services:
   it-tools:
     image: corentinth/it-tools:latest
     container_name: it-tools
-    user: "${PUID:-1000}:${PGID:-1000}"
+    # No `user:` — this is the stock nginx:alpine image, whose master process
+    # must start as root to create /var/cache/nginx/*_temp and then drops its
+    # workers to the nginx user itself. As uid 1000 it exits on mkdir EACCES.
     restart: always
     networks:
       - home-services

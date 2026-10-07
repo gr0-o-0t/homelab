@@ -31,7 +31,8 @@ services:
   adguardhome:
     image: adguard/adguardhome:latest
     container_name: adguardhome
-    user: "${PUID:-1000}:${PGID:-1000}"
+    # No `user:` — AdGuard binds DNS on :53 inside the container, which needs
+    # root (ports < 1024), and its work/conf dirs start root-owned.
     restart: always
     environment:
       TZ: ${TZ:-UTC}

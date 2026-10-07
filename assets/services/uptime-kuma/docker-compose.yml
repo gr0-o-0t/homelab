@@ -12,23 +12,16 @@ services:
   uptime-kuma:
     image: louislam/uptime-kuma:2-slim
     container_name: uptime-kuma
-    user: "${PUID:-1000}:${PGID:-1000}"
+    # No `user:`: a non-root uid cannot open the root:docker 0660 socket, which
+    # would silently break Docker container monitors.
     restart: always
     volumes:
       - uptime-kuma-data:/app/data
       - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:
       - home-services
-    healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "wget -q --spider http://localhost:3001 2>/dev/null || exit 1",
-        ]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
+    # No healthcheck override: the image ships HEALTHCHECK `extra/healthcheck`.
+    # 2-slim is Debian slim without wget, so the old wget probe always failed.
 
 volumes:
   uptime-kuma-data:

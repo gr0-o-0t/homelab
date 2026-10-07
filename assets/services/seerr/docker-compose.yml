@@ -8,8 +8,8 @@
 # eventually lose their `latest` tag, so this now tracks upstream directly.
 # https://info.linuxserver.io/issues/2026-02-16-overseerr/
 #
-# Migrating: Seerr reads the same /config layout, so the existing seerr_data
-# volume carries over. Take a copy of it first — this is a fork merge, not a
+# Migrating: Seerr keeps the same config layout but at /app/config (LSIO used
+# /config), so the existing seerr_data volume carries over at the new path. Take a copy of it first — this is a fork merge, not a
 # point release, and a rollback needs the old data intact.
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -22,19 +22,19 @@ services:
   seerr:
     image: ghcr.io/seerr-team/seerr:latest
     container_name: seerr
-    user: "${PUID:-1000}:${PGID:-1000}"
+    # No `user:`/PUID: the image already runs as node (uid 1000) and owns
+    # /app/config, so a fresh named volume inherits the right owner.
+    init: true
     restart: always
     environment:
-      PUID: ${PUID:-1000}
-      PGID: ${PGID:-1000}
       TZ: ${TZ:-UTC}
     volumes:
-      - seerr-config:/config
+      - seerr-config:/app/config
     networks:
       - home-services
     healthcheck:
       test:
-        ["CMD-SHELL", "wget -qO- http://localhost:5055 2>/dev/null || exit 1"]
+        ["CMD-SHELL", "wget -q --spider http://localhost:5055/api/v1/settings/public || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3

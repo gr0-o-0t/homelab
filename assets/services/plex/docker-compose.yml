@@ -4,6 +4,12 @@
 #
 # PLEX_CLAIM: one-time token from https://plex.tv/claim — only needed on first
 # run to link the server to your Plex account. Leave blank after initial setup.
+#
+# Bridge networking, not the `network_mode: host` LinuxServer recommends: host
+# mode would publish 32400 and the GDM/DLNA ports on every host interface,
+# bypassing ufw. The cost is no LAN auto-discovery (GDM) and Plex treating the
+# Caddy hop as a remote client; reach it via https://plex.<home>.<domain> and
+# set Settings > Network > "Custom server access URLs" to that address.
 # ─────────────────────────────────────────────────────────────────────────────
 
 networks:
@@ -15,7 +21,8 @@ services:
   plex:
     image: lscr.io/linuxserver/plex:latest
     container_name: plex
-    user: "${PUID:-1000}:${PGID:-1000}"
+    # No `user:`: LinuxServer images boot s6 as root, chown /config, then drop
+    # to PUID/PGID. Forcing a uid breaks init and leaves /config unwritable.
     restart: always
     environment:
       PUID: ${PUID:-1000}
@@ -32,7 +39,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          "wget -q --spider http://localhost:32400/web 2>/dev/null || exit 1",
+          "curl -fsS -o /dev/null http://localhost:32400/identity || exit 1",
         ]
       interval: 30s
       timeout: 10s

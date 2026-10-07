@@ -12,11 +12,22 @@ services:
   homepage:
     image: ghcr.io/gethomepage/homepage:latest
     container_name: homepage
-    user: "${PUID:-1000}:${PGID:-1000}"
     restart: always
+    # PUID/PGID, not `user:` — the entrypoint starts as root, chowns
+    # /app/config (a fresh root-owned volume) and drops to PUID:PGID itself.
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      # Required since v1.0: any Host not listed (localhost:3000 is implicit)
+      # gets "Host validation failed". Comma-separate extra hostnames when the
+      # service is also enabled on --cf/--tor/--i2p/--ygg.
+      HOMEPAGE_ALLOWED_HOSTS: homepage.${HOME_SUBDOMAIN}.${DOMAIN}
     volumes:
       - homepage-config:/app/config
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Only for the optional Docker status/stats widgets. `:ro` does not
+      # limit the Docker API — this is root-equivalent — and uid PUID can only
+      # use it when PGID is the host's docker group. Opt in deliberately:
+      # - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:
       - home-services
     healthcheck:

@@ -3,7 +3,9 @@
 # https://hub.docker.com/_/nextcloud
 # ─────────────────────────────────────────────────────────────────────────────
 # Database: uses shared MariaDB (homelab-mariadb) and shared Redis
-# (homelab-redis). Credentials auto-generated at `homelab service setup nextcloud`.
+# (homelab-redis). Credentials auto-generated at `homelab setup nextcloud`.
+# Healthcheck uses curl: the image has no wget (busybox-static ships without
+# applet symlinks).
 # ─────────────────────────────────────────────────────────────────────────────
 
 networks:
@@ -36,7 +38,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          "wget -q --spider http://localhost/status.php 2>/dev/null || exit 1",
+          "curl -fsS http://localhost/status.php >/dev/null || exit 1",
         ]
       interval: 30s
       timeout: 10s

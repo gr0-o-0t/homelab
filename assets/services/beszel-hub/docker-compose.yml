@@ -10,9 +10,10 @@ networks:
 
 services:
   beszel-hub:
-    image: ghcr.io/henrygd/beszel:latest
+    image: henrygd/beszel:latest
     container_name: beszel-hub
-    user: "${PUID:-1000}:${PGID:-1000}"
+    # No `user:` — scratch image, /beszel_data is root-owned, so a non-root
+    # process can't write the fresh volume.
     restart: always
     volumes:
       - beszel-hub-data:/beszel_data

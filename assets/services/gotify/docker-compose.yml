@@ -12,10 +12,13 @@ services:
   gotify:
     image: gotify/server:latest
     container_name: gotify
-    user: "${PUID:-1000}:${PGID:-1000}"
+    # No `user:` — /app/data doesn't exist in the image, so the fresh volume is
+    # root-owned and a non-root process can't create the database.
     restart: always
     environment:
       TZ: ${TZ:-UTC}
+      # Only applied when the database is first created.
+      GOTIFY_DEFAULTUSER_PASS: ${GOTIFY_ADMIN_PASSWORD}
     volumes:
       - gotify-data:/app/data
     networks:
@@ -24,7 +27,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          "wget -q --spider http://localhost/health 2>/dev/null || exit 1",
+          "curl -fsS http://localhost/health >/dev/null || exit 1",
         ]
       interval: 30s
       timeout: 10s

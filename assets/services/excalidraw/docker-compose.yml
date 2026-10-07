@@ -12,12 +12,9 @@ services:
   excalidraw:
     image: excalidraw/excalidraw:latest
     container_name: excalidraw
-    user: "${PUID:-1000}:${PGID:-1000}"
     restart: always
     networks:
       - home-services
-    volumes:
-      - excalidraw-config:/config
     healthcheck:
       test:
         ["CMD-SHELL", "wget -q --spider http://localhost 2>/dev/null || exit 1"]
@@ -25,7 +22,3 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
-
-volumes:
-  excalidraw-config:
-    name: excalidraw_config

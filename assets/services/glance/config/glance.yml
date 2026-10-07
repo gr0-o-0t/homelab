@@ -1,0 +1,16 @@
+# Starter Glance config — edit freely; Glance reloads it on save.
+# Reference: https://github.com/glanceapp/glance/blob/main/docs/configuration.md
+server:
+  port: 8080
+
+pages:
+  - name: Home
+    columns:
+      - size: small
+        widgets:
+          - type: calendar
+      - size: full
+        widgets:
+          - type: search
+            search-engine: duckduckgo
+          - type: hacker-news

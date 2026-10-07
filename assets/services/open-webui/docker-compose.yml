@@ -16,7 +16,8 @@ services:
   open-webui:
     image: ghcr.io/open-webui/open-webui:main
     container_name: open-webui
-    user: "${PUID:-1000}:${PGID:-1000}"
+    # No `user:` — the image is built with UID=0 and HOME=/root, and
+    # /app/backend/data (models cache, sqlite) is root-owned.
     restart: always
     environment:
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
@@ -26,16 +27,8 @@ services:
       - open-webui-data:/app/backend/data
     networks:
       - home-services
-    healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "wget -q --spider http://localhost:8080 2>/dev/null || exit 1",
-        ]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
+    # No healthcheck block: the image has no wget, and ships its own
+    # HEALTHCHECK (curl /health) that Docker uses by default.
 
 volumes:
   open-webui-data:

@@ -28,7 +28,7 @@ vars:
 secrets:
   ADMIN_TOKEN:
     required: true
-    description: "Argon2 hash or plain token guarding /admin - leave unset to disable the admin panel entirely"
+    description: "Token guarding /admin - prefer an Argon2 PHC hash (vaultwarden hash); a plain token works but logs a warning"
   SMTP_PASSWORD:
     required: false
     description: "Password for the SMTP account, only needed if mail is configured"

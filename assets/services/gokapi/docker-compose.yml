@@ -12,12 +12,14 @@ services:
   gokapi:
     image: f0rc3/gokapi:latest
     container_name: gokapi
-    user: "${PUID:-1000}:${PGID:-1000}"
+    # No `user:` — /app/data and /app/config don't exist in the image, so fresh
+    # named volumes are root-owned and unwritable for a non-root user.
     restart: always
     environment:
       TZ: ${TZ:-UTC}
     volumes:
       - gokapi-data:/app/data
+      - gokapi-config:/app/config
     networks:
       - home-services
     healthcheck:
@@ -34,3 +36,5 @@ services:
 volumes:
   gokapi-data:
     name: gokapi_data
+  gokapi-config:
+    name: gokapi_config

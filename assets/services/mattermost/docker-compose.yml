@@ -2,8 +2,12 @@
 # Service: Mattermost (self-hosted team messaging platform)
 # https://docs.mattermost.com/install/install-docker.html
 # ─────────────────────────────────────────────────────────────────────────────
-# Database: uses shared PostgreSQL (homelab-postgres). DATABASE_URL is
-# auto-generated at `homelab service setup mattermost` and injected at runtime.
+# Database: uses shared PostgreSQL (homelab-postgres). MM_DATASOURCE is
+# auto-generated at `homelab setup mattermost` and injected at runtime.
+#
+# No `user:` — the image already runs as its own non-root `mattermost` user
+# (uid 2000), and /mattermost/* ships owned by 2000:2000, so the named volumes
+# inherit that. Forcing uid 1000 leaves config/data/logs/plugins unwritable.
 # ─────────────────────────────────────────────────────────────────────────────
 
 networks:
@@ -15,7 +19,6 @@ services:
   mattermost:
     image: mattermost/mattermost-team-edition:${MATTERMOST_VERSION:-latest}
     container_name: mattermost
-    user: "${PUID:-1000}:${PGID:-1000}"
     restart: always
     security_opt:
       - "no-new-privileges:true"
@@ -31,16 +34,8 @@ services:
       - mattermost-plugins:/mattermost/plugins
     networks:
       - home-services
-    healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "wget -q --spider http://localhost:8065 2>/dev/null || exit 1",
-        ]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 60s
+    # The image ships neither wget nor curl; its own HEALTHCHECK
+    # (`mmctl system status --local`) applies when compose is silent.
 
 volumes:
   mattermost-config:

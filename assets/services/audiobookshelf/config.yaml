@@ -1,10 +1,4 @@
 vars:
-  PUID:
-    value: "1000"
-    required: false
-  PGID:
-    value: "1000"
-    required: false
   AUDIOBOOKS_PATH:
     value: "/mnt/audiobooks"
     required: false

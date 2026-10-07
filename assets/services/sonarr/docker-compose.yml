@@ -12,7 +12,8 @@ services:
   sonarr:
     image: lscr.io/linuxserver/sonarr:latest
     container_name: sonarr
-    user: "${PUID:-1000}:${PGID:-1000}"
+    # No `user:`: LinuxServer images boot s6 as root, chown /config, then drop
+    # to PUID/PGID. Forcing a uid breaks init and leaves /config unwritable.
     restart: always
     environment:
       PUID: ${PUID:-1000}

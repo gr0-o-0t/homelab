@@ -10,15 +10,15 @@ networks:
 
 services:
   cyberchef:
-    image: mpepping/cyberchef:latest
+    # Official image: unprivileged nginx (uid 101) on :8080.
+    image: ghcr.io/gchq/cyberchef:latest
     container_name: cyberchef
-    user: "${PUID:-1000}:${PGID:-1000}"
     restart: always
     networks:
       - home-services
     healthcheck:
       test:
-        ["CMD-SHELL", "wget -q --spider http://localhost 2>/dev/null || exit 1"]
+        ["CMD-SHELL", "wget -q --spider http://localhost:8080 2>/dev/null || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3

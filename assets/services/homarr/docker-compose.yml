@@ -12,13 +12,17 @@ services:
   homarr:
     image: ghcr.io/homarr-labs/homarr:latest
     container_name: homarr
-    user: "${PUID:-1000}:${PGID:-1000}"
     restart: always
     environment:
       SECRET_ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      # The entrypoint starts as root, chowns /appdata and the nginx dirs, then
+      # drops to PUID:PGID — `user:` would skip that and break nginx/redis.
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
     volumes:
       - homarr-data:/appdata
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # No docker.sock: it is root-equivalent on the host and unreadable by
+      # PUID anyway. Add it (and run as root) only if you need the Docker widget.
     networks:
       - home-services
     healthcheck:

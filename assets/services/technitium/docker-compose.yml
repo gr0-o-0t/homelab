@@ -21,7 +21,8 @@ services:
   technitium:
     image: technitium/dns-server:latest
     container_name: technitium
-    user: "${PUID:-1000}:${PGID:-1000}"
+    # No `user:`: /etc/dns does not exist in the image, so the named volume
+    # starts root-owned and the server could not save its config.
     restart: always
     environment:
       DNS_SERVER_DOMAIN: technitium.${HOME_SUBDOMAIN}.${DOMAIN}
@@ -36,7 +37,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          "wget -q --spider http://localhost:5380 2>/dev/null || exit 1",
+          "curl -fsS -o /dev/null http://localhost:5380 || exit 1",
         ]
       interval: 30s
       timeout: 10s

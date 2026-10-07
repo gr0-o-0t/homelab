@@ -15,7 +15,8 @@ services:
     user: "${PUID:-1000}:${PGID:-1000}"
     restart: always
     volumes:
-      - glance-config:/app/assets
+      # glance.yml lives in config/ next to this file; edits hot-reload.
+      - ./config:/app/config:ro
     networks:
       - home-services
     healthcheck:
@@ -28,7 +29,3 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
-
-volumes:
-  glance-config:
-    name: glance_config

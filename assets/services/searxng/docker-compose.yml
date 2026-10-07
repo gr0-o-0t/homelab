@@ -14,8 +14,12 @@ services:
     restart: always
     environment:
       SEARXNG_BASE_URL: https://searxng.${HOME_SUBDOMAIN}.${DOMAIN}
-      SEARXNG_SECRET_KEY: ${SECRET_KEY}
-      REDIS_URL: ${SEARXNG_REDIS_URL}
+      # SearXNG reads server.secret_key from SEARXNG_SECRET and the cache /
+      # limiter backend from SEARXNG_VALKEY_URL (redis.url is deprecated;
+      # valkey-py accepts the redis:// DSN). The old SEARXNG_SECRET_KEY and
+      # REDIS_URL names were silently ignored.
+      SEARXNG_SECRET: ${SECRET_KEY}
+      SEARXNG_VALKEY_URL: ${SEARXNG_REDIS_URL}
     volumes:
       - searxng-config:/etc/searxng
     networks:

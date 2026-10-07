@@ -44,4 +44,4 @@ databases:
 # REDIS_CACHE_DB support in the LinuxServer image confirmed first — NetBox wants
 # two separate Redis databases, not two hosts.
 ports:
-  - 8080
+  - 8000

@@ -3,7 +3,7 @@
 # https://forgejo.org/docs/latest/admin/installation/
 # ─────────────────────────────────────────────────────────────────────────────
 # Database: uses shared PostgreSQL (homelab-postgres). DB credentials are
-# auto-generated at `homelab service setup forgejo` and injected at runtime.
+# auto-generated at `homelab setup forgejo` and injected at runtime.
 # ─────────────────────────────────────────────────────────────────────────────
 
 networks:
@@ -28,6 +28,9 @@ services:
       FORGEJO__server__DOMAIN: forgejo.${HOME_SUBDOMAIN}.${DOMAIN}
       FORGEJO__server__ROOT_URL: https://forgejo.${HOME_SUBDOMAIN}.${DOMAIN}
       FORGEJO__server__SSH_DOMAIN: forgejo.${HOME_SUBDOMAIN}.${DOMAIN}
+      # Rootless sshd listens on 2222 (config.yaml maps 22 -> 2222); advertise 22
+      # in clone URLs.
+      FORGEJO__server__SSH_PORT: "22"
     volumes:
       - forgejo-data:/var/lib/gitea
       - forgejo-config:/etc/gitea

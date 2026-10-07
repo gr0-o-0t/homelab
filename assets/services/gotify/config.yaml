@@ -3,6 +3,9 @@ vars:
     value: "UTC"
     required: false
 
-secrets: {}
+secrets:
+  GOTIFY_ADMIN_PASSWORD:
+    required: true
+    description: "Password for the 'admin' user, set on first start (image default is admin/admin)"
 ports:
   - 80

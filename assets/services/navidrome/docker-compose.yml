@@ -12,7 +12,9 @@ services:
   navidrome:
     image: deluan/navidrome:latest
     container_name: navidrome
-    user: "${PUID:-1000}:${PGID:-1000}"
+    # No `user:` — the image runs as root and declares VOLUME /data without
+    # creating it, so a fresh named volume is root-owned. (Upstream's
+    # `user:` example assumes a pre-chowned bind mount.)
     restart: always
     environment:
       ND_MUSICFOLDER: /music

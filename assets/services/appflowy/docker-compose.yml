@@ -4,7 +4,7 @@
 #
 # Differences from upstream, all deliberate:
 #   - No nginx. Caddy is the only reverse proxy in this homelab, so upstream's
-#     nginx.conf becomes caddy.conf / caddy.cf.conf.
+#     nginx.conf becomes caddy.routes.conf.
 #   - No postgres container. Uses shared homelab-postgres, which ships pgvector
 #     — see config.yaml `databases:`. The database, role, password and the
 #     `vector`/`uuid-ossp`/`pgcrypto` extensions are all created by
@@ -30,7 +30,7 @@ x-db-url: &db-url "postgres://${APPFLOWY_DB_USER}:${APPFLOWY_DB_PASSWORD}@${APPF
 
 # Shared by every container that reads or writes user files. MinIO is addressed
 # by its internal host here; presigned URLs get signed against it, which is why
-# caddy.conf has to rewrite Host on /minio-api.
+# caddy.routes.conf has to rewrite Host on /minio-api.
 x-s3-env: &s3-env
   APPFLOWY_S3_USE_MINIO: "true"
   APPFLOWY_S3_MINIO_URL: "http://appflowy-minio:9000"
@@ -46,8 +46,8 @@ networks:
     external: true
 
 services:
-  # Web frontend — the "/" route. Named `appflowy` so caddy.conf reads
-  # `reverse_proxy appflowy:80`.
+  # Web frontend — the "/" route. Named `appflowy` so the default route in
+  # caddy.routes.conf reads `reverse_proxy appflowy:80`.
   appflowy-web:
     image: appflowyinc/appflowy_web:latest
     container_name: appflowy

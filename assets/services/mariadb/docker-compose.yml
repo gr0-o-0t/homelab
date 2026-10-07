@@ -9,7 +9,7 @@ networks:
 
 services:
   mariadb:
-    image: mariadb:11
+    image: mariadb:${MARIADB_VERSION:-11}
     container_name: homelab-mariadb
     restart: always
     command:

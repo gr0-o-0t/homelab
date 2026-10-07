@@ -9,7 +9,7 @@ networks:
 
 services:
   redis:
-    image: redis:8-alpine
+    image: redis:${REDIS_VERSION:-8-alpine}
     container_name: homelab-redis
     restart: always
     volumes:

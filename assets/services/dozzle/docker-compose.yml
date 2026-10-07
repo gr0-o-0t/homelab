@@ -12,11 +12,12 @@ services:
   dozzle:
     image: amir20/dozzle:latest
     container_name: dozzle
-    user: "${PUID:-1000}:${PGID:-1000}"
     restart: always
     volumes:
+      # Runs as root to read the socket (root:docker 0660). Even :ro, the Docker
+      # API socket is root-equivalent on the host — keep dozzle private-only.
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - doozzle-data:/data
+      - dozzle-data:/data
     networks:
       - home-services
     healthcheck:

@@ -12,7 +12,8 @@ services:
   portainer:
     image: portainer/portainer-ce:latest
     container_name: portainer
-    user: "${PUID:-1000}:${PGID:-1000}"
+    # No `user:`: a non-root uid cannot open the root:docker 0660 socket,
+    # which is the whole point of this container.
     restart: always
     volumes:
       - portainer-data:/data
@@ -24,16 +25,8 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - home-services
-    healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "wget -q --spider http://localhost:9000 2>/dev/null || exit 1",
-        ]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
+    # No healthcheck: the image is a static binary on a scratch-like base with
+    # no shell, wget or curl, so any CMD-SHELL probe reports unhealthy forever.
 
 volumes:
   portainer-data:

@@ -12,25 +12,20 @@ services:
   metube:
     image: ghcr.io/alexta69/metube:latest
     container_name: metube
-    user: "${PUID:-1000}:${PGID:-1000}"
+    # UID/GID env, not `user:` — the entrypoint starts as root, chowns the
+    # root-owned /downloads volume, then gosu's to UID:GID.
     restart: always
     environment:
       DOWNLOAD_DIR: /downloads
+      UID: ${PUID:-1000}
+      GID: ${PGID:-1000}
       TZ: ${TZ:-UTC}
     volumes:
       - metube-downloads:/downloads
     networks:
       - home-services
-    healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "wget -q --spider http://localhost:8081 2>/dev/null || exit 1",
-        ]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
+    # No healthcheck block: the image has no wget, and ships its own curl
+    # HEALTHCHECK on ${PORT} that Docker uses by default.
 
 volumes:
   metube-downloads:
