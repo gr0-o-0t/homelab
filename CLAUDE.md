@@ -80,11 +80,12 @@ homelab exec <service> <command> [args...]         # like docker compose exec; f
 homelab backup [service]                           # volumes + DB dumps + config (--all, --group)
 homelab backup [service] --out /mnt/nas            # destination (default <config-dir>/backups)
 homelab backup [service] --live                    # don't stop the service (risks torn files)
+homelab backup --list [--json]                     # existing backups, newest first
 
 homelab restore <backup-dir> [service]             # replace volumes + databases
 homelab restore <backup-dir> --config              # also overwrite config.yaml / compose
 
-homelab prune [service]                            # down + remove containers, images, volumes
+homelab prune [service...]                         # down + remove containers, images, volumes
 homelab prune [service] --keep-volumes             # reclaim images only, no data loss
 homelab prune --dangling                           # unreferenced images + build cache only
 ```
@@ -132,6 +133,9 @@ homelab disable <service> -a --stop                # …and take the service dow
 ```bash
 homelab setup                                      # interactive root config wizard (config.yaml + keyring)
 homelab setup <service>                            # per-service config wizard
+homelab setup [service] --json                     # declared vars + secrets (set: bool, never values)
+homelab setup [service] --set KEY=VALUE            # write vars without prompting (repeatable)
+homelab setup [service] --secrets-stdin            # secrets as {"NAME":"value"} JSON on stdin
 ```
 
 ### Shell completion
@@ -369,12 +373,23 @@ homelab down --group media            # stop all media services
 | `internal/routing` | State → sites file (`Apply`/`Sync`), daemon Configure/Teardown, legacy migration |
 | `internal/caddy` | Caddy validate/reload via docker exec; `Enable`/`Disable`/`ReloadService` with snapshot/rollback of a service's sites file + exposure.yaml |
 | `internal/scaffold` | `//go:embed templates/*`; `Render()` + `Write()` for new-service boilerplate |
+| `internal/actions` | Registry of every user-facing action (argv, inputs, danger, icon, availability) the TUI and GUI render from |
 | `internal/tui/dashboard` | Bubble Tea fullscreen service browser |
 | `internal/tui/logs` | Bubble Tea streaming log viewer |
 | `internal/tui/wizard` | Multi-step new-service scaffold wizard |
 | `internal/tui/spinner` | Goroutine spinner (TTY-aware) |
 | `internal/gui` | Experimental giu (Dear ImGui) desktop front end, `homelab --gui`; compiled only with `-tags gui` |
 | `internal/tui/styles` | Lipgloss Tokyo Night palette, shared across TUI and plain output |
+
+### Front-end action registry (`internal/actions`)
+
+The TUI and GUI do nothing themselves: each button is a CLI invocation of this
+binary, described once in `internal/actions` (`actions.For(target)` gives the
+applicable actions in group order; `Action.Build` gives the argv). Parity rule:
+`cmd/actions_parity_test.go` fails when a runnable command or a flag has no
+action listing it in `Commands`, unless it is on that test's commented
+exclusion list — so a new CLI command or flag needs an action (or a reason).
+Every action's argv is also parsed through `rootCmd` in tests.
 
 ### Key design decisions
 

@@ -19,6 +19,9 @@ import (
 type VarEntry struct {
 	Value    string `yaml:"value"`
 	Required bool   `yaml:"required"`
+	// Description is shown by setup prompts and front ends. Declared here so
+	// that `homelab setup` rewriting config.yaml keeps it.
+	Description string `yaml:"description,omitempty"`
 }
 
 // SecretEntry declares a secret variable. Its value lives only in the system
@@ -30,8 +33,9 @@ type VarEntry struct {
 // creates it in the keyring before the first start, so a shared service like
 // redis never needs the user to invent and type a credential.
 type SecretEntry struct {
-	Required bool   `yaml:"required"`
-	Generate string `yaml:"generate,omitempty"`
+	Required    bool   `yaml:"required"`
+	Generate    string `yaml:"generate,omitempty"`
+	Description string `yaml:"description,omitempty"`
 }
 
 // PortEntry describes a single port a service exposes.

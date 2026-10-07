@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -11,13 +12,14 @@ import (
 )
 
 var pruneCmd = &cobra.Command{
-	Use:   "prune [service]",
+	Use:   "prune [service...]",
 	Short: "Stop a service and reclaim its images and volumes",
 	Long: `Bring a service down and reclaim what it was using: its containers, the
 images they came from, and its named volumes.
 
   homelab prune jellyfin            # containers + images + volumes
   homelab prune jellyfin --keep-volumes
+  homelab prune jellyfin immich     # several services
   homelab prune --all               # every installed service
   homelab prune --group media
   homelab prune --dangling          # only unreferenced images/build cache
@@ -29,9 +31,9 @@ Take a backup first:
   homelab backup <service>
 
 Unless --keep-volumes is given you will be asked to type the service name to
-confirm. --dangling touches no service and only removes unreferenced images and
+confirm ("all" when several services are pruned at once). --dangling touches no service and only removes unreferenced images and
 build cache, which is the safe everyday reclaim.`,
-	Args:              cobra.MaximumNArgs(1),
+	Args:              cobra.ArbitraryArgs,
 	ValidArgsFunction: completeServiceNames,
 	RunE:              runPrune,
 }
@@ -177,9 +179,7 @@ func pruneDangling() error {
 	return nil
 }
 
+// joinNames renders a target list as `homelab backup` arguments.
 func joinNames(names []string) string {
-	if len(names) == 1 {
-		return names[0]
-	}
-	return "--all"
+	return strings.Join(names, " ")
 }

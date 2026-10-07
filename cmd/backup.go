@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -16,7 +17,7 @@ import (
 )
 
 var backupCmd = &cobra.Command{
-	Use:   "backup [service]",
+	Use:   "backup [service...]",
 	Short: "Back up service volumes, databases and config",
 	Long: `Snapshot everything a service owns: its named Docker volumes, its
 databases on the shared instances, and its config files.
@@ -25,10 +26,12 @@ Each run writes a timestamped directory containing a manifest.json, so a backup
 is inspectable and can be restored selectively.
 
   homelab backup vaultwarden          # one service
+  homelab backup vaultwarden immich   # several services
   homelab backup --all                # every installed service
   homelab backup --group media        # a named group
   homelab backup --out /mnt/nas       # somewhere other than the default
   homelab backup immich --live        # do not stop the service first
+  homelab backup --list [--json]      # existing backups, newest first
 
 By default each service is stopped for the duration of its own snapshot and
 started again afterwards, because tarring a volume underneath a running process
@@ -37,7 +40,7 @@ can capture a torn file. --live skips that at the cost of consistency.
 Secrets are NOT included: they stay in the system keyring. After restoring onto a
 new machine, run 'homelab setup <service>' to re-enter them — that also re-syncs
 the database role password.`,
-	Args:              cobra.MaximumNArgs(1),
+	Args:              cobra.ArbitraryArgs,
 	ValidArgsFunction: completeServiceNames,
 	RunE:              runBackup,
 }
@@ -47,6 +50,7 @@ var backupFlags struct {
 	group string
 	out   string
 	live  bool
+	list  bool
 }
 
 func init() {
@@ -54,12 +58,16 @@ func init() {
 	backupCmd.Flags().StringVar(&backupFlags.group, "group", "", "Back up a named service group")
 	backupCmd.Flags().StringVar(&backupFlags.out, "out", "", "Destination directory (default: <config-dir>/backups)")
 	backupCmd.Flags().BoolVar(&backupFlags.live, "live", false, "Do not stop services (faster, risks torn files)")
+	backupCmd.Flags().BoolVar(&backupFlags.list, "list", false, "List existing backups in the destination directory (with --json: machine-readable)")
 	_ = backupCmd.RegisterFlagCompletionFunc("group", completeGroupNames)
 	rootCmd.AddCommand(backupCmd)
 }
 
 func runBackup(_ *cobra.Command, args []string) error {
 	root := configDir()
+	if backupFlags.list {
+		return listBackups(root)
+	}
 
 	names, err := resolveTargets(root, backupFlags.all, backupFlags.group, args)
 	if err != nil {
@@ -71,7 +79,7 @@ func runBackup(_ *cobra.Command, args []string) error {
 
 	destRoot := backupFlags.out
 	if destRoot == "" {
-		destRoot = filepath.Join(root, "backups")
+		destRoot = backup.DefaultDir(root)
 	}
 	// Absolute: the directory is bind-mounted into the helper container that
 	// reads volume contents, and Docker rejects relative bind sources.
@@ -185,4 +193,40 @@ func serviceIsRunning(root, name string) bool {
 	out, err := run.Default().Output("docker", "compose",
 		"-f", run.ServiceComposeFile(root, name), "ps", "-q", "--status=running")
 	return err == nil && strings.TrimSpace(string(out)) != ""
+}
+
+// listBackups prints the backups under --out (default <config-dir>/backups),
+// newest first: the directories `homelab restore` accepts.
+func listBackups(root string) error {
+	dir := backupFlags.out
+	if dir == "" {
+		dir = backup.DefaultDir(root)
+	}
+	list, err := backup.List(dir)
+	if err != nil {
+		return err
+	}
+	if rootFlags.json {
+		if list == nil {
+			list = []backup.Listing{}
+		}
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(list)
+	}
+	if len(list) == 0 {
+		fmt.Printf("\n  %s\n\n", styles.Muted.Render("No backups in "+dir))
+		return nil
+	}
+	fmt.Printf("\n%s\n\n", styles.Header.Render("Backups"))
+	for _, l := range list {
+		live := ""
+		if l.Live {
+			live = " " + styles.Warning.Render("(live)")
+		}
+		fmt.Printf("  %s  %s  %s%s\n", l.Created.Local().Format("2006-01-02 15:04"),
+			l.Dir, styles.Muted.Render(strings.Join(l.Services, ", ")), live)
+	}
+	fmt.Println()
+	return nil
 }
