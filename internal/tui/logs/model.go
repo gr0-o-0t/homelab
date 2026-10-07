@@ -4,9 +4,7 @@ package logs
 import (
 	"bufio"
 	"fmt"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 
@@ -14,7 +12,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/groot/homelab/internal/run"
 	"github.com/groot/homelab/internal/tui/styles"
 )
 
@@ -41,13 +38,13 @@ type Model struct {
 	height      int
 }
 
-// New creates a Model and starts the log stream goroutine.
-// env is the full environment map for docker compose; pass nil to fall back
-// to the legacy --env-file behaviour using the root .env file.
-func New(repoRoot, serviceName string, env map[string]string) Model {
-	ch, stop := startLogStream(repoRoot, serviceName, env)
+// New creates a Model titled title and starts streaming the output of argv —
+// in practice `homelab logs -f [service]`, so the CLI resolves the compose
+// file, profiles and environment exactly as `homelab logs` does.
+func New(title string, argv []string) Model {
+	ch, stop := startLogStream(argv)
 	return Model{
-		serviceName: serviceName,
+		serviceName: title,
 		logCh:       ch,
 		stopFn:      stop,
 		following:   true,
@@ -188,38 +185,25 @@ func viewportHeight(total int) int {
 	return h
 }
 
-// startLogStream launches `docker compose logs -f` in a goroutine and returns
-// a channel of log lines plus a stop function. The goroutine exits when the
-// stop function is called or the process exits naturally.
-// env is the full environment map; if non-nil a temp file is written and
-// passed via --env-file. When nil, the root .env file is used as fallback.
-func startLogStream(repoRoot, serviceName string, env map[string]string) (<-chan string, func()) {
+// startLogStream runs argv in a goroutine and returns a channel of its output
+// lines plus a stop function. The goroutine exits when the stop function is
+// called or the process exits naturally.
+//
+// Secrets reach the process through the CLI's own environment injection. This
+// used to write the full environment, keyring secrets included, to a temp
+// --env-file — on disk for as long as the viewer ran, and left behind if the
+// process was killed.
+func startLogStream(argv []string) (<-chan string, func()) {
 	ch := make(chan string, 256)
 	done := make(chan struct{})
+	var stopOnce sync.Once
 
 	go func() {
 		defer close(ch)
-
-		args := []string{"compose", "-f", run.ServiceComposeFile(repoRoot, serviceName)}
-
-		if len(env) > 0 {
-			// Write temp env file for the lifetime of this goroutine.
-			if tmp, err := os.CreateTemp("", "homelab-env-*.env"); err == nil {
-				tmpName := tmp.Name()
-				defer func() { _ = os.Remove(tmpName) }()
-				for k, v := range env {
-					_, _ = fmt.Fprintf(tmp, "%s=%s\n", k, v)
-				}
-				_ = tmp.Close()
-				_ = os.Chmod(tmpName, 0o600)
-				args = append(args, "--env-file", tmpName)
-			}
-		} else if envFile := filepath.Join(repoRoot, ".env"); func() bool { _, e := os.Stat(envFile); return e == nil }() {
-			args = append(args, "--env-file", envFile)
+		if len(argv) == 0 {
+			return
 		}
-		args = append(args, "logs", "-f")
-
-		cmd := exec.Command("docker", args...) // nosec G204 -- binary is "docker", args are programmatic
+		cmd := exec.Command(argv[0], argv[1:]...) // nosec G204 -- argv is built by the CLI, not user input
 
 		stdout, err := cmd.StdoutPipe()
 		if err != nil {
@@ -261,13 +245,7 @@ func startLogStream(repoRoot, serviceName string, env map[string]string) (<-chan
 		reap()
 	}()
 
-	return ch, func() {
-		select {
-		case <-done: // already stopped
-		default:
-			close(done)
-		}
-	}
+	return ch, func() { stopOnce.Do(func() { close(done) }) }
 }
 
 // waitForLine returns a tea.Cmd that blocks until a line arrives on ch.

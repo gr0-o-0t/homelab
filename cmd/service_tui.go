@@ -90,7 +90,15 @@ func runDashboardTUI(root string) error {
 // our own handler so the child process is still killed and reaped, then let
 // the Program shut down cleanly (restoring the terminal) before exiting.
 func runLogTUI(root, serviceName string) error {
-	model := tuiLogs.New(root, serviceName, buildEnv(root, serviceName))
+	// The viewer streams `homelab logs -f`, so it shows exactly what the CLI
+	// would. An empty service name means the core stack.
+	title, args := serviceName, []string{"logs", "-f", "-n", "500"}
+	if serviceName == "" {
+		title = "core"
+	} else {
+		args = append(args, serviceName)
+	}
+	model := tuiLogs.New(title, append(selfCLI(root), args...))
 	p := tea.NewProgram(model, tea.WithAltScreen())
 
 	sigCh := make(chan os.Signal, 1)
