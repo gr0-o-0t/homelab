@@ -355,7 +355,7 @@ func TestCleanLineAndCap(t *testing.T) {
 	assert.Equal(t, "done", cleanLine("\x1b[32m 50%\rdone\x1b[0m\r"))
 	assert.Equal(t, "a    b", cleanLine("a\tb"))
 	var lines []string
-	for i := 0; i < maxOutputLines+10; i++ {
+	for range maxOutputLines + 10 {
 		lines = appendCapped(lines, "x")
 	}
 	assert.Len(t, lines, maxOutputLines)

@@ -47,7 +47,7 @@ func Install(t *testing.T, root, svc string) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(dst, e.Name()), data, 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(dst, e.Name()), data, 0o600); err != nil { // #nosec G703 -- dst is the test temp root; the name comes from the fixture dir
 			t.Fatal(err)
 		}
 	}

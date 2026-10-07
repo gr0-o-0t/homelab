@@ -26,11 +26,13 @@ func paletteItems(current actions.Target, currentName string, global actions.Tar
 	var out []paletteItem
 	seen := map[string]bool{}
 	add := func(t actions.Target, ctx string) {
-		for _, a := range actions.For(t) {
+		acts := actions.For(t)
+		for i := range acts {
+			a := &acts[i]
 			key := a.ID + "|" + ctx
 			if !seen[key] {
 				seen[key] = true
-				out = append(out, paletteItem{Action: a, Target: t, Context: ctx})
+				out = append(out, paletteItem{Action: *a, Target: t, Context: ctx})
 			}
 		}
 	}
@@ -92,18 +94,20 @@ func fuzzyFilter(items []paletteItem, query string) []paletteItem {
 		score int
 	}
 	var hits []scored
-	for _, it := range items {
+	for i := range items {
+		it := &items[i]
 		// The label alone scores double, so "up" prefers "Up" over "Pull images".
 		ls, lok := fuzzyScore(query, it.Action.Label)
 		ts, tok := fuzzyScore(query, it.text())
 		if !lok && !tok {
 			continue
 		}
-		hits = append(hits, scored{it, max(ls*2, ts)})
+		hits = append(hits, scored{*it, max(ls*2, ts)})
 	}
 	sort.SliceStable(hits, func(i, j int) bool { return hits[i].score > hits[j].score })
 	out := make([]paletteItem, len(hits))
-	for i, h := range hits {
+	for i := range hits {
+		h := &hits[i]
 		out[i] = h.item
 	}
 	return out

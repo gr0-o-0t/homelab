@@ -40,7 +40,8 @@ func printServiceTable(svcs []service.Service, env map[string]string, wide bool)
 	fmt.Println()
 	fmt.Println(styles.Divider.Render("  " + strings.Repeat("─", styles.ColWidthName+12+styles.ColWidthExpose+6)))
 
-	for _, svc := range svcs {
+	for i := range svcs {
+		svc := &svcs[i]
 		name := styles.Width(styles.ColWidthName).Render(truncate(svc.Name, styles.ColWidthName-1))
 
 		var stateCol string
@@ -122,7 +123,8 @@ type serviceJSON struct {
 
 func printServiceJSON(svcs []service.Service) error {
 	out := make([]serviceJSON, len(svcs))
-	for i, s := range svcs {
+	for i := range svcs {
+		s := &svcs[i]
 		out[i] = serviceJSON{
 			Name:          s.Name,
 			Enabled:       s.On("ts"),
@@ -150,7 +152,8 @@ func buildServiceHint(svcs []service.Service) string {
 	}
 	var sb strings.Builder
 	sb.WriteString(styles.Muted.Render("  Available services:"))
-	for _, s := range svcs {
+	for i := range svcs {
+		s := &svcs[i]
 		sb.WriteString("\n    " + styles.Primary.Render(s.Name))
 	}
 	return sb.String()

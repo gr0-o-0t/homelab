@@ -56,7 +56,8 @@ func runDoctor(_ *cobra.Command, args []string) error {
 				return nil
 			}
 			var failed []string
-			for _, svc := range svcs {
+			for i := range svcs {
+				svc := &svcs[i]
 				ok := runServiceDoctorFor(dir, svc.Name, doctorFixFlag)
 				if !ok {
 					failed = append(failed, svc.Name)

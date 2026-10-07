@@ -23,7 +23,8 @@ func runServiceStatus(dir, name string, env map[string]string) error {
 	}
 
 	var svc *service.Service
-	for i, s := range svcs {
+	for i := range svcs {
+		s := &svcs[i]
 		if s.Name == name {
 			svc = &svcs[i]
 			break

@@ -136,7 +136,7 @@ func (m *Manager) Enable(reg *network.Registry, svc string, ls []network.Network
 		selected[l.Name()] = true
 	}
 	for _, l := range reg.All() {
-		if !selected[l.Name()] && !(changed && old.On(l.Name())) {
+		if !selected[l.Name()] && (!changed || !old.On(l.Name())) {
 			continue
 		}
 		if !old.On(l.Name()) {

@@ -245,7 +245,8 @@ func resolveTargets(root string, all bool, group string, args []string) ([]strin
 
 	if all {
 		names := make([]string, len(svcs))
-		for i, s := range svcs {
+		for i := range svcs {
+			s := &svcs[i]
 			names[i] = s.Name
 		}
 		return names, nil
@@ -349,7 +350,8 @@ func completeServiceNames(cmd *cobra.Command, args []string, toComplete string) 
 		return nil, cobra.ShellCompDirectiveError
 	}
 	var names []string
-	for _, s := range svcs {
+	for i := range svcs {
+		s := &svcs[i]
 		if strings.HasPrefix(s.Name, toComplete) {
 			names = append(names, s.Name)
 		}

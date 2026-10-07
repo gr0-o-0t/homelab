@@ -30,17 +30,21 @@ type palette struct {
 // group, when set, keeps only that group (the exposure menu).
 func (m Model) paletteItems(t actions.Target, group string) []paletteItem {
 	var out []paletteItem
-	for _, a := range actions.For(t) {
+	targetActs := actions.For(t)
+	for i := range targetActs {
+		a := &targetActs[i]
 		if group == "" || a.Group == group {
-			out = append(out, paletteItem{a: a, t: t, section: a.Group})
+			out = append(out, paletteItem{a: *a, t: t, section: a.Group})
 		}
 	}
 	if t.Scope == actions.Global || group != "" {
 		return out
 	}
 	g := m.globalTarget()
-	for _, a := range actions.For(g) {
-		out = append(out, paletteItem{a: a, t: g, section: "Stack · " + a.Group})
+	acts := actions.For(g)
+	for i := range acts {
+		a := &acts[i]
+		out = append(out, paletteItem{a: *a, t: g, section: "Stack · " + a.Group})
 	}
 	return out
 }
@@ -72,15 +76,17 @@ func (p palette) filtered() []paletteItem {
 		i     int
 	}
 	var hits []scored
-	for i, it := range p.items {
+	for i := range p.items {
+		it := &p.items[i]
 		text := it.a.Label + " " + it.a.Group + " " + it.a.ID
 		if s, ok := fuzzyScore(p.query, text); ok {
-			hits = append(hits, scored{it, s, i})
+			hits = append(hits, scored{*it, s, i})
 		}
 	}
 	sort.SliceStable(hits, func(a, b int) bool { return hits[a].score > hits[b].score })
 	out := make([]paletteItem, len(hits))
-	for i, h := range hits {
+	for i := range hits {
+		h := &hits[i]
 		out[i] = h.it
 	}
 	return out

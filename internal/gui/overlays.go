@@ -271,14 +271,18 @@ func (a *app) openPalette() {
 	items := paletteItems(t, name, a.globalTarget())
 	// The core and every extension are always reachable from the palette.
 	if t.Scope != actions.Core {
-		for _, act := range actions.For(a.coreTarget()) {
-			items = append(items, paletteItem{Action: act, Target: a.coreTarget(), Context: "core"})
+		targetActs := actions.For(a.coreTarget())
+		for i := range targetActs {
+			act := &targetActs[i]
+			items = append(items, paletteItem{Action: *act, Target: a.coreTarget(), Context: "core"})
 		}
 	}
 	for _, e := range a.v.exts {
 		lt := actions.LayerTarget(e.Name, e.Enabled, e.Running)
-		for _, act := range actions.For(lt) {
-			items = append(items, paletteItem{Action: act, Target: lt, Context: e.Name})
+		acts := actions.For(lt)
+		for i := range acts {
+			act := &acts[i]
+			items = append(items, paletteItem{Action: *act, Target: lt, Context: e.Name})
 		}
 	}
 	a.ui.palette = paletteState{open: true, pending: true, focus: true, items: items}
@@ -330,7 +334,8 @@ func (a *app) paletteWindow() {
 	if len(hits) == 0 {
 		textC(cMuted, "No matching action.")
 	}
-	for i, it := range hits {
+	for i := range hits {
+		it := &hits[i]
 		act := it.Action
 		sel := i == p.sel
 		start := imgui.CursorPos()
@@ -586,13 +591,15 @@ func (a *app) statusBar(h float32) {
 	imgui.PushStyleVarVec2(imgui.StyleVarItemSpacing, v2(a.px(8), 0))
 	imgui.BeginChildStrV("##status", v2(0, h), imgui.ChildFlagsAlwaysUseWindowPadding, imgui.WindowFlagsNoScrollbar)
 	var running []job
-	for _, j := range a.v.jobs {
+	for i := range a.v.jobs {
+		j := &a.v.jobs[i]
 		if j.Running && !j.Stream {
-			running = append(running, j)
+			running = append(running, *j)
 		}
 	}
 	streams := 0
-	for _, j := range a.v.jobs {
+	for i := range a.v.jobs {
+		j := &a.v.jobs[i]
 		if j.Running && j.Stream {
 			streams++
 		}
@@ -623,7 +630,8 @@ func (a *app) statusBar(h float32) {
 	}
 
 	running2, installed := 0, 0
-	for _, s := range a.v.services {
+	for i := range a.v.services {
+		s := &a.v.services[i]
 		if s.Installed {
 			installed++
 			if s.Running > 0 {

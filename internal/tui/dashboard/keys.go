@@ -4,6 +4,10 @@ import (
 	"github.com/groot/homelab/internal/actions"
 )
 
+// keyEnter is the bubbletea name of the Enter key, which runs or confirms
+// in every view and overlay.
+const keyEnter = "enter"
+
 // shortcut binds one key to one action for a scope. This is the only
 // hand-maintained action table in the TUI: everything else — the palette, the
 // detail pane's action list, the help overlay — is derived from the registry.
@@ -59,7 +63,7 @@ var navKeys = [][2]string{
 	{"↑↓ j k", "move"},
 	{"gg G", "top / bottom"},
 	{"^u ^d", "half page"},
-	{"enter", "actions for the selection"},
+	{keyEnter, "actions for the selection"},
 	{": ^p", "command palette"},
 	{"e", "exposure menu (service)"},
 	{"space", "mark service (multi-select)"},

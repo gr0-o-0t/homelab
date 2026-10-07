@@ -297,7 +297,7 @@ func (m Model) extensions() []network.NetworkLayer {
 
 // coreContainers is caddy plus every layer's container.
 func (m Model) coreContainers() []string {
-	names := []string{"caddy"}
+	names := []string{caddyContainer}
 	for _, l := range m.opt.Layers {
 		names = append(names, l.ContainerName())
 	}
@@ -307,7 +307,7 @@ func (m Model) coreContainers() []string {
 // coreHeaderContainers is caddy plus the offered layers' containers: what the
 // core stack runs right now.
 func (m Model) coreHeaderContainers() []string {
-	names := []string{"caddy"}
+	names := []string{caddyContainer}
 	for _, l := range m.offeredLayers() {
 		names = append(names, l.ContainerName())
 	}
@@ -315,7 +315,7 @@ func (m Model) coreHeaderContainers() []string {
 }
 
 func (m Model) layerRunning(l network.NetworkLayer) bool {
-	return m.core[l.ContainerName()] == "running"
+	return m.core[l.ContainerName()] == containerStateRunning
 }
 
 // layerIcon is the icon the registry gives exposing a service on the layer.
@@ -332,6 +332,12 @@ func layerIcon(name string) string {
 
 // ── rows of each view ─────────────────────────────────────────────────────────
 
+// Core container name and the docker state the core header counts as up.
+const (
+	caddyContainer        = "caddy"
+	containerStateRunning = "running"
+)
+
 // coreDir marks the pinned core row of the Services view.
 const coreDir = "@core"
 
@@ -342,7 +348,7 @@ func (m Model) coreService() service.Service {
 	s := service.Service{Name: "core", Installed: true, Dir: coreDir}
 	for _, c := range m.coreHeaderContainers() {
 		s.Total++
-		if m.core[c] == "running" {
+		if m.core[c] == containerStateRunning {
 			s.Running++
 		}
 	}
@@ -360,9 +366,10 @@ func (m Model) visibleServices() []service.Service {
 	if matches("core", f) {
 		out = append(out, m.coreService())
 	}
-	for _, s := range m.services {
+	for i := range m.services {
+		s := &m.services[i]
 		if s.Installed && matches(s.Name, f) {
-			out = append(out, s)
+			out = append(out, *s)
 		}
 	}
 	return out
@@ -371,9 +378,10 @@ func (m Model) visibleServices() []service.Service {
 // visibleCatalog is the Catalog view: services not installed yet.
 func (m Model) visibleCatalog() []service.Service {
 	var out []service.Service
-	for _, s := range m.services {
+	for i := range m.services {
+		s := &m.services[i]
 		if !s.Installed && matches(s.Name, m.filter[viewCatalog]) {
-			out = append(out, s)
+			out = append(out, *s)
 		}
 	}
 	return out
@@ -390,9 +398,11 @@ type healthRow struct {
 func (m Model) healthRows() []healthRow {
 	var out []healthRow
 	for _, t := range []actions.Target{m.globalTarget(), m.coreTarget()} {
-		for _, a := range actions.For(t) {
+		targetActs := actions.For(t)
+		for i := range targetActs {
+			a := &targetActs[i]
 			if a.Group == actions.GroupInspect && !a.Stream && !a.Interactive {
-				out = append(out, healthRow{a, t})
+				out = append(out, healthRow{*a, t})
 			}
 		}
 	}
@@ -491,7 +501,8 @@ func (m Model) layerTarget(l network.NetworkLayer) actions.Target {
 // markedNames are the multi-selected services, in list order.
 func (m Model) markedNames() []string {
 	var out []string
-	for _, s := range m.services {
+	for i := range m.services {
+		s := &m.services[i]
 		if s.Installed && m.marked[s.Name] {
 			out = append(out, s.Name)
 		}
@@ -505,7 +516,8 @@ func (m Model) multiTarget() actions.Target {
 	names := m.markedNames()
 	t := actions.Target{Scope: actions.Service, Names: names, Layers: m.offered()}
 	first := true
-	for _, s := range m.services {
+	for i := range m.services {
+		s := &m.services[i]
 		if !s.Installed || !m.marked[s.Name] {
 			continue
 		}

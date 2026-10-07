@@ -53,14 +53,14 @@ var fontBold, fontMono *g.FontInfo
 
 func readFirst(paths []string, fcPattern string) []byte {
 	for _, p := range paths {
-		if b, err := os.ReadFile(p); err == nil {
+		if b, err := os.ReadFile(p); err == nil { // #nosec G304 -- p is from the fixed font path list
 			return b
 		}
 	}
 	if fcPattern == "" {
 		return nil
 	}
-	out, err := exec.Command("fc-match", "-f", "%{file}", fcPattern).Output()
+	out, err := exec.Command("fc-match", "-f", "%{file}", fcPattern).Output() // #nosec G204 -- fcPattern is a constant font pattern
 	if err != nil {
 		return nil
 	}
@@ -68,7 +68,7 @@ func readFirst(paths []string, fcPattern string) []byte {
 	if !strings.HasSuffix(strings.ToLower(p), ".ttf") && !strings.HasSuffix(strings.ToLower(p), ".otf") {
 		return nil
 	}
-	b, _ := os.ReadFile(p)
+	b, _ := os.ReadFile(p) // #nosec G304 -- p is a font file path reported by fc-match
 	return b
 }
 

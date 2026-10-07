@@ -339,7 +339,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.keyForm(msg)
 	case modeConfirm:
 		switch k {
-		case "y", "Y", "enter":
+		case "y", "Y", keyEnter:
 			return m.execute(m.confirm.p)
 		case "n", "N", "esc", "q":
 			m.mode = modeNormal
@@ -349,7 +349,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.keyTyped(msg)
 	case modeOutput:
 		switch k {
-		case "esc", "q", "o", "enter":
+		case "esc", "q", "o", keyEnter:
 			m.mode = modeNormal
 			return m, nil
 		}
@@ -447,8 +447,10 @@ func (m Model) keyNormal(k string) (tea.Model, tea.Cmd) {
 	case "A":
 		if m.view == viewServices {
 			m.marked = map[string]bool{}
-			for _, s := range m.visibleServices() {
-				if !isCore(&s) {
+			shown := m.visibleServices()
+			for i := range shown {
+				s := &shown[i]
+				if !isCore(s) {
 					m.marked[s.Name] = true
 				}
 			}
@@ -463,7 +465,7 @@ func (m Model) keyNormal(k string) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m.shortcutOrNothing(k)
-	case "enter":
+	case keyEnter:
 		return m.enter()
 	default:
 		return m.shortcutOrNothing(k)
@@ -510,7 +512,7 @@ func (m Model) switchView(v view) (tea.Model, tea.Cmd) {
 
 func (m Model) keyFilter(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "enter":
+	case keyEnter:
 		m.mode = modeNormal
 	case "esc":
 		m.mode = modeNormal
@@ -541,7 +543,7 @@ func (m Model) keyPalette(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.pal.cursor = max(m.pal.cursor-10, 0)
 	case "pgdown":
 		m.pal.cursor = min(m.pal.cursor+10, max(n-1, 0))
-	case "enter":
+	case keyEnter:
 		if it, ok := m.pal.selected(); ok {
 			m.mode = modeNormal
 			return m.start(it.a, it.t, m.pal.prefill, true)
@@ -577,7 +579,7 @@ func (m Model) keyForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "shift+tab", "up":
 		m.frm = m.frm.focusField(f.focus - 1)
 		return m, nil
-	case "enter", "ctrl+s":
+	case keyEnter, "ctrl+s":
 		in, err := m.frm.values()
 		if err != nil {
 			m.frm.err = err.Error()
@@ -614,7 +616,7 @@ func (m Model) keyTyped(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc":
 		m.mode = modeNormal
 		return m, nil
-	case "enter":
+	case keyEnter:
 		if strings.TrimSpace(m.confirm.ti.Value()) != m.confirm.token {
 			m.confirm.err = "type " + m.confirm.token + " exactly to confirm"
 			return m, nil
@@ -649,7 +651,7 @@ func (m Model) keySetup(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "shift+tab", "up":
 		m.setup = s.focusField(s.focus - 1)
 		return m, nil
-	case "enter", "ctrl+s":
+	case keyEnter, "ctrl+s":
 		sets, secrets := s.changes()
 		if len(sets) == 0 && len(secrets) == 0 {
 			m.mode = modeNormal

@@ -104,7 +104,8 @@ func DiscoverWithCatalog(repoRoot string, catalogNames []string) ([]Service, err
 	}
 
 	installedSet := make(map[string]bool, len(installed))
-	for _, s := range installed {
+	for i := range installed {
+		s := &installed[i]
 		installedSet[s.Name] = true
 	}
 
@@ -146,7 +147,8 @@ func DiscoverAllWithDocker(repoRoot string, dc *docker.Client, catalogNames []st
 // case); DiscoverWithDocker's services are always installed, so it passes
 // false.
 func enrichWithDocker(ctx context.Context, dc *docker.Client, svcs []Service, onlyInstalled bool) {
-	for i, svc := range svcs {
+	for i := range svcs {
+		svc := &svcs[i]
 		if onlyInstalled && !svc.Installed {
 			continue
 		}

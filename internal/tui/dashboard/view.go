@@ -48,7 +48,7 @@ func clampFrame(s string, w, h int) string {
 // ── Header ────────────────────────────────────────────────────────────────────
 
 func (m Model) renderHeader() string {
-	pills := []string{m.corePill(styles.Icon("box"), "caddy", m.core["caddy"])}
+	pills := []string{m.corePill(styles.Icon("box"), caddyContainer, m.core[caddyContainer])}
 	for _, l := range m.offeredLayers() {
 		pills = append(pills, m.corePill(styles.Icon(layerIcon(l.Name())), l.Name(), m.core[l.ContainerName()]))
 	}
@@ -69,7 +69,7 @@ func (m Model) renderHeader() string {
 func (m Model) corePill(icon, name, state string) string {
 	col := styles.ColStopped
 	switch state {
-	case "running":
+	case containerStateRunning:
 		col = styles.ColRunning
 	case "":
 	default:
@@ -80,7 +80,8 @@ func (m Model) corePill(icon, name, state string) string {
 
 func (m Model) serviceCountSummary() string {
 	var running, installed, available int
-	for _, s := range m.services {
+	for i := range m.services {
+		s := &m.services[i]
 		if s.Installed {
 			installed++
 			if s.Running > 0 {
@@ -457,7 +458,7 @@ func (m Model) catalogDetail(svc *service.Service, w int) []string {
 	return append(lines, "",
 		styles.Subtle.Render("Bundled with homelab. Install it, then:"),
 		styles.Muted.Render("  configure "+styles.Icon("gear")+"  ·  up "+styles.Icon("play")+"  ·  expose "+styles.Icon("shield")),
-		"", styles.Key("enter")+" install")
+		"", styles.Key(keyEnter)+" install")
 }
 
 func (m Model) multiDetail(w int) []string {
@@ -480,7 +481,8 @@ func (m Model) layerDetail(w int) []string {
 	}
 	lines := titleLine(styles.Icon(layerIcon(l.Name())), l.Name(), tag, w)
 	exposed := 0
-	for _, s := range m.services {
+	for i := range m.services {
+		s := &m.services[i]
 		if s.On(l.Name()) {
 			exposed++
 		}
@@ -503,7 +505,7 @@ func (m Model) backupDetail(w int) []string {
 	if b.Live {
 		lines = append(lines, "", styles.Warning.Render(styles.Icon("warn")+" taken live — files may be torn"))
 	}
-	return append(lines, "", styles.Key("r")+" restore  "+styles.Key("b")+" new backup  "+styles.Key("enter")+" all actions")
+	return append(lines, "", styles.Key("r")+" restore  "+styles.Key("b")+" new backup  "+styles.Key(keyEnter)+" all actions")
 }
 
 func (m Model) healthDetail(h, w int) string {
@@ -517,7 +519,7 @@ func (m Model) healthDetail(h, w int) string {
 	}
 	res, ok := m.health[r.a.ID]
 	if !ok {
-		lines = append(lines, "", styles.Key("enter")+" run   "+styles.Key(":")+" with options")
+		lines = append(lines, "", styles.Key(keyEnter)+" run   "+styles.Key(":")+" with options")
 		return indent(lines, h, w)
 	}
 	status := styles.Success.Render(styles.Icon("ok") + " passed")
@@ -527,9 +529,7 @@ func (m Model) healthDetail(h, w int) string {
 	lines = append(lines, status+"  "+styles.Muted.Render("J/K scroll · enter re-run"), "")
 	out := strings.Split(strings.TrimRight(stripAnsi(res.out), "\n"), "\n")
 	top := min(m.healthScroll, max(len(out)-1, 0))
-	for _, l := range out[top:] {
-		lines = append(lines, l)
-	}
+	lines = append(lines, out[top:]...)
 	return indent(lines, h, w)
 }
 
@@ -547,15 +547,18 @@ func (m Model) actionLines(t actions.Target, room, w int) []string {
 	room -= 2
 	// Shortcut actions first: they are the ones a key reaches.
 	var keyed, rest []actions.Action
-	for _, a := range acts {
+	for i := range acts {
+		a := &acts[i]
 		if keyFor(a.ID) != "" {
-			keyed = append(keyed, a)
+			keyed = append(keyed, *a)
 		} else {
-			rest = append(rest, a)
+			rest = append(rest, *a)
 		}
 	}
 	var cells []string
-	for _, a := range append(keyed, rest...) {
+	keyed = append(keyed, rest...)
+	for i := range keyed {
+		a := &keyed[i]
 		k := keyFor(a.ID)
 		if k == "" {
 			k = " "
@@ -608,23 +611,23 @@ func (m Model) renderStatusBar() string {
 func (m Model) hints() string {
 	switch m.mode {
 	case modeFilter:
-		return hintBar("enter", "keep", "esc", "clear")
+		return hintBar(keyEnter, "keep", "esc", "clear")
 	case modePalette:
-		return hintBar("type", "filter", "↑↓", "move", "enter", "run", "esc", "close")
+		return hintBar("type", "filter", "↑↓", "move", keyEnter, "run", "esc", "close")
 	case modeForm:
-		return hintBar("tab", "next", "space/←→", "toggle·choose", "enter", "run", "esc", "cancel")
+		return hintBar("tab", "next", "space/←→", "toggle·choose", keyEnter, "run", "esc", "cancel")
 	case modeConfirm:
 		return hintBar("y", "confirm", "n/esc", "cancel")
 	case modeTyped:
-		return hintBar("enter", "confirm", "esc", "cancel")
+		return hintBar(keyEnter, "confirm", "esc", "cancel")
 	case modeOutput:
 		return hintBar("↑↓ pgup/pgdn", "scroll", "esc", "close")
 	case modeHelp:
 		return hintBar("j/k", "scroll", "any key", "close")
 	case modeSetup:
-		return hintBar("tab", "next", "enter", "save", "ctrl+o", "wizard", "esc", "cancel")
+		return hintBar("tab", "next", keyEnter, "save", "ctrl+o", "wizard", "esc", "cancel")
 	}
-	pairs := []string{"enter", "actions", ":", "palette"}
+	pairs := []string{keyEnter, "actions", ":", "palette"}
 	if t, ok := m.target(); ok {
 		for _, s := range shortcuts[t.Scope] {
 			if a, ok := actions.ByID(s.id); ok && a.Can(t) {

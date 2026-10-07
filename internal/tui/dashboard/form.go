@@ -142,7 +142,8 @@ func (f form) values() (actions.Inputs, error) {
 	for k, v := range f.p.inputs {
 		in[k] = v
 	}
-	for _, fd := range f.fields {
+	for i := range f.fields {
+		fd := &f.fields[i]
 		v := fd.value()
 		if fd.in.Required && v == "" {
 			return nil, fmt.Errorf("%s is required", fd.in.Label)
@@ -256,7 +257,8 @@ func (s setupForm) focusField(i int) setupForm {
 
 // changes are the --set arguments for edited vars and the secrets entered.
 func (s setupForm) changes() (sets []string, secrets map[string]string) {
-	for _, f := range s.fields {
+	for i := range s.fields {
+		f := &s.fields[i]
 		v := f.ti.Value()
 		switch {
 		case f.secret && strings.TrimSpace(v) != "":

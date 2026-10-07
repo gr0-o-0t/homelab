@@ -174,7 +174,7 @@ func (m Model) interactiveCmd(label string, args []string) tea.Cmd {
 	if len(cli) == 0 {
 		return func() tea.Msg { return execDoneMsg{label: label, err: errNoCLI} }
 	}
-	argv := append(cli, args...)
+	argv := slices.Concat(cli, args)
 	c := exec.Command(argv[0], argv[1:]...) // #nosec G204 -- argv is the CLI plus registry args
 	return tea.ExecProcess(c, func(err error) tea.Msg { return execDoneMsg{label: label, err: err} })
 }

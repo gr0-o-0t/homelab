@@ -45,7 +45,7 @@ func (c rgba) alpha(a float32) rgba { c.A = a; return c }
 
 // ── command output ────────────────────────────────────────────────────────────
 
-var ansiRE = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*\x07`)
+var ansiRE = regexp.MustCompile(`\x1b\[[0-9;?]*[\x20-\x2f]*[\x40-\x7e]|\x1b\][^\x07]*\x07`)
 
 // cleanLine strips ANSI escapes and keeps only what a terminal would show
 // after carriage returns (progress bars redraw a line with \r).

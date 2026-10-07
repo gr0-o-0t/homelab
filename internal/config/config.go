@@ -337,8 +337,8 @@ func (d *ServiceDatabases) decodeLegacy(value *yaml.Node) error {
 	if err := value.Decode(&old); err != nil {
 		return fmt.Errorf("decoding legacy database format: %w", err)
 	}
-	for dbType, decl := range old {
-		*d = append(*d, TypedDBDecl{Type: dbType, ServiceDBDecl: decl})
+	for dbType := range old {
+		*d = append(*d, TypedDBDecl{Type: dbType, ServiceDBDecl: old[dbType]})
 	}
 	return nil
 }

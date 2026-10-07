@@ -357,7 +357,8 @@ func RunServiceContainerChecks(name string, dc *docker.Client) CheckGroup {
 func RunServiceRoutingChecks(dir, name string) CheckGroup {
 	var layers []string
 	svcs, _ := service.Discover(dir)
-	for _, s := range svcs {
+	for i := range svcs {
+		s := &svcs[i]
 		if s.Name == name {
 			for _, l := range s.ActiveLayers() {
 				layers = append(layers, string(l))

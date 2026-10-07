@@ -226,7 +226,8 @@ func runStatus(_ *cobra.Command, args []string) error {
 
 	runningCount := 0
 	layerCount := map[string]int{}
-	for _, s := range svcs {
+	for i := range svcs {
+		s := &svcs[i]
 		for _, l := range s.ActiveLayers() {
 			layerCount[l]++
 		}
@@ -257,13 +258,14 @@ func runStatus(_ *cobra.Command, args []string) error {
 	divLen = styles.ColWidthName + 12 + styles.ColWidthPorts + styles.ColWidthNetwork + 50 + 8
 	fmt.Println(styles.Divider.Render("  " + strings.Repeat("─", divLen)))
 
-	for _, svc := range svcs {
+	for i := range svcs {
+		svc := &svcs[i]
 		name := styles.Width(styles.ColWidthName).Render(truncate(svc.Name, styles.ColWidthName-1))
 
 		// STATE column — merged state + health, aggregated across every
 		// container the service has (not just whichever the API listed
 		// first), from data discoverServices already fetched.
-		stateCol := styles.Width(12).Render(mergedState(svc, service.AggregateHealth(svc.Containers)))
+		stateCol := styles.Width(12).Render(mergedState(*svc, service.AggregateHealth(svc.Containers)))
 
 		// PORTS column — always visible
 		var portsStr string

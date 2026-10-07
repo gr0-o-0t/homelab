@@ -21,6 +21,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -248,7 +249,7 @@ func (a *app) resolveAddrs(name string) {
 func (a *app) loadSetup(svc string) {
 	go func() {
 		argv := append(slices.Clone(a.opt.CLI), loadSetupArgs(svc)...)
-		cmd := exec.Command(argv[0], argv[1:]...)
+		cmd := exec.Command(argv[0], argv[1:]...) // #nosec G204 -- argv is the CLI plus registry args
 		var stderr bytes.Buffer
 		cmd.Stderr = &stderr
 		out, err := cmd.Output()
@@ -330,7 +331,7 @@ func (a *app) start(label string, args []string, stdin []byte, stream bool, done
 
 	go func() {
 		argv := append(slices.Clone(a.opt.CLI), args...)
-		cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+		cmd := exec.CommandContext(ctx, argv[0], argv[1:]...) // #nosec G204 -- argv is the CLI plus registry args
 		// Own process group, so Stop also ends docker compose under the CLI.
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM) }
@@ -346,12 +347,14 @@ func (a *app) start(label string, args []string, stdin []byte, stream bool, done
 				err := cmd.Wait()
 				_ = pw.CloseWithError(err)
 				a.finish(id, err, ctx.Err() != nil, label, done)
+				cancel() // release the context once stopped has been read
 			}()
 			a.pump(id, pr)
 			return
 		}
 		_ = pw.Close()
 		a.finish(id, err, false, label, done)
+		cancel()
 	}()
 	return id
 }
@@ -394,7 +397,8 @@ func (a *app) finish(id int, err error, stopped bool, label string, done func(bo
 		stream = j.Stream
 		if err != nil && !stopped {
 			j.Err = err.Error()
-			if ee, ok := err.(*exec.ExitError); ok {
+			var ee *exec.ExitError
+			if errors.As(err, &ee) {
 				j.Code = ee.ExitCode()
 			}
 			for k := len(j.Lines) - 1; k >= 0; k-- {
@@ -475,7 +479,7 @@ func (a *app) openTerminal(label string, args []string) bool {
 	if !ok {
 		return false
 	}
-	cmd := exec.Command(argv[0], argv[1:]...)
+	cmd := exec.Command(argv[0], argv[1:]...) // #nosec G204 -- a terminal found on PATH running the CLI plus registry args
 	if err := cmd.Start(); err != nil {
 		a.notify("Could not open a terminal: "+err.Error(), toastFail)
 		return true
@@ -492,7 +496,7 @@ func (a *app) openURL(target string) {
 		if _, err := exec.LookPath(opener); err != nil {
 			opener = "open" // macOS
 		}
-		if err := exec.Command(opener, target).Run(); err != nil {
+		if err := exec.Command(opener, target).Run(); err != nil { // #nosec G204 -- fixed opener; target is a service URL or config dir we built
 			a.notify(fmt.Sprintf("Could not open %s: %v", target, err), toastFail)
 		}
 	}()

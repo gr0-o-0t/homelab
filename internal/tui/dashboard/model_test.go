@@ -660,7 +660,7 @@ func Test_Parity_EveryActionReachable(t *testing.T) {
 		base.core = map[string]string{"caddy": "running", "tailscale": "running", "tor": "running"}
 		for v := view(0); v < numViews; v++ {
 			m := press(base, fmt.Sprint(v+1))
-			for i := 0; i < m.rowCount(v); i++ {
+			for i := range m.rowCount(v) {
 				m.cursor[v] = i
 				collect(t, m, reached)
 			}

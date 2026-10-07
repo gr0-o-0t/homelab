@@ -73,12 +73,13 @@ func (m Model) renderPalette(h int) string {
 	}
 	var rows []row
 	section := ""
-	for i, it := range items {
+	for i := range items {
+		it := &items[i]
 		if m.pal.query == "" && it.section != section {
 			section = it.section
 			rows = append(rows, row{styles.GroupTitle.Render(section), -1})
 		}
-		rows = append(rows, row{m.paletteLine(it, i == m.pal.cursor, inner), i})
+		rows = append(rows, row{m.paletteLine(*it, i == m.pal.cursor, inner), i})
 	}
 	if len(items) == 0 {
 		rows = append(rows, row{styles.Muted.Render("No matching action"), -1})
@@ -149,11 +150,13 @@ func (m Model) renderForm(h int) string {
 	}
 	lines = append(lines, "")
 	labelW := 0
-	for _, f := range m.frm.fields {
+	for i := range m.frm.fields {
+		f := &m.frm.fields[i]
 		labelW = max(labelW, lipgloss.Width(f.in.Label))
 	}
 	labelW = min(labelW+2, inner/2)
-	for i, f := range m.frm.fields {
+	for i := range m.frm.fields {
+		f := &m.frm.fields[i]
 		focused := i == m.frm.focus
 		label := f.in.Label
 		if f.in.Required {
@@ -163,7 +166,7 @@ func (m Model) renderForm(h int) string {
 		if focused {
 			ls = styles.Primary.Bold(true)
 		}
-		lines = append(lines, cursorMark(focused)+ls.Width(labelW).Render(clip(label, labelW))+fieldValue(f, focused, inner-labelW-2))
+		lines = append(lines, cursorMark(focused)+ls.Width(labelW).Render(clip(label, labelW))+fieldValue(*f, focused, inner-labelW-2))
 		if focused && f.in.Help != "" && f.in.Kind != actions.Text && f.in.Kind != actions.Path {
 			lines = append(lines, strings.Repeat(" ", labelW+2)+styles.Muted.Render(clip(f.in.Help, inner-labelW-2)))
 		}
@@ -181,7 +184,8 @@ func (m Model) formPreview() []string {
 	for k, v := range m.frm.p.inputs {
 		in[k] = v
 	}
-	for _, f := range m.frm.fields {
+	for i := range m.frm.fields {
+		f := &m.frm.fields[i]
 		in[f.in.Key] = f.value()
 	}
 	return m.frm.p.action.Build(m.frm.p.target, in)
@@ -344,13 +348,15 @@ func (m Model) renderSetup(h int) string {
 		lines = append(lines, styles.Muted.Render("Nothing to configure."))
 	default:
 		labelW := 0
-		for _, f := range s.fields {
+		for i := range s.fields {
+			f := &s.fields[i]
 			labelW = max(labelW, lipgloss.Width(f.name)+2)
 		}
 		labelW = min(labelW+2, inner/2)
 		var rows []string
 		focusRow := 0
-		for i, f := range s.fields {
+		for i := range s.fields {
+			f := &s.fields[i]
 			if i == s.focus {
 				focusRow = len(rows)
 			}
@@ -364,7 +370,7 @@ func (m Model) renderSetup(h int) string {
 			}
 			badge := ""
 			if f.secret {
-				badge = secretBadge(f) + " "
+				badge = secretBadge(*f) + " "
 			}
 			ti := f.ti
 			ti.Width = max(inner-labelW-lipgloss.Width(badge)-3, 4)

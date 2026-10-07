@@ -196,7 +196,8 @@ func (a *app) sidebar(w, h float32) {
 	imgui.Dummy(v2(0, a.px(14)))
 
 	installed, available := 0, 0
-	for _, s := range a.v.services {
+	for i := range a.v.services {
+		s := &a.v.services[i]
 		if s.Installed {
 			installed++
 		} else {
@@ -303,9 +304,10 @@ func (a *app) globalTarget() actions.Target { return actions.GlobalTarget(a.v.la
 func (a *app) coreTarget() actions.Target   { return actions.CoreTarget(a.v.layers) }
 
 func (a *app) service(name string) (service.Service, bool) {
-	for _, s := range a.v.services {
+	for i := range a.v.services {
+		s := &a.v.services[i]
 		if s.Name == name {
-			return s, true
+			return *s, true
 		}
 	}
 	return service.Service{}, false
@@ -408,8 +410,9 @@ func (a *app) actionGroups(list []actions.Action, t actions.Target, ctx string) 
 	for _, grp := range grouped(list) {
 		section(groupGlyph(grp.Name), grp.Name)
 		fl := newFlow()
-		for _, act := range grp.Actions {
-			a.actionButton(act, t, ctx, false, false, fl)
+		for i := range grp.Actions {
+			act := &grp.Actions[i]
+			a.actionButton(*act, t, ctx, false, false, fl)
 		}
 		imgui.Dummy(v2(0, a.px(4)))
 	}
@@ -437,8 +440,9 @@ func groupGlyph(group string) string {
 func (a *app) toolbar(list []actions.Action, t actions.Target, ctx string) {
 	fl := newFlow()
 	imgui.PushStyleVarVec2(imgui.StyleVarFramePadding, v2(a.px(12), a.px(7)))
-	for _, act := range list {
-		a.actionButton(act, t, ctx, true, false, fl)
+	for i := range list {
+		act := &list[i]
+		a.actionButton(*act, t, ctx, true, false, fl)
 	}
 	imgui.PopStyleVar()
 }
@@ -448,10 +452,11 @@ func (a *app) toolbar(list []actions.Action, t actions.Target, ctx string) {
 func (a *app) servicesView() {
 	var installed []service.Service
 	running := 0
-	for _, s := range a.v.services {
+	for i := range a.v.services {
+		s := &a.v.services[i]
 		if s.Installed {
-			installed = append(installed, s)
-			if serviceState(s) == stateRunning {
+			installed = append(installed, *s)
+			if serviceState(*s) == stateRunning {
 				running++
 			}
 		}
@@ -486,17 +491,20 @@ func (a *app) serviceList(installed []service.Service) {
 	imgui.InputTextWithHint("##filter", glyphSearch+"  Search services or layers", &a.ui.filter, 0, nil)
 
 	var visible []service.Service
-	for _, s := range installed {
-		if matchesFilter(s, a.ui.filter) {
-			visible = append(visible, s)
+	for i := range installed {
+		s := &installed[i]
+		if matchesFilter(*s, a.ui.filter) {
+			visible = append(visible, *s)
 		}
 	}
 	all := len(visible) > 0
-	for _, s := range visible {
+	for i := range visible {
+		s := &visible[i]
 		all = all && a.ui.checked[s.Name]
 	}
 	if imgui.Checkbox("##all", &all) {
-		for _, s := range visible {
+		for i := range visible {
+			s := &visible[i]
 			if all {
 				a.ui.checked[s.Name] = true
 			} else {
@@ -522,7 +530,8 @@ func (a *app) serviceList(installed []service.Service) {
 	}, func() { a.ui.selected = "" })
 	imgui.Dummy(v2(0, a.px(2)))
 
-	for _, s := range visible {
+	for i := range visible {
+		s := &visible[i]
 		name := s.Name
 		a.listRow("##row"+name, a.ui.selected == name, rowH, func() {
 			on := a.ui.checked[name]
@@ -534,7 +543,7 @@ func (a *app) serviceList(installed []service.Service) {
 				}
 			}
 			imgui.SameLineV(0, a.px(8))
-			dotF(stateColor(serviceState(s)))
+			dotF(stateColor(serviceState(*s)))
 			imgui.SameLineV(0, a.px(8))
 			text(name)
 			if len(s.Layers) > 0 {
@@ -608,7 +617,8 @@ func stateColor(s runState) rgba {
 // batchBar offers the Multi actions for the checked services.
 func (a *app) batchBar() {
 	var names []string
-	for _, s := range a.v.services {
+	for i := range a.v.services {
+		s := &a.v.services[i]
 		if a.ui.checked[s.Name] && s.Installed {
 			names = append(names, s.Name)
 		}
@@ -634,8 +644,10 @@ func (a *app) batchBar() {
 			a.ui.checked = map[string]bool{}
 		}
 		fl := newFlow()
-		for _, act := range actions.For(t) {
-			a.actionButton(act, t, ctx, true, false, fl)
+		targetActs := actions.For(t)
+		for i := range targetActs {
+			act := &targetActs[i]
+			a.actionButton(*act, t, ctx, true, false, fl)
 		}
 	}
 	endCard()
@@ -647,8 +659,9 @@ func (a *app) batchBar() {
 func (a *app) stackDetail(installed []service.Service) {
 	t := a.globalTarget()
 	var run, part, stop, exposed int
-	for _, s := range installed {
-		switch serviceState(s) {
+	for i := range installed {
+		s := &installed[i]
+		switch serviceState(*s) {
 		case stateRunning:
 			run++
 		case statePartial:
@@ -813,15 +826,17 @@ func (a *app) containerTable(cs []docker.ContainerDetail) {
 	imgui.TableSetupColumnV("Ports", imgui.TableColumnFlagsWidthStretch, 2.4, 0)
 	imgui.TableSetupColumnV("Up since", imgui.TableColumnFlagsWidthStretch, 1.4, 0)
 	imgui.TableHeadersRow()
-	for _, c := range cs {
+	for i := range cs {
+		c := &cs[i]
 		imgui.TableNextRow()
 		imgui.TableNextColumn()
 		text(c.Name)
 		imgui.TableNextColumn()
 		sc := cDim
-		if c.State == "running" {
+		switch c.State {
+		case "running":
 			sc = cSuccess
-		} else if c.State == "restarting" {
+		case "restarting":
 			sc = cWarning
 		}
 		dot(sc)
@@ -976,8 +991,9 @@ func (a *app) networkTab(s service.Service, t actions.Target, exposure []actions
 	if len(rest) > 0 {
 		section(Glyph("wrench"), "More")
 		fl := newFlow()
-		for _, act := range rest {
-			a.actionButton(act, t, s.Name, false, false, fl)
+		for i := range rest {
+			act := &rest[i]
+			a.actionButton(*act, t, s.Name, false, false, fl)
 		}
 	}
 }
@@ -1005,10 +1021,8 @@ func (a *app) logsTab(s service.Service, t actions.Target) {
 		spinner(a.px(6), cSuccess)
 		imgui.SameLine()
 		textC(cMuted, "following")
-	} else {
-		if button(Glyph("play")+"  Follow##logfollow", toneSuccess, false) {
-			a.ui.logsJob = a.startLogs(t, s.Name)
-		}
+	} else if button(Glyph("play")+"  Follow##logfollow", toneSuccess, false) {
+		a.ui.logsJob = a.startLogs(t, s.Name)
 	}
 	imgui.SameLine()
 	if button(glyphClear+"  Clear##logclear", toneNormal, j == nil) {
@@ -1033,8 +1047,10 @@ func (a *app) logsTab(s service.Service, t actions.Target) {
 
 // startLogs streams the target's logs action (follow, last 200 lines).
 func (a *app) startLogs(t actions.Target, ctx string) int {
-	for _, act := range actions.For(t) {
-		if act.Stream && onToolbar(act) {
+	targetActs := actions.For(t)
+	for i := range targetActs {
+		act := &targetActs[i]
+		if act.Stream && onToolbar(*act) {
 			args := act.Build(t, actions.Inputs{"follow": "true", "tail": "200"})
 			return a.start("Logs · "+ctx, args, nil, true, nil)
 		}
@@ -1209,9 +1225,10 @@ func (a *app) setupEditor(id, svc string, f *setupForm, loadErr string, reload f
 
 func (a *app) catalogView() {
 	var avail []service.Service
-	for _, s := range a.v.services {
+	for i := range a.v.services {
+		s := &a.v.services[i]
 		if !s.Installed {
-			avail = append(avail, s)
+			avail = append(avail, *s)
 		}
 	}
 	a.viewHeader(glyphCatalog, "Catalog", fmt.Sprintf("%d services ready to install", len(avail)))
@@ -1224,8 +1241,9 @@ func (a *app) catalogView() {
 	gap := a.px(12)
 	cols := max(1, int((imgui.ContentRegionAvail().X+gap)/(cardW+gap)))
 	n := 0
-	for _, s := range avail {
-		if !matchesFilter(s, a.ui.catFilter) {
+	for k := range avail {
+		s := &avail[k]
+		if !matchesFilter(*s, a.ui.catFilter) {
 			continue
 		}
 		if n%cols != 0 {
@@ -1234,18 +1252,20 @@ func (a *app) catalogView() {
 			imgui.Dummy(v2(0, gap-imgui.CurrentStyle().ItemSpacing().Y))
 		}
 		n++
-		t := actions.ServiceTarget(s, a.v.layers)
+		t := actions.ServiceTarget(*s, a.v.layers)
 		if card("##cat"+s.Name, cardW, cardH, 0) {
 			withFont(nil, 20, func() { textC(cBlue, Glyph("box")) })
 			imgui.SameLineV(0, a.px(10))
 			withFont(fontBold, 17, func() { text(s.Name) })
 			textC(cMuted, "from the catalog")
 			imgui.SetCursorPosY(cardH - imgui.FrameHeight() - a.px(12))
-			for i, act := range actions.For(t) {
+			targetActs := actions.For(t)
+			for i := range targetActs {
+				act := &targetActs[i]
 				if i > 0 {
 					imgui.SameLine()
 				}
-				a.actionButton(act, t, s.Name, true, false, nil)
+				a.actionButton(*act, t, s.Name, true, false, nil)
 			}
 		}
 		endCard()
@@ -1303,7 +1323,8 @@ func (a *app) networkView() {
 	// Extensions.
 	section(Glyph("link"), "Extensions")
 	exposed := map[string]int{}
-	for _, s := range a.v.services {
+	for i := range a.v.services {
+		s := &a.v.services[i]
 		for _, l := range s.Layers {
 			exposed[string(l)]++
 		}
@@ -1358,11 +1379,13 @@ func (a *app) networkView() {
 			imgui.AlignTextToFramePadding()
 			textC(cMuted, strconv.Itoa(exposed[e.Name]))
 			imgui.TableNextColumn()
-			for i, act := range actions.For(lt) {
+			targetActs := actions.For(lt)
+			for i := range targetActs {
+				act := &targetActs[i]
 				if i > 0 {
 					imgui.SameLineV(0, a.px(4))
 				}
-				a.actionButton(act, lt, e.Name, true, true, nil)
+				a.actionButton(*act, lt, e.Name, true, true, nil)
 			}
 		}
 		imgui.EndTable()
@@ -1377,8 +1400,9 @@ func (a *app) backupsView() {
 	t := a.globalTarget()
 	acts := filterBy(actions.For(t), func(x actions.Action) bool { return touchesCommand(x, "backup", "restore") })
 	fl := newFlow()
-	for _, act := range acts {
-		a.actionButton(act, t, "stack", false, false, fl)
+	for i := range acts {
+		act := &acts[i]
+		a.actionButton(*act, t, "stack", false, false, fl)
 	}
 	imgui.SameLine()
 	if button(glyphFolder+"  Open folder##bkdir", toneGhost, false) {
@@ -1399,9 +1423,10 @@ func (a *app) backupsView() {
 		return
 	}
 	var restore *actions.Action
-	for _, act := range acts {
-		if touchesCommand(act, "restore") {
-			restore = &act
+	for i := range acts {
+		act := &acts[i]
+		if touchesCommand(*act, "restore") {
+			restore = act
 		}
 	}
 	flags := imgui.TableFlagsRowBg | imgui.TableFlagsBordersInnerH | imgui.TableFlagsPadOuterX | imgui.TableFlagsScrollY
@@ -1467,16 +1492,17 @@ func (a *app) healthView() {
 	a.viewHeader(glyphHealth, "Health", "")
 	var run, attention, stopped int
 	var problems []service.Service
-	for _, s := range a.v.services {
+	for i := range a.v.services {
+		s := &a.v.services[i]
 		if !s.Installed {
 			continue
 		}
 		h := service.AggregateHealth(s.Containers)
 		switch {
-		case serviceState(s) == statePartial || h == "unhealthy" && s.Running > 0:
+		case serviceState(*s) == statePartial || h == "unhealthy" && s.Running > 0:
 			attention++
-			problems = append(problems, s)
-		case serviceState(s) == stateRunning:
+			problems = append(problems, *s)
+		case serviceState(*s) == stateRunning:
 			run++
 		default:
 			stopped++
@@ -1516,12 +1542,13 @@ func (a *app) healthView() {
 	if up < total {
 		textC(cWarning, fmt.Sprintf("%s  %d core container(s) not running — see Network.", glyphWarn, total-up))
 	}
-	for _, s := range problems {
+	for k := range problems {
+		s := &problems[k]
 		dot(cWarning)
 		imgui.SameLineV(0, a.px(8))
 		withFont(fontBold, 0, func() { text(s.Name) })
 		imgui.SameLineV(0, a.px(8))
-		note := stateLabel(s)
+		note := stateLabel(*s)
 		if h := service.AggregateHealth(s.Containers); h != "" {
 			note += " · " + h
 		}
@@ -1531,11 +1558,13 @@ func (a *app) healthView() {
 		if button(glyphExternal+"  Open##h"+name, toneGhost, false) {
 			a.ui.view, a.ui.selected = viewServices, name
 		}
-		t := actions.ServiceTarget(s, a.v.layers)
-		for _, act := range actions.For(t) {
+		t := actions.ServiceTarget(*s, a.v.layers)
+		targetActs := actions.For(t)
+		for i := range targetActs {
+			act := &targetActs[i]
 			if act.Icon == "doctor" {
 				imgui.SameLine()
-				a.actionButton(act, t, name, true, false, nil)
+				a.actionButton(*act, t, name, true, false, nil)
 			}
 		}
 	}
@@ -1543,26 +1572,31 @@ func (a *app) healthView() {
 	section(Glyph("doctor"), "Checks")
 	gt, ct := a.globalTarget(), a.coreTarget()
 	fl := newFlow()
-	for _, pair := range []struct {
+	pairs := []struct {
 		t   actions.Target
 		ctx string
-	}{{gt, "stack"}, {ct, "core"}} {
-		for _, act := range actions.For(pair.t) {
+	}{{gt, "stack"}, {ct, "core"}}
+	for p := range pairs {
+		pair := &pairs[p]
+		targetActs := actions.For(pair.t)
+		for i := range targetActs {
+			act := &targetActs[i]
 			if act.Group != actions.GroupInspect || act.Stream {
 				continue
 			}
 			fl.next(Glyph(act.Icon)+"  "+act.Label, 0)
 			before := a.ui.consoleJob
-			a.actionButton(act, pair.t, pair.ctx, true, false, nil)
+			a.actionButton(*act, pair.t, pair.ctx, true, false, nil)
 			if a.ui.consoleJob != before {
 				a.ui.healthJob = a.ui.consoleJob
 			}
 		}
 	}
 	imgui.Dummy(v2(0, a.px(4)))
-	for _, j := range a.v.jobs {
+	for i := range a.v.jobs {
+		j := &a.v.jobs[i]
 		if j.ID == a.ui.healthJob {
-			a.jobHeader(j)
+			a.jobHeader(*j)
 			logLines("##healthout", j.Lines, 0)
 			return
 		}
@@ -1577,8 +1611,9 @@ func (a *app) settingsView() {
 	t := a.globalTarget()
 	conf := filterBy(actions.For(t), func(x actions.Action) bool { return x.Group == actions.GroupConfigure })
 	fl := newFlow()
-	for _, act := range conf {
-		a.actionButton(act, t, "homelab", true, false, fl)
+	for i := range conf {
+		act := &conf[i]
+		a.actionButton(*act, t, "homelab", true, false, fl)
 	}
 	imgui.Dummy(v2(0, a.px(4)))
 	if !a.ui.rootReq {

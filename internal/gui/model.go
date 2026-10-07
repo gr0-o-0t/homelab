@@ -43,14 +43,16 @@ func onToolbar(a actions.Action) bool {
 
 func split(t actions.Target) surface {
 	var s surface
-	for _, a := range actions.For(t) {
+	targetActs := actions.For(t)
+	for i := range targetActs {
+		a := &targetActs[i]
 		switch {
-		case onToolbar(a):
-			s.Toolbar = append(s.Toolbar, a)
+		case onToolbar(*a):
+			s.Toolbar = append(s.Toolbar, *a)
 		case a.Group == actions.GroupExposure && t.Scope == actions.Service:
-			s.Network = append(s.Network, a)
+			s.Network = append(s.Network, *a)
 		default:
-			s.Rest = append(s.Rest, a)
+			s.Rest = append(s.Rest, *a)
 		}
 	}
 	return s
@@ -68,13 +70,15 @@ func grouped(list []actions.Action) []actionGroup {
 	var out []actionGroup
 	idx := map[string]int{}
 	order := slices.Clone(actions.Groups)
-	for _, a := range list {
+	for i := range list {
+		a := &list[i]
 		if !slices.Contains(order, a.Group) {
 			order = append(order, a.Group)
 		}
 	}
 	for _, name := range order {
-		for _, a := range list {
+		for k := range list {
+			a := &list[k]
 			if a.Group != name {
 				continue
 			}
@@ -84,7 +88,7 @@ func grouped(list []actions.Action) []actionGroup {
 				idx[name] = i
 				out = append(out, actionGroup{Name: name})
 			}
-			out[i].Actions = append(out[i].Actions, a)
+			out[i].Actions = append(out[i].Actions, *a)
 		}
 	}
 	return out
@@ -93,9 +97,10 @@ func grouped(list []actions.Action) []actionGroup {
 // filterBy keeps the actions for which keep is true.
 func filterBy(list []actions.Action, keep func(actions.Action) bool) []actions.Action {
 	var out []actions.Action
-	for _, a := range list {
-		if keep(a) {
-			out = append(out, a)
+	for i := range list {
+		a := &list[i]
+		if keep(*a) {
+			out = append(out, *a)
 		}
 	}
 	return out
@@ -118,7 +123,8 @@ func touchesCommand(a actions.Action, verbs ...string) bool {
 func multiTarget(all []service.Service, names, layers []string) actions.Target {
 	t := actions.Target{Scope: actions.Service, Names: slices.Clone(names), Layers: layers}
 	first := true
-	for _, s := range all {
+	for i := range all {
+		s := &all[i]
 		if !slices.Contains(names, s.Name) {
 			continue
 		}
@@ -151,9 +157,11 @@ func layerToggle(t actions.Target, layer string) (on bool, act *actions.Action) 
 	if on {
 		id = "service.disable" + suffix
 	}
-	for _, a := range actions.For(t) {
+	acts := actions.For(t)
+	for i := range acts {
+		a := &acts[i]
 		if a.ID == id {
-			return on, &a
+			return on, a
 		}
 	}
 	return on, nil
@@ -278,8 +286,9 @@ type extState struct {
 func screenTargets(svcs []service.Service, layers []string, exts []extState) []actions.Target {
 	out := []actions.Target{actions.GlobalTarget(layers), actions.CoreTarget(layers)}
 	var installed []string
-	for _, s := range svcs {
-		out = append(out, actions.ServiceTarget(s, layers))
+	for i := range svcs {
+		s := &svcs[i]
+		out = append(out, actions.ServiceTarget(*s, layers))
 		if s.Installed {
 			installed = append(installed, s.Name)
 		}
