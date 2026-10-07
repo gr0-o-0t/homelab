@@ -100,11 +100,11 @@ Public services use a separate subdomain (default: `pub.example.com`) and are se
 
 ### 6. Multi-layer service exposure
 
-Each service directory ships with Caddyfile snippets:
-- `caddy.conf` — Private reverse proxy (tailnet-only)
-- `caddy.cf.conf` — Public reverse proxy (Cloudflare Tunnel)
-
-Running `homelab enable <name>` symlinks `caddy.conf` into `caddy/conf.d/` and reloads Caddy. Running `homelab enable <name> --cf` symlinks `caddy.cf.conf` instead.
+Caddy config is generated, never hand-written per layer. Each service declares
+its ports in `config.yaml` (or a `caddy.routes.conf` body for complex routing);
+`homelab enable <name>` writes the private block into `caddy/conf.d/`,
+`--cf`/`--i2p`/`--tor`/`--ygg` write theirs into `caddy/conf.d-<layer>/`, and
+Caddy is reloaded once. A failed validation restores the previous files.
 
 For alternative network extensions:
 

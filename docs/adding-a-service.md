@@ -33,9 +33,7 @@ This creates:
 ```
 ~/.config/homelab/services/paperless/
 ├── docker-compose.yml
-├── caddy.conf          # private reverse proxy (tailnet)
-├── caddy.cf.conf      # public reverse proxy (Cloudflare Tunnel)
-└── config.yaml         # vars + secrets schema
+└── config.yaml         # vars, secrets and the ports Caddy routes to
 ```
 
 ### 2. Edit `docker-compose.yml`
@@ -53,9 +51,9 @@ networks:
     internal: true
 
 services:
-  paperless-ngx:           # ← this name is used in caddy.conf
+  paperless:               # ← the generated routes proxy to <service>:<port>
     image: ghcr.io/paperless-ngx/paperless-ngx:latest
-    container_name: paperless-ngx
+    container_name: paperless
     restart: always
     environment:
       PAPERLESS_REDIS: redis://paperless-redis:6379
@@ -92,29 +90,28 @@ volumes:
   paperless-pgdata:
 ```
 
-### 3. Edit `caddy.conf` (private/tailnet access)
+### 3. Declare the ports in `config.yaml` (routing)
 
-```caddyfile
-paperless.{$HOME_SUBDOMAIN}.{$DOMAIN} {
-    import wildcard_tls
+You do not write Caddy config. `homelab enable` generates a site block for
+every layer (private, `--cf`, `--i2p`, `--tor`, `--ygg`) from the ports the
+service declares:
 
-    reverse_proxy paperless-ngx:8000
-}
+```yaml
+ports:
+  - 8000          # paperless.<HOME_SUBDOMAIN>.<DOMAIN> → paperless:8000
 ```
 
-The hostname `paperless-ngx` matches `container_name` in your compose file. Caddy resolves it via Docker DNS on the `home-services` network.
+The upstream is `<service>:<port>`, resolved by Docker DNS on `home-services`,
+so the service name must resolve: name the compose service (or its
+`container_name`, or a network alias) after the service directory. See the
+port grammar in CLAUDE.md for subdomains and listen ports.
 
-### 4. Edit `caddy.cf.conf` (optional public access)
+### 4. Optional: `caddy.routes.conf`
 
-```caddyfile
-paperless.{$PUB_SUBDOMAIN}.{$DOMAIN} {
-    import wildcard_tls
-
-    reverse_proxy paperless-ngx:8000
-}
-```
-
-This file is used only when exposing services publicly via Cloudflare Tunnel.
+Only when routing is more than one host → one upstream (websocket paths,
+header rewrites, path fan-out): put the *body* of a site block in
+`caddy.routes.conf` — directives only, no site address. `homelab enable`
+wraps it for every layer.
 
 ### 5. Edit `config.yaml`
 
@@ -254,7 +251,7 @@ homelab delete paperless
 
 For a working service:
 
-- [ ] `container_name` in `docker-compose.yml` matches the upstream in `caddy.conf`
+- [ ] The service directory name resolves on `home-services` (service name, `container_name` or alias)
 - [ ] Primary container is on `home-services` network
 - [ ] Databases / workers are on a separate `internal: true` network
 - [ ] `config.yaml` has sensible defaults and clear descriptions
@@ -269,5 +266,5 @@ For contributing to the catalog:
 - [ ] `docker-compose.yml` uses official images from the upstream project
 - [ ] Network isolation follows the `internal: true` pattern
 - [ ] `config.yaml` has required/sensitive fields in `secrets` section
-- [ ] Both `caddy.conf` and `caddy.cf.conf` are present and correct
+- [ ] `config.yaml` declares the ports to route (no `caddy.conf` files — a test rejects them)
 - [ ] README or upstream documentation link included in `config.yaml` description

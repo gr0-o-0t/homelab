@@ -219,7 +219,8 @@ Tailscale and Caddy run as a pair. Caddy uses `network_mode: service:tailscale`,
 ### Service Routing (`assets/caddy/`)
 
 - `caddy/Caddyfile` — global config: ACME settings, Cloudflare DNS-01, wildcard TLS snippet, imports `conf.d/*.conf`
-- `caddy/conf.d/` — per-service site blocks, populated by symlinking from `services/<name>/caddy.conf`
+- `caddy/conf.d*/` — generated per-service site blocks, one dir per layer (`conf.d` private, `conf.d-cf`, `-i2p`, `-tor`, `-ygg`)
+- Catch-all `http://:80` and `http://:8081` sites abort unmatched hosts on the tunnel listeners
 
 `homelab enable <name>` generates Caddy config into `caddy/conf.d/` and reloads Caddy gracefully. `homelab disable` removes it.
 
@@ -255,7 +256,7 @@ declaration is recorded for compose but gets no site block, because nothing in
 this stack proxies datagrams.
 
 From these, `homelab enable` generates the site blocks for every layer. Most
-services need nothing else. Two overrides exist:
+services need nothing else. One override exists:
 
 - `caddy.routes.conf` — the *body* of a site block: directives only, no site
   address and no `import wildcard_tls`. For services whose routing is more than
@@ -264,14 +265,12 @@ services need nothing else. Two overrides exist:
   private, `--cf`, `--i2p`, `--tor` and `--ygg` all get the same route set. Its
   leading comment block is treated as file-level documentation and stripped from
   generated output.
-- `caddy.conf` + `caddy.cf.conf` — hand-written per-layer site blocks, the
-  original scheme. Only for routing the grammar cannot express: `adguardhome`
-  (seven ports under a different subdomain) and `minero` (several upstream
-  containers behind one host). A test enumerates them; anything else shipping
-  one is a regression.
+The original hand-written, symlinked `caddy.conf` / `caddy.cf.conf` scheme is
+gone; a catalog test rejects either file.
 
-Shipping both shapes is a test failure — `caddy.routes.conf` wins at enable
-time, which would leave `caddy.conf` as a second, silently stale copy.
+Layer daemons reload in place: tor and the Caddy config via their reload
+commands, i2pd and the yggdrasil socat forwarders on SIGHUP — enabling a
+service never restarts a router or drops mesh peerings.
 
 ### Config Schema — Groups
 
@@ -308,7 +307,7 @@ homelab down --group media            # stop all media services
 | `internal/service` | `Discover()` filesystem scan; `DiscoverWithDocker()` enriches with SDK data |
 | `internal/docker` | Docker SDK client — read-only (ContainerList, ContainerInspect) |
 | `internal/run` | `Commander` — shells out to `docker compose`; injects env via `cmd.Env` |
-| `internal/caddy` | Symlink management + Caddy validate/reload via docker exec |
+| `internal/caddy` | Caddy validate/reload via docker exec, snapshot/rollback of the conf.d dirs, per-service regeneration |
 | `internal/scaffold` | `//go:embed templates/*`; `Render()` + `Write()` for new-service boilerplate |
 | `internal/tui/dashboard` | Bubble Tea fullscreen service browser |
 | `internal/tui/logs` | Bubble Tea streaming log viewer |
@@ -322,6 +321,8 @@ homelab down --group media            # stop all media services
 - **Docker SDK for status, shell-out for lifecycle**: SDK used only for read-only inspection (ContainerList, ContainerInspect). `docker compose` CLI is shelled out for lifecycle ops to preserve Compose's reconciliation logic.
 - **No secrets on disk**: Commander injects via `cmd.Env` — no temp `.env` files.
 - **TTY detection**: `isatty.IsTerminal(os.Stdout.Fd()) && !noColor()` — TUI when interactive, plain table when piped/CI.
+- **Tests never reach the real Docker daemon**: every test package that can shell out to docker has a `TestMain` pointing `DOCKER_HOST` at a nonexistent socket. Compose names the core project after its directory ("core"), so a test running a core command against a temp config dir would otherwise recreate the live containers. New test packages that touch docker need the same guard.
+- **Core files are refreshed, user files are not**: `homelab update` (no service) re-installs the embedded core files before pulling and rebuilding, but only those homelab owns (`core/`, the Caddyfile, READMEs); `i2p/tunnels.conf`, `torrc`, `i2pd.conf` and `yggdrasil.conf` are created once and then left alone.
 - **Front ends run the CLI**: the TUI dashboard and the GUI never reimplement an action — each button/key execs this binary (`selfCLI`) with the matching command, so they cannot drift from the CLI.
 - **Spinner + captured output**: Caddy reload output is captured in a `bytes.Buffer` Commander while the spinner runs; buffer is printed only on error.
 

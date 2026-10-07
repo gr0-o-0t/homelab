@@ -310,7 +310,7 @@ homelab/
 │   └── service_add_test.go   # add command tests
 │
 ├── internal/                 # Go packages
-│   ├── caddy/                # symlink management + Caddy reload
+│   ├── caddy/                # Caddy reload + config rollback
 │   ├── config/               # XDG config dir, YAML schema, BuildEnv
 │   ├── docker/               # Docker SDK client (read-only status)
 │   ├── run/                  # Commander — shells out to docker compose
@@ -346,9 +346,7 @@ All runtime state lives under `${XDG_CONFIG_HOME:-$HOME/.config}/homelab/`:
 └── services/            # populated by homelab add
     └── uptime-kuma/
         ├── docker-compose.yml
-        ├── caddy.conf
-        ├── caddy.cf.conf
-        └── config.yaml  # vars + secrets schema
+        └── config.yaml  # vars, secrets, ports (routes are generated)
 ```
 
 Secrets (API tokens, passwords) are **never** written to disk — they are stored in
@@ -502,7 +500,7 @@ Contributions are welcome! The project is in active development, and services in
 
 See [docs/adding-a-service.md](docs/adding-a-service.md) for step-by-step instructions. The key requirements:
 
-- Create `assets/services/<name>/` with `docker-compose.yml`, `caddy.conf`, `caddy.cf.conf`, and `config.yaml`
+- Create `assets/services/<name>/` with `docker-compose.yml` and `config.yaml` (declare `ports:`; Caddy config is generated)
 - Follow the network pattern: main container on `home-services`, databases/workers on `internal: true` network
 - Use sensible defaults in `config.yaml` with `vars` (non-secrets) and `secrets` (keyring-stored) sections
 - Test the service end-to-end before submitting
