@@ -9,6 +9,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 // executor abstracts command execution so tests can inject fakes.
 type executor interface {
 	Run(name string, args ...string) error
+	RunFrom(r io.Reader, name string, args ...string) error
 	Output(name string, args ...string) ([]byte, error)
 }
 
@@ -183,7 +185,12 @@ func (p *Provisioner) containerName(dbType config.DBType) string {
 func (p *Provisioner) ensurePassword(svcName string) (string, error) {
 	key := config.DBPasswordKey(svcName)
 	if p.SM != nil {
-		existing, _ := p.SM.Get("", key)
+		// A read error is not "no password yet": minting a fresh one here would
+		// ALTER the live role to a password the running service does not have.
+		existing, err := p.SM.Get("", key)
+		if err != nil {
+			return "", fmt.Errorf("reading existing password from keyring: %w", err)
+		}
 		if existing != "" {
 			return existing, nil
 		}
@@ -197,14 +204,17 @@ func (p *Provisioner) ensurePassword(svcName string) (string, error) {
 	return pass, nil
 }
 
+// execSQL runs sql as user, feeding it over stdin rather than argv: statements
+// here carry passwords, and a process's argv is readable by anyone on the host
+// via ps or /proc.
 func (p *Provisioner) execSQL(container, user, sql string) error {
 	var args []string
 	if strings.Contains(container, "postgres") {
-		args = []string{"exec", "-i", container, "psql", "-U", user, "-c", sql}
+		args = []string{"exec", "-i", container, "psql", "-U", user, "-v", "ON_ERROR_STOP=1", "-f", "-"}
 	} else {
-		args = []string{"exec", "-i", container, "mysql", "-u", "root", "-e", sql}
+		args = []string{"exec", "-i", container, "mysql", "-u", "root"}
 	}
-	return p.RC.Run("docker", args...)
+	return p.RC.RunFrom(strings.NewReader(sql), "docker", args...)
 }
 
 // execPSQL runs a psql command with database context and returns output.
@@ -230,15 +240,19 @@ func (p *Provisioner) provisionPostgres(ctx context.Context, svcName string, dec
 	// is a plain syntax error (see the CREATE ROLE grammar), so the role has to
 	// be looked up first. ALTER on the existing-role path also re-syncs the
 	// password with the keyring, making a repeated `homelab setup` idempotent.
-	out, _ := p.execPSQL(container, "postgres", "postgres",
+	// A failed probe must not be read as "absent": the CREATE that follows would
+	// fail, and postgres logs the failing statement, password included.
+	out, err := p.execPSQL(container, "postgres", "postgres",
 		"-c", fmt.Sprintf("SELECT 1 FROM pg_roles WHERE rolname=%s", escLit(decl.User)))
+	if err != nil {
+		return fmt.Errorf("checking for user %s: %w", decl.User, err)
+	}
 	verb := "CREATE"
 	if strings.TrimSpace(string(out)) != "" {
 		verb = "ALTER"
 	}
-	if err := p.RC.Run("docker", "exec", container, "psql", "-U", "postgres",
-		"-c", fmt.Sprintf("%s USER %s WITH LOGIN PASSWORD %s",
-			verb, escID(decl.User), escLit(password))); err != nil {
+	if err := p.execSQL(container, "postgres", fmt.Sprintf("%s USER %s WITH LOGIN PASSWORD %s;",
+		verb, escID(decl.User), escLit(password))); err != nil {
 		return fmt.Errorf("creating user %s: %w", decl.User, err)
 	}
 
@@ -253,8 +267,11 @@ func (p *Provisioner) provisionPostgres(ctx context.Context, svcName string, dec
 	}
 
 	// 3. Create the database owned by that role, or transfer an existing one.
-	out, _ = p.execPSQL(container, "postgres", "postgres",
+	out, err = p.execPSQL(container, "postgres", "postgres",
 		"-c", fmt.Sprintf("SELECT 1 FROM pg_database WHERE datname=%s", escLit(decl.Database)))
+	if err != nil {
+		return fmt.Errorf("checking for database %s: %w", decl.Database, err)
+	}
 	if strings.TrimSpace(string(out)) == "" {
 		if err := p.RC.Run("docker", "exec", container, "psql", "-U", "postgres",
 			"-c", fmt.Sprintf("CREATE DATABASE %s OWNER %s",
@@ -305,18 +322,23 @@ const mariaAnyHost = "%"
 
 func (p *Provisioner) provisionMariaDB(ctx context.Context, svcName string, decl config.ServiceDBDecl, password string) error {
 	container := p.containerName(config.DBMariaDB)
-	sql := fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s`; "+
-		"CREATE USER IF NOT EXISTS '%s'@'%s' IDENTIFIED BY '%s'; "+
-		"GRANT ALL PRIVILEGES ON `%s`.* TO '%s'@'%s'; "+
+	db := escMariaID(decl.Database)
+	account := escMariaLit(decl.User) + "@" + escMariaLit(mariaAnyHost)
+	pw := escMariaLit(password)
+	// CREATE … IF NOT EXISTS leaves an existing account's password alone, so the
+	// ALTER is what re-syncs it with the keyring on a repeated `homelab setup`.
+	sql := fmt.Sprintf("CREATE DATABASE IF NOT EXISTS %s; "+
+		"CREATE USER IF NOT EXISTS %s IDENTIFIED BY %s; "+
+		"ALTER USER %s IDENTIFIED BY %s; "+
+		"GRANT ALL PRIVILEGES ON %s.* TO %s; "+
 		"FLUSH PRIVILEGES;",
-		decl.Database, decl.User, mariaAnyHost, password,
-		decl.Database, decl.User, mariaAnyHost)
+		db, account, pw, account, pw, db, account)
 	return p.execSQL(container, "root", sql)
 }
 
 func (p *Provisioner) deprovisionMariaDB(ctx context.Context, decl config.ServiceDBDecl) error {
 	container := p.containerName(config.DBMariaDB)
-	sql := fmt.Sprintf(`DROP USER IF EXISTS '%s'@'%s';`, decl.User, mariaAnyHost)
+	sql := fmt.Sprintf("DROP USER IF EXISTS %s@%s;", escMariaLit(decl.User), escMariaLit(mariaAnyHost))
 	return p.execSQL(container, "root", sql)
 }
 
@@ -332,4 +354,18 @@ func escLit(s string) string {
 // escID wraps an identifier in double quotes, doubling any internal quotes.
 func escID(id string) string {
 	return `"` + strings.ReplaceAll(id, `"`, `""`) + `"`
+}
+
+// escMariaID wraps a MariaDB identifier in backticks, doubling any embedded
+// backtick.
+func escMariaID(id string) string {
+	return "`" + strings.ReplaceAll(id, "`", "``") + "`"
+}
+
+// escMariaLit renders a MariaDB single-quoted string literal. Unlike escLit it
+// also escapes backslashes, which MariaDB treats as an escape character inside
+// string literals unless NO_BACKSLASH_ESCAPES is set.
+func escMariaLit(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	return `'` + strings.ReplaceAll(s, `'`, `''`) + `'`
 }

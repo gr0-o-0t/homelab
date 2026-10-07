@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -13,9 +14,14 @@ import (
 // ── fakeCommander ─────────────────────────────────────────────────────────────
 
 type fakeCall struct {
-	Name string
-	Args []string
+	Name  string
+	Args  []string
+	Stdin string // what RunFrom fed the command, if anything
 }
+
+// line renders the call's argv plus its stdin, so assertions about the SQL
+// issued hold whichever channel carried it.
+func (c fakeCall) line() string { return strings.Join(c.Args, " ") + " " + c.Stdin }
 
 type fakeCommander struct {
 	runCalls    []fakeCall
@@ -26,6 +32,12 @@ type fakeCommander struct {
 
 func (f *fakeCommander) Run(name string, args ...string) error {
 	f.runCalls = append(f.runCalls, fakeCall{Name: name, Args: args})
+	return nil
+}
+
+func (f *fakeCommander) RunFrom(r io.Reader, name string, args ...string) error {
+	in, _ := io.ReadAll(r)
+	f.runCalls = append(f.runCalls, fakeCall{Name: name, Args: args, Stdin: string(in)})
 	return nil
 }
 
@@ -44,10 +56,11 @@ func (f *fakeCommander) Output(name string, args ...string) ([]byte, error) {
 // ── fakeSM ────────────────────────────────────────────────────────────────────
 
 type fakeSM struct {
-	store map[string]string
+	store  map[string]string
+	getErr error
 }
 
-func (f *fakeSM) Get(_, key string) (string, error) { return f.store[key], nil }
+func (f *fakeSM) Get(_, key string) (string, error) { return f.store[key], f.getErr }
 func (f *fakeSM) Set(_, key, val string) error      { f.store[key] = val; return nil }
 func (f *fakeSM) IsSet(_, key string) bool          { _, ok := f.store[key]; return ok }
 func (f *fakeSM) Delete(_, key string) error        { delete(f.store, key); return nil }
@@ -166,6 +179,19 @@ func TestEnsurePassword(t *testing.T) {
 		}
 	})
 
+	// A keyring read failure is not "no password yet": minting a new one would
+	// rotate the live role's password out from under the running service.
+	t.Run("keyring read error fails instead of rotating", func(t *testing.T) {
+		sm := &fakeSM{store: make(map[string]string), getErr: errFake("dbus: no session")}
+		p := New("/tmp", sm)
+		if _, err := p.ensurePassword("mysvc"); err == nil {
+			t.Fatal("expected an error when the keyring cannot be read")
+		}
+		if len(sm.store) != 0 {
+			t.Error("no new password should be stored after a read failure")
+		}
+	})
+
 	t.Run("nil SM returns password without storing", func(t *testing.T) {
 		p := New("/tmp", nil)
 		pw, err := p.ensurePassword("mysvc")
@@ -264,7 +290,7 @@ func TestProvision(t *testing.T) {
 		// pg_database_owner and is not world-writable.
 		var hasCreateDB, hasCreateUser, hasSchemaOwner, hasExtension bool
 		for _, call := range fc.runCalls {
-			line := call.Name + " " + strings.Join(call.Args, " ")
+			line := call.Name + " " + call.line()
 			if strings.Contains(line, `CREATE DATABASE "testdb" OWNER "testuser"`) {
 				hasCreateDB = true
 			}
@@ -302,7 +328,7 @@ func TestProvision(t *testing.T) {
 
 		userIdx, dbIdx := -1, -1
 		for i, call := range fc.runCalls {
-			line := strings.Join(call.Args, " ")
+			line := call.line()
 			if userIdx < 0 && strings.Contains(line, "CREATE USER") {
 				userIdx = i
 			}
@@ -333,7 +359,7 @@ func TestProvision(t *testing.T) {
 
 		var altered bool
 		for _, call := range fc.runCalls {
-			if strings.Contains(strings.Join(call.Args, " "), `ALTER DATABASE "testdb" OWNER TO "testuser"`) {
+			if strings.Contains(call.line(), `ALTER DATABASE "testdb" OWNER TO "testuser"`) {
 				altered = true
 			}
 		}
@@ -353,7 +379,7 @@ func TestProvision(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, call := range fc.runCalls {
-			line := strings.Join(call.Args, " ")
+			line := call.line()
 			if strings.Contains(line, "CREATE USER") && strings.Contains(line, "IF NOT EXISTS") {
 				t.Errorf("invalid PostgreSQL syntax: %s", line)
 			}
@@ -374,7 +400,7 @@ func TestProvision(t *testing.T) {
 
 		var altered, created bool
 		for _, call := range fc.runCalls {
-			line := strings.Join(call.Args, " ")
+			line := call.line()
 			if strings.Contains(line, `ALTER USER "testuser" WITH LOGIN PASSWORD`) {
 				altered = true
 			}
@@ -409,7 +435,7 @@ func TestProvision(t *testing.T) {
 		joined := func(f *fakeCommander) string {
 			var all string
 			for _, c := range f.runCalls {
-				all += strings.Join(c.Args, " ") + "\n"
+				all += c.line() + "\n"
 			}
 			return all
 		}
@@ -447,7 +473,7 @@ func TestProvision(t *testing.T) {
 
 				var got bool
 				for _, call := range fc.runCalls {
-					if strings.Contains(strings.Join(call.Args, " "), wantSQL) {
+					if strings.Contains(call.line(), wantSQL) {
 						got = true
 					}
 				}
@@ -472,7 +498,7 @@ func TestProvision(t *testing.T) {
 		}
 
 		for _, call := range fc.runCalls {
-			line := call.Name + " " + strings.Join(call.Args, " ")
+			line := call.Name + " " + call.line()
 			if strings.Contains(line, "CREATE DATABASE") {
 				t.Errorf("CREATE DATABASE should not be called for existing DB, got: %s", line)
 			}
@@ -490,13 +516,76 @@ func TestProvision(t *testing.T) {
 
 		found := false
 		for _, call := range fc.runCalls {
-			line := call.Name + " " + strings.Join(call.Args, " ")
+			line := call.Name + " " + call.line()
 			if strings.Contains(line, "CREATE DATABASE") && strings.Contains(line, "testdb") {
 				found = true
 			}
 		}
 		if !found {
 			t.Error("missing CREATE DATABASE for mariadb")
+		}
+	})
+
+	// argv is world-readable via ps; any statement carrying the password must
+	// travel over stdin.
+	t.Run("password never appears on argv", func(t *testing.T) {
+		for _, dbType := range []config.DBType{config.DBPostgres, config.DBMariaDB} {
+			fc := &fakeCommander{}
+			sm := &fakeSM{store: map[string]string{config.DBPasswordKey("mysvc"): "s3cretPW"}}
+			p := &Provisioner{RC: fc, SM: sm}
+			if err := p.Provision(ctx, dbType, "mysvc", decl); err != nil {
+				t.Fatal(err)
+			}
+			var sent bool
+			for _, call := range fc.runCalls {
+				if strings.Contains(strings.Join(call.Args, " "), "s3cretPW") {
+					t.Errorf("%s: password on argv: %v", dbType, call.Args)
+				}
+				sent = sent || strings.Contains(call.Stdin, "s3cretPW")
+			}
+			if !sent {
+				t.Errorf("%s: password was never sent over stdin", dbType)
+			}
+		}
+	})
+
+	t.Run("postgres probe failure aborts before CREATE", func(t *testing.T) {
+		for _, probe := range []string{
+			"docker exec homelab-postgres psql -U postgres -d postgres -t -A -c SELECT 1 FROM pg_roles WHERE rolname='testuser'",
+			"docker exec homelab-postgres psql -U postgres -d postgres -t -A -c SELECT 1 FROM pg_database WHERE datname='testdb'",
+		} {
+			fc := &fakeCommander{outputErr: map[string]error{probe: errFake("connection refused")}}
+			p := &Provisioner{RC: fc, SM: &fakeSM{store: make(map[string]string)}}
+			if err := p.Provision(ctx, config.DBPostgres, "mysvc", decl); err == nil {
+				t.Fatalf("expected error when probe fails: %s", probe)
+			}
+			for _, call := range fc.runCalls {
+				if l := call.line(); strings.Contains(l, "CREATE USER") && strings.Contains(probe, "pg_roles") ||
+					strings.Contains(l, "CREATE DATABASE") {
+					t.Errorf("CREATE issued after failed probe: %s", l)
+				}
+			}
+		}
+	})
+
+	// CREATE USER IF NOT EXISTS keeps an existing account's old password, so
+	// the ALTER is what makes `homelab setup` re-sync it; names must be escaped.
+	t.Run("mariadb re-syncs password and escapes names", func(t *testing.T) {
+		fc := &fakeCommander{}
+		p := &Provisioner{RC: fc, SM: &fakeSM{store: map[string]string{config.DBPasswordKey("mysvc"): "pw"}}}
+		evil := config.ServiceDBDecl{Database: "a`b", User: `o'k\`}
+		if err := p.Provision(ctx, config.DBMariaDB, "mysvc", evil); err != nil {
+			t.Fatal(err)
+		}
+		sql := fc.runCalls[0].Stdin
+		for _, want := range []string{
+			"CREATE DATABASE IF NOT EXISTS `a``b`;",
+			`ALTER USER 'o''k\\'@'%' IDENTIFIED BY 'pw';`,
+			"GRANT ALL PRIVILEGES ON `a``b`.* TO 'o''k\\\\'@'%';",
+		} {
+			if !strings.Contains(sql, want) {
+				t.Errorf("SQL missing %q:\n%s", want, sql)
+			}
 		}
 	})
 
@@ -596,7 +685,7 @@ func TestDeprovision(t *testing.T) {
 		}
 		found := false
 		for _, call := range fc.runCalls {
-			line := call.Name + " " + strings.Join(call.Args, " ")
+			line := call.Name + " " + call.line()
 			if strings.Contains(line, "DROP USER") && strings.Contains(line, "testuser") {
 				found = true
 			}
@@ -614,7 +703,7 @@ func TestDeprovision(t *testing.T) {
 		}
 		found := false
 		for _, call := range fc.runCalls {
-			line := call.Name + " " + strings.Join(call.Args, " ")
+			line := call.Name + " " + call.line()
 			if strings.Contains(line, "DROP USER") && strings.Contains(line, "testuser") {
 				found = true
 			}

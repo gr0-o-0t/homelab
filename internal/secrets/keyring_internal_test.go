@@ -31,3 +31,17 @@ func TestOpenBackends_AllUnavailable(t *testing.T) {
 	_, err := openBackends(nil, "", "")
 	assert.Error(t, err)
 }
+
+// A SecretService → other-backend fallback used to be silent; Open must name
+// the backend it settled on.
+func TestFallbackWarning(t *testing.T) {
+	assert.Empty(t, (&Manager{Backend: keyring.SecretServiceBackend}).fallbackWarning())
+
+	w := (&Manager{Backend: keyring.PassBackend,
+		skipped: []keyring.BackendType{keyring.SecretServiceBackend}}).fallbackWarning()
+	assert.Contains(t, w, "secret-service")
+	assert.Contains(t, w, "using pass backend")
+	assert.NotContains(t, w, "\n")
+
+	assert.Contains(t, (&Manager{Backend: keyring.FileBackend}).fallbackWarning(), "using file backend")
+}

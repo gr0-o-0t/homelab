@@ -39,6 +39,10 @@ func IsSecret(name string) bool {
 type Manager struct {
 	ring    keyring.Keyring
 	Backend keyring.BackendType // which backend actually got selected
+
+	// skipped lists platform-supported backends that were tried and failed
+	// before Backend won, i.e. what Open silently fell back past.
+	skipped []keyring.BackendType
 }
 
 // NewForTest wraps an arbitrary keyring.Keyring implementation (e.g. a fake
@@ -79,19 +83,35 @@ func Open() (*Manager, error) {
 	if err != nil {
 		return nil, err
 	}
-	if m.Backend == keyring.FileBackend {
-		fmt.Fprintln(os.Stderr, "warning: no OS keyring available — secrets are stored in an encrypted file "+
-			"(~/.config/homelab/secrets) whose passphrase is derived from /etc/machine-id, which is "+
-			"world-readable by design. This is weaker than a real OS keyring.")
+	if w := m.fallbackWarning(); w != "" {
+		fmt.Fprintln(os.Stderr, w)
 	}
 	return m, nil
+}
+
+// fallbackWarning returns the one-line notice Open prints when it settled for
+// a backend other than the platform's preferred one, or "" when it did not.
+func (m *Manager) fallbackWarning() string {
+	if m.Backend == keyring.FileBackend {
+		return fmt.Sprintf("warning: keyring: no OS keyring available, using %s backend "+
+			"(~/.config/homelab/secrets, passphrase derived from world-readable /etc/machine-id)", m.Backend)
+	}
+	if len(m.skipped) > 0 {
+		return fmt.Sprintf("warning: keyring: %v unavailable, using %s backend", m.skipped, m.Backend)
+	}
+	return ""
 }
 
 // openBackends tries each backend in order, one at a time, and keeps the
 // first that succeeds — functionally identical to passing the whole list to
 // a single keyring.Open call, but lets the caller see which one won.
 func openBackends(backends []keyring.BackendType, fileDir, pass string) (*Manager, error) {
+	supported := make(map[keyring.BackendType]bool)
+	for _, b := range keyring.AvailableBackends() {
+		supported[b] = true
+	}
 	var lastErr error
+	var skipped []keyring.BackendType
 	for _, b := range backends {
 		ring, err := keyring.Open(keyring.Config{
 			ServiceName:      "homelab",
@@ -101,9 +121,14 @@ func openBackends(backends []keyring.BackendType, fileDir, pass string) (*Manage
 		})
 		if err != nil {
 			lastErr = err
+			// Backends not built for this platform (Keychain on Linux) are not
+			// a fallback worth reporting; a supported one failing is.
+			if supported[b] {
+				skipped = append(skipped, b)
+			}
 			continue
 		}
-		return &Manager{ring: ring, Backend: b}, nil
+		return &Manager{ring: ring, Backend: b, skipped: skipped}, nil
 	}
 	return nil, fmt.Errorf("open keyring: no backend available: %w", lastErr)
 }
