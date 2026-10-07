@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -455,27 +456,27 @@ func sectionRange(lines []string, name string) (int, int, bool) {
 	return start, end, true
 }
 
-// Reload restarts i2pd so it picks up tunnels.conf.
+// Reload makes a running i2pd pick up tunnels.conf by sending it SIGHUP.
 //
-// Not SIGHUP, despite i2pd documenting "HUP — reload tunnels configuration
-// files": the container reads $DATA_DIR/tunnels.conf, which docker-entrypoint.i2p.sh
-// copies from the read-only /config-host mount *once at startup*. A HUP would
-// faithfully re-read that stale copy and report success, which is how tunnel
-// changes silently did nothing before. (Upstream HUP handling is also flaky —
-// PurpleI2P/i2pd#1532, #1294.)
-//
-// ponytail: a restart costs the router a few minutes of netdb reintegration.
-// If that becomes annoying, point `tunconf` at the live /config-host file in
-// i2pd.conf and go back to SIGHUP.
+// This works because docker-entrypoint.i2p.sh starts i2pd with
+// --tunconf=/config-host/tunnels.conf, the live host file. It used to copy the
+// file into $DATA_DIR once at startup, so a HUP re-read a stale copy and
+// Reload had to restart the container instead — rebuilding every eepsite's
+// tunnels on every enable/disable.
 func (l *Layer) Reload() error {
 	if l.reloadHook != nil {
 		return l.reloadHook()
 	}
-	return l.runner.DockerComposeEnv(
-		run.CoreComposeFile(l.repoRoot),
-		l.env(),
-		"--profile", "i2p", "restart", containerName,
-	)
+	// A stopped router has nothing to reload; it reads tunnels.conf on start.
+	if l.runner.ContainerStatus(containerName) != "running" {
+		return nil
+	}
+	// SIGHUP, not a restart: i2pd reads tunnels.conf in place (see
+	// docker-entrypoint.i2p.sh) and on HUP adds new tunnels and drops removed
+	// ones, leaving the rest alone. A restart rebuilt every eepsite's tunnels
+	// and left all of them unreachable for minutes.
+	// RunTo(io.Discard): docker kill echoes the container name on stdout.
+	return l.runner.RunTo(io.Discard, "docker", "kill", "-s", "HUP", containerName)
 }
 
 func (l *Layer) env() map[string]string {

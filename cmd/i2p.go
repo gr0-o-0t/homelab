@@ -5,6 +5,7 @@ import (
 	"os"
 	"strconv"
 
+	"github.com/groot/homelab/internal/configgen"
 	"github.com/groot/homelab/internal/network/i2p"
 	"github.com/groot/homelab/internal/tui/styles"
 	"github.com/spf13/cobra"
@@ -18,7 +19,7 @@ var i2pCmd = &cobra.Command{
 	Long: `Inspect i2pd and manage eepsite tunnels via tunnels.conf.
 
 Tunnels are defined in tunnels.conf as INI sections. After adding
-or removing a tunnel, i2pd is restarted to pick up the change.
+or removing a tunnel, i2pd is sent SIGHUP to reload tunnels.conf in place.
 
   homelab i2p enable  <service>   add HTTP eepsite tunnel
   homelab i2p disable <service>   remove eepsite tunnel
@@ -76,7 +77,7 @@ var i2pEnablePort string
 var i2pEnableCmd = &cobra.Command{
 	Use:   "enable <service>",
 	Short: "Create an eepsite HTTP tunnel for a service",
-	Long: `Add an HTTP eepsite tunnel to tunnels.conf and restart i2pd.
+	Long: `Add an HTTP eepsite tunnel to tunnels.conf and reload i2pd.
 
 Traffic flows to Caddy (via tailscale:80, Caddy's shared network
 namespace) with hostoverride, so Caddy routes by Host header. Use
@@ -116,10 +117,10 @@ homelab enable <service> --i2p instead for the full flow
 
 		if containerStatus(i2pContainer) == containerStateRunning {
 			if err := l.Reload(); err != nil {
-				fmt.Printf("  %s  Warning: reload failed (%v) — restart i2pd manually\n",
+				fmt.Printf("  %s  Warning: reload failed (%v) — run: docker kill -s HUP i2p\n",
 					styles.Warning.Render("!"), err)
 			} else {
-				fmt.Printf("  %s  i2pd restarted\n", styles.Success.Render("✓"))
+				fmt.Printf("  %s  i2pd reloaded\n", styles.Success.Render("✓"))
 			}
 		}
 
@@ -152,9 +153,18 @@ var i2pDisableCmd = &cobra.Command{
 		if err := l.RemoveTunnel(name); err != nil {
 			return err
 		}
+		// The Caddy half too, as `homelab disable --i2p` does: a block left in
+		// caddy/conf.d-i2p keeps `homelab status` reporting the eepsite as
+		// exposed after its tunnel is gone.
+		if err := configgen.RemoveAllPortFiles(configDir(), "i2p", name); err != nil {
+			return err
+		}
 
 		fmt.Printf("\n  %s  Tunnel %q removed from tunnels.conf\n",
 			styles.Warning.Render("→"), styles.Bold.Render(name+".i2p"))
+		if err := caddyReload(); err != nil {
+			fmt.Printf("  %s  Caddy reload: %v\n", styles.Warning.Render("!"), err)
+		}
 
 		if containerStatus(i2pContainer) == containerStateRunning {
 			if err := l.Reload(); err != nil {

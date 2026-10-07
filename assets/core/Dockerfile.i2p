@@ -1,11 +1,7 @@
-# Wrapper image for purplei2p/i2pd that ensures the data volume
-# is writable by the i2pd user (UID 166) and copies host-mounted
-# configs from /config-host/ at startup.
-#
-# The stock image stores config under $DATA_DIR (/home/i2pd/data)
-# and runs as UID 166. Since Docker bind-mounts preserve host UID
-# ownership, config files mounted from the host are unreadable by
-# the i2pd user unless copied through a wrapper entrypoint.
+# Wrapper image for purplei2p/i2pd: copies i2pd.conf from the host mount at
+# /config-host/ at startup and points i2pd at the live
+# /config-host/tunnels.conf, so tunnel changes reload with SIGHUP instead of a
+# restart. See docker-entrypoint.i2p.sh.
 
 FROM purplei2p/i2pd:latest
 

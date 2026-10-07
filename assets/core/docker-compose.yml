@@ -37,6 +37,14 @@
 # (or run `homelab setup` which does this automatically)
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Every core container logs through docker's json-file driver, which keeps
+# logs forever by default; i2pd alone grew a ~1 GB log. Cap each container.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 networks:
   home-services:
     name: home-services
@@ -45,6 +53,7 @@ networks:
 services:
   # ── Tailscale ──────────────────────────────────────────────────────────────
   tailscale:
+    logging: *default-logging
     image: tailscale/tailscale:latest
     container_name: tailscale
     hostname: ${TS_HOSTNAME:-caddy-home}
@@ -83,6 +92,7 @@ services:
 
   # ── Caddy ──────────────────────────────────────────────────────────────────
   caddy:
+    logging: *default-logging
     build:
       context: .
       dockerfile: Dockerfile.caddy
@@ -130,6 +140,7 @@ services:
   # Activated automatically by `homelab core start` when CF_TUNNEL_TOKEN is
   # set. Forwards *.{DOMAIN} public traffic to Caddy.
   cloudflared:
+    logging: *default-logging
     image: cloudflare/cloudflared:latest
     container_name: cloudflared
     profiles: ["tunnel"]
@@ -150,6 +161,7 @@ services:
   # Each service gets a HiddenServicePort .onion address.
   # Reload config via: docker exec tor sh -c 'kill -HUP $(pidof tor)'
   tor:
+    logging: *default-logging
     image: gnzsnz/torproxy:latest
     container_name: tor
     profiles: ["tor"]
@@ -171,6 +183,7 @@ services:
   # Manage tunnels: homelab i2p enable <service>
   # Web Console: http://127.0.0.1:7070 (published to loopback below)
   i2p:
+    logging: *default-logging
     build:
       context: .
       dockerfile: Dockerfile.i2p
@@ -178,6 +191,9 @@ services:
     profiles: ["i2p"]
     restart: always
     volumes:
+      # The directory, not single files: i2pd reads tunnels.conf from here
+      # live (--tunconf), and `homelab enable --i2p` reloads it with SIGHUP.
+      # A single-file bind would pin the inode and miss rewrites.
       - ../i2p:/config-host:ro
       - i2p-config:/home/i2pd/data
     networks:
@@ -205,6 +221,7 @@ services:
   # Custom image (Dockerfile.ygg) bundles yggdrasil + socat.
   # Each service gets a socat TCP6→TCP4 forwarder for exposure.
   yggdrasil:
+    logging: *default-logging
     build:
       context: .
       dockerfile: Dockerfile.ygg
@@ -217,6 +234,8 @@ services:
       - /dev/net/tun
     volumes:
       - ../yggdrasil/yggdrasil.conf:/etc/yggdrasil.conf:ro
+      # Forwarders are reconciled on SIGHUP (entrypoint.ygg.sh), so service
+      # changes never restart the node and drop its peerings.
       - ../yggdrasil/socat.d:/etc/socat.d:ro
       # Node key — generated on first run. The mesh IPv6 address is derived
       # from it, so losing this volume changes the address of every service.

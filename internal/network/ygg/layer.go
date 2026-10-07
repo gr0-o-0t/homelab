@@ -6,6 +6,7 @@ package ygg
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -20,10 +21,10 @@ const containerName = "yggdrasil"
 
 // Layer implements network.NetworkLayer for Yggdrasil mesh.
 type Layer struct {
-	repoRoot    string
-	runner      *run.Commander
-	envFn       network.EnvFunc
-	restartHook func() error
+	repoRoot   string
+	runner     *run.Commander
+	envFn      network.EnvFunc
+	reloadHook func() error
 
 	// addrCache memoizes the node address; see network.AddressCache.
 	addrCache network.AddressCache
@@ -35,7 +36,7 @@ func New(repoRoot string, runner *run.Commander, envFn network.EnvFunc) *Layer {
 }
 
 func newForTest(repoRoot string, hook func() error) *Layer {
-	return &Layer{repoRoot: repoRoot, runner: run.Default(), restartHook: hook}
+	return &Layer{repoRoot: repoRoot, runner: run.Default(), reloadHook: hook}
 }
 
 var _ network.NetworkLayer = (*Layer)(nil)
@@ -92,15 +93,15 @@ func (l *Layer) Enable(svcName, displayName string, info network.ServiceInfo, po
 			return fmt.Errorf("writing caddy block: %w", err)
 		}
 	}
-	return l.restart()
+	return l.reload()
 }
 
 // Disable removes the socat forwarders and Caddy blocks for the service and
-// restarts yggdrasil.
+// has yggdrasil reconcile its forwarders.
 func (l *Layer) Disable(svcName string) error {
 	_ = l.removeForwarder(svcName)
 	_ = l.removeCaddyBlocks(svcName)
-	return l.restart()
+	return l.reload()
 }
 
 func (l *Layer) CaddyConfigDir(configRoot string) string {
@@ -340,13 +341,20 @@ func removeExact(dir string, names []string, ext string) error {
 	return firstErr
 }
 
-func (l *Layer) restart() error {
-	if l.restartHook != nil {
-		return l.restartHook()
+// reload makes the running node pick up socat.d. SIGHUP, not a restart: the
+// entrypoint reconciles forwarders on HUP (starts new ones, stops removed
+// ones) without touching the yggdrasil daemon. A restart dropped every mesh
+// peering, and peers take minutes to come back.
+func (l *Layer) reload() error {
+	if l.reloadHook != nil {
+		return l.reloadHook()
 	}
-	return l.runner.DockerComposeEnv(
-		run.CoreComposeFile(l.repoRoot), l.env(),
-		"--profile", "yggdrasil", "restart", containerName)
+	// A stopped node has nothing to reload; it reads socat.d on start.
+	if l.runner.ContainerStatus(containerName) != "running" {
+		return nil
+	}
+	// RunTo(io.Discard): docker kill echoes the container name on stdout.
+	return l.runner.RunTo(io.Discard, "docker", "kill", "-s", "HUP", containerName)
 }
 
 func (l *Layer) env() map[string]string {
