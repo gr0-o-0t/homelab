@@ -33,9 +33,9 @@ services:
       timeout: 3s
       retries: 50
     ports:
-      # open this port in the firewall
-      # it is required for monerod to function properly
-      - 18080:18080
+      # P2P port; loopback by default (Docker bypasses ufw). Set P2P_BIND_IP
+      # to a reachable address for incoming peers.
+      - "${P2P_BIND_IP:-127.0.0.1}:18080:18080"
     command: >-
       --rpc-restricted-bind-ip=0.0.0.0
       --rpc-restricted-bind-port 18089
@@ -76,9 +76,9 @@ services:
       monerod:
         condition: service_healthy
     ports:
-      # open this port in the firewall
-      # it is required for p2pool to function properly
-      - 37888:37888
+      # P2P port; loopback by default (Docker bypasses ufw). Set P2P_BIND_IP
+      # to a reachable address for incoming peers.
+      - "${P2P_BIND_IP:-127.0.0.1}:37888:37888"
     command: >-
       --mini
       --loglevel 3

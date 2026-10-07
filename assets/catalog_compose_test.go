@@ -52,12 +52,38 @@ func loadCatalog(t *testing.T) map[string]auditComposeFile {
 // nothing (Caddy fronts everything), so the few that do are worth pinning:
 // today that is the DNS servers, which are genuinely alternatives, plus
 // BitTorrent and Monero peer ports.
+// publishedHostPort splits a compose short-syntax port into its host port and
+// bind address: "53:53/udp" → ("53", ""), "${DNS_BIND_IP:-127.0.0.1}:53:53" →
+// ("53", "${DNS_BIND_IP:-127.0.0.1}"). A bare "8080" publishes nothing.
+func publishedHostPort(p string) (port, bind string, ok bool) {
+	p, _, _ = strings.Cut(p, "/")
+	f := strings.Split(p, ":")
+	if len(f) < 2 {
+		return "", "", false
+	}
+	return f[len(f)-2], strings.Join(f[:len(f)-2], ":"), true
+}
+
+// TestCatalogServices_HostPublishesAreBound guards the tailnet-only promise:
+// a publish with no bind address listens on every host interface, and
+// Docker's iptables rules put it in front of ufw.
+func TestCatalogServices_HostPublishesAreBound(t *testing.T) {
+	for svc, cf := range loadCatalog(t) {
+		for _, s := range cf.Services {
+			for _, p := range s.Ports {
+				if _, bind, ok := publishedHostPort(p); ok && bind == "" {
+					t.Errorf("%s publishes %q on all interfaces; bind it, e.g. \"${X_BIND_IP:-127.0.0.1}:…\"", svc, p)
+				}
+			}
+		}
+	}
+}
+
 func TestCatalogServices_HostPortConflictsAreKnown(t *testing.T) {
 	// Services that deliberately contend for the same host port because they are
 	// alternatives to each other, not meant to run together.
 	knownAlternatives := map[string][]string{
 		"53":   {"adguardhome", "pihole", "technitium"},
-		"443":  {"adguardhome"},
 		"853":  {"adguardhome"},
 		"784":  {"adguardhome"},
 		"8853": {"adguardhome"},
@@ -68,9 +94,8 @@ func TestCatalogServices_HostPortConflictsAreKnown(t *testing.T) {
 	for svc, cf := range loadCatalog(t) {
 		for _, s := range cf.Services {
 			for _, p := range s.Ports {
-				// "53:53/udp" → host port "53"; skip bare "8080" (no host bind).
-				hostPort, _, found := strings.Cut(p, ":")
-				if !found {
+				hostPort, _, ok := publishedHostPort(p)
+				if !ok {
 					continue
 				}
 				if owners[hostPort] == nil {

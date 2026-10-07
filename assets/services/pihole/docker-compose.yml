@@ -2,8 +2,9 @@
 # Service: Pi-hole (network-wide ad blocking DNS server)
 # https://github.com/pi-hole/docker-pi-hole
 # ─────────────────────────────────────────────────────────────────────────────
-# NOTE: DNS port 53 (TCP+UDP) should be exposed at host level if using as DNS.
-# Uncomment the ports section below to enable DNS functionality.
+# NOTE: DNS (53) and DHCP (67/udp) are published on DNS_BIND_IP / DHCP_BIND_IP,
+# loopback by default — Docker's iptables rules bypass ufw, so 0.0.0.0 would
+# expose the resolver off-tailnet. Set them in config.yaml.
 
 networks:
   home-services:
@@ -26,9 +27,9 @@ services:
     networks:
       - home-services
     ports:
-      - "53:53/tcp"
-      - "53:53/udp"
-      - "67:67/udp"
+      - "${DNS_BIND_IP:-127.0.0.1}:53:53/tcp"
+      - "${DNS_BIND_IP:-127.0.0.1}:53:53/udp"
+      - "${DHCP_BIND_IP:-127.0.0.1}:67:67/udp"
     healthcheck:
       test:
         [

@@ -4,6 +4,8 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # A DNS server needs host port 53 to answer queries, so it is bound below rather
 # than left commented out — the web UI alone is not the point of this service.
+# It binds to DNS_BIND_IP (loopback by default): Docker's iptables rules bypass
+# ufw, so a 0.0.0.0 publish would expose the resolver off-tailnet.
 #
 # That makes technitium mutually exclusive with adguardhome and pihole: whichever
 # starts second fails with "port is already allocated". Pick one resolver. The
@@ -28,8 +30,8 @@ services:
     networks:
       - home-services
     ports:
-      - "53:53/tcp"
-      - "53:53/udp"
+      - "${DNS_BIND_IP:-127.0.0.1}:53:53/tcp"
+      - "${DNS_BIND_IP:-127.0.0.1}:53:53/udp"
     healthcheck:
       test:
         [

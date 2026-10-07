@@ -11,6 +11,10 @@ vars:
   DOWNLOADS_PATH:
     value: "/mnt/downloads"
     required: false
+  TORRENT_BIND_IP:
+    value: "127.0.0.1"
+    required: false
+    description: "Host IP to publish the BitTorrent peer port (6881) on. Loopback disables incoming peers; set to the host's LAN IP (with a router forward) to accept them"
 
 secrets: {}
 ports:

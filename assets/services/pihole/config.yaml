@@ -2,6 +2,14 @@ vars:
   TZ:
     value: "UTC"
     required: false
+  DNS_BIND_IP:
+    value: "127.0.0.1"
+    required: false
+    description: "Host IP to publish DNS on. Loopback by default; set to the host's Tailscale or LAN IP so clients can query it (never 0.0.0.0 — Docker bypasses ufw)"
+  DHCP_BIND_IP:
+    value: "127.0.0.1"
+    required: false
+    description: "Host IP to publish DHCP (67/udp) on. DHCP is broadcast-based and does not work through a bridge-network publish; to actually serve DHCP use host networking on the LAN interface. Loopback by default (effectively disabled)"
 
 secrets:
   WEB_PASSWORD:

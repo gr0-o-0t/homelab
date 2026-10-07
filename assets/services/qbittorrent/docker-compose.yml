@@ -27,8 +27,10 @@ services:
     networks:
       - home-services
     ports:
-      - "6881:6881"
-      - "6881:6881/udp"
+      # BitTorrent peer port. Loopback by default (Docker bypasses ufw); set
+      # TORRENT_BIND_IP to accept incoming peers.
+      - "${TORRENT_BIND_IP:-127.0.0.1}:6881:6881"
+      - "${TORRENT_BIND_IP:-127.0.0.1}:6881:6881/udp"
     healthcheck:
       test:
         [

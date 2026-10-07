@@ -1,4 +1,8 @@
-vars: {}
+vars:
+  DNS_BIND_IP:
+    value: "127.0.0.1"
+    required: false
+    description: "Host IP to publish DNS on. Loopback by default; set to the host's Tailscale or LAN IP so clients can query it (never 0.0.0.0 — Docker bypasses ufw)"
 secrets: {}
 ports:
   - 5380

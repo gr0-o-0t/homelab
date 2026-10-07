@@ -8,5 +8,9 @@ vars:
   P2POOL_HOST:
     value: "p2pool"
     required: false
+  P2P_BIND_IP:
+    value: "127.0.0.1"
+    required: false
+    description: "Host IP to publish the monerod (18080) and p2pool (37888) P2P ports on. Loopback disables incoming peers; set to the host's LAN IP (with a router forward) to accept them"
 ports:
   - 18080

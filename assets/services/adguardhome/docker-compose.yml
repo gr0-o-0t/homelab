@@ -41,30 +41,27 @@ services:
     networks:
       - home-services
       # - host # uncomment if you want adguardhome to act as your dhcp server
-    # we need to expose ports if we want use adguardhome for host
+    # Non-HTTP DNS protocols need host ports. They bind to DNS_BIND_IP (loopback
+    # by default) because Docker's iptables rules bypass ufw — a 0.0.0.0 publish
+    # would expose the resolver off-tailnet. The admin panel and DoH go through
+    # Caddy over home-services and are not published.
     ports:
       # DNS
-      - "53:53/tcp"
-      - "53:53/udp"
+      - "${DNS_BIND_IP:-127.0.0.1}:53:53/tcp"
+      - "${DNS_BIND_IP:-127.0.0.1}:53:53/udp"
       # DHCP - uncomment the ports below if you want adguardhome to act as your dhcp server
-      # - "67:67/udp"
-      # - "68:68/tcp"
-      # - "68:68/udp"
-      # DOH
-      - "80:80/tcp"
-      - "443:443/tcp"
-      - "443:443/udp"
+      # - "${DHCP_BIND_IP:-127.0.0.1}:67:67/udp"
+      # - "${DHCP_BIND_IP:-127.0.0.1}:68:68/tcp"
+      # - "${DHCP_BIND_IP:-127.0.0.1}:68:68/udp"
       # DOT
-      - "853:853/tcp"
+      - "${DNS_BIND_IP:-127.0.0.1}:853:853/tcp"
       # DOQ
-      - "784:784/udp"
-      - "853:853/udp"
-      - "8853:8853/udp"
+      - "${DNS_BIND_IP:-127.0.0.1}:784:784/udp"
+      - "${DNS_BIND_IP:-127.0.0.1}:853:853/udp"
+      - "${DNS_BIND_IP:-127.0.0.1}:8853:8853/udp"
       # DNSCrypt
-      - "5443:5443/tcp"
-      - "5443:5443/udp"
-      # Admin panel
-      - "3000:3000/tcp"
+      - "${DNS_BIND_IP:-127.0.0.1}:5443:5443/tcp"
+      - "${DNS_BIND_IP:-127.0.0.1}:5443:5443/udp"
     healthcheck:
       test: ["CMD", "pgrep", "-f", "adguardhome"]
       interval: 1m
