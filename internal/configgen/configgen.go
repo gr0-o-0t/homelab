@@ -171,9 +171,7 @@ func Generate(req Request) ([]CaddyBlock, error) {
 		// subdomain applies to its single site block the same way it would to a
 		// generated one — that is how vaultwarden serves vault.<home>.<domain>
 		// while keeping its hand-written websocket and rate-limit directives.
-		if sub := declaredSubdomain(info.Ports); sub != "" && req.DisplayName == "" {
-			displayName = sub
-		}
+		displayName = SiteHost(info, req.DisplayName)
 		var blocks []CaddyBlock
 		for _, ext := range req.Extensions {
 			content, err := buildRoutesBlock(ext, displayName, info.Routes)
@@ -223,6 +221,92 @@ func declaredSubdomain(ports config.PortEntries) string {
 		found = e.Subdomain
 	}
 	return found
+}
+
+// SiteHost returns the host label — the part in front of the layer's domain —
+// that a service's primary site answers on, resolved exactly as Generate
+// resolves it: an explicit display name (--name) first, then a declared
+// subdomain, then the service name. For a port-driven service the subdomain is
+// the one on its primary HTTP port, since that port's block is the one a
+// single-host layer reaches.
+//
+// Layers that have one name per service outside Caddy — the i2p tunnel's
+// hostoverride, the Cloudflare DNS route — must use this rather than the bare
+// service name, or the name they publish matches no site block.
+//
+// A displayName equal to the service name is treated as "no override": callers
+// that default it (cmd/enable does) would otherwise mask a declared subdomain.
+func SiteHost(info ServiceInfo, displayName string) string {
+	if displayName == info.Name {
+		displayName = ""
+	}
+	if info.Routes != "" {
+		if displayName != "" {
+			return displayName
+		}
+		if sub := declaredSubdomain(info.Ports); sub != "" {
+			return sub
+		}
+		return info.Name
+	}
+	if p, ok := primaryHTTPPort(info.Ports); ok && p.Subdomain != "" {
+		return p.Subdomain
+	}
+	if displayName != "" {
+		return displayName
+	}
+	return info.Name
+}
+
+// primaryHTTPPort is the port a single-host layer lands on: "default" when it
+// is Caddy-routable on the layer's own port, else the first such port by name.
+func primaryHTTPPort(ports config.PortEntries) (PortSelection, bool) {
+	resolved, err := ResolvePorts(ports, nil)
+	if err != nil {
+		return PortSelection{}, false
+	}
+	var first *PortSelection
+	for i, p := range resolved {
+		if !p.RoutableByCaddy() || p.Listen != 0 {
+			continue
+		}
+		if p.Name == "default" {
+			return p, true
+		}
+		if first == nil {
+			first = &resolved[i]
+		}
+	}
+	if first == nil {
+		return PortSelection{}, false
+	}
+	return *first, true
+}
+
+// CFHost returns the host label a service's Cloudflare site answers on
+// (<label>.<DOMAIN>). The generated conf.d-cf block is the source of truth —
+// it records any --name the service was enabled with — so it is read first;
+// without one, the host is resolved from the declaration as Generate would.
+func CFHost(configRoot, svcName string) string {
+	if data, err := os.ReadFile(GeneratedFilePath(configRoot, "cf", svcName, "")); err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			addr := strings.TrimSpace(strings.TrimSuffix(line, "{"))
+			addr = strings.TrimPrefix(strings.TrimPrefix(addr, "http://"), "https://")
+			if label, ok := strings.CutSuffix(addr, ".{$DOMAIN}"); ok && label != "" {
+				return label
+			}
+			break
+		}
+	}
+	info, err := LoadServiceInfo(configRoot, svcName)
+	if err != nil {
+		return svcName
+	}
+	return SiteHost(info, "")
 }
 
 // PrimaryPort picks the port a routes-driven service should report to the
@@ -325,7 +409,14 @@ func buildBlock(ext, displayName, svcName string, port PortSelection) (CaddyBloc
 	case "private", "cf":
 		// UDP has no site block: Caddy speaks HTTP. The declaration still
 		// matters for compose; it just isn't something Caddy can serve.
-		if port.RoutableByCaddy() {
+		//
+		// Nor does a port with an explicit listen port (forgejo's 22:22), for
+		// the same reason the i2p layer skips it: such a port is a raw TCP
+		// service published by compose, not HTTP. Wrapping it in a site block
+		// produced an HTTPS reverse_proxy on :22 (private) that no ssh client
+		// can speak, and a plain-HTTP listener on :22 (cf) that cloudflared
+		// never routes to — and either one squats the port in Caddy's netns.
+		if port.RoutableByCaddy() && port.Listen == 0 {
 			content = buildHTTPBlock(displayName, ext, svcName, port)
 		}
 	// i2p: Caddy matches the Host header i2pd stamps via hostoverride, which

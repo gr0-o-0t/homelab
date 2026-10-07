@@ -4,8 +4,10 @@ import (
 	"encoding/binary"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/groot/homelab/internal/configgen"
 	"github.com/groot/homelab/internal/network"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -228,4 +230,35 @@ func TestLayer_AppendTunnel_RewritesStaleHost(t *testing.T) {
 	tunnels, err := moved.ParseTunnels()
 	require.NoError(t, err)
 	assert.Len(t, tunnels, 1, "the stale section must be replaced, not duplicated")
+}
+
+// The hostoverride must be the host configgen builds the site block from: a
+// --name or a declared subdomain changes both, or the eepsite 404s.
+func TestLayer_Enable_HostMatchesCaddyBlock(t *testing.T) {
+	root := t.TempDir()
+	svcDir := filepath.Join(root, "services", "vaultwarden")
+	require.NoError(t, os.MkdirAll(svcDir, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(svcDir, "config.yaml"),
+		[]byte("ports:\n  - vault:80\n"), 0o600))
+	l := newForTest(root, noopReload)
+
+	for _, tc := range []struct{ display, want string }{
+		{"vaultwarden", "vault.i2p"}, // declared subdomain
+		{"pw", "vault.i2p"},          // a port's subdomain outranks --name, as in configgen
+	} {
+		require.NoError(t, l.Enable("vaultwarden", tc.display, network.ServiceInfo{},
+			[]network.PortSelection{{Name: "vault", Port: 80, Protocol: "tcp"}}))
+		blocks, err := configgen.Generate(configgen.Request{ServiceName: "vaultwarden",
+			DisplayName: tc.display, Extensions: []string{"i2p"}, ConfigDir: root})
+		require.NoError(t, err)
+
+		tunnels, err := l.ParseTunnels()
+		require.NoError(t, err)
+		require.Len(t, tunnels, 1)
+		assert.Equal(t, tc.want, tunnels[0].HostOverride)
+		// The Caddy side renders the home subdomain as a placeholder; with none
+		// configured the tunnel side has none either.
+		assert.Contains(t, blocks[0].Content,
+			"http://"+strings.TrimSuffix(tc.want, ".i2p")+".{$HOME_SUBDOMAIN}.i2p {")
+	}
 }

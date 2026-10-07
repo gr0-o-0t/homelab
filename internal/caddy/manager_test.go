@@ -5,6 +5,7 @@ package caddy
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -326,4 +327,97 @@ func TestDisableBoth_RemovesRegularFile(t *testing.T) {
 	// Verify the file was removed.
 	_, err = os.Lstat(dest)
 	assert.True(t, os.IsNotExist(err))
+}
+
+// ── ReloadService / rollback ─────────────────────────────────────────────────
+
+// A caddy.cf.conf on disk means the service *can* go public, not that it is.
+// Reload used to link every static file it found, publishing the service.
+func TestReloadService_Static_OnlyRelinksActiveLayers(t *testing.T) {
+	repo := newRepo(t)
+	addService(t, repo, "myapp")
+	writeCaddyConf(t, repo, "myapp")
+	writePubCaddyConf(t, repo, "myapp")
+	m := mgr(t, repo)
+	require.NoError(t, m.Enable("myapp"))
+
+	require.NoError(t, m.ReloadService("myapp"))
+
+	pub, err := m.IsPublicEnabled("myapp")
+	require.NoError(t, err)
+	assert.False(t, pub, "reload must not enable the cf layer")
+	priv, err := m.IsEnabled("myapp")
+	require.NoError(t, err)
+	assert.True(t, priv)
+}
+
+func TestReloadService_Static_NothingActive(t *testing.T) {
+	repo := newRepo(t)
+	addService(t, repo, "myapp")
+	writeCaddyConf(t, repo, "myapp")
+	assert.Error(t, mgr(t, repo).ReloadService("myapp"))
+	_, err := os.Lstat(filepath.Join(repo, "caddy", "conf.d", "myapp.conf"))
+	assert.True(t, os.IsNotExist(err))
+}
+
+// A config Caddy rejects must not stay on disk: Caddy would refuse to start at
+// its next restart, taking every route down.
+func TestEnable_RollsBackWhenValidationFails(t *testing.T) {
+	repo := newRepo(t)
+	addService(t, repo, "myapp")
+	writeCaddyConf(t, repo, "myapp")
+	other := filepath.Join(repo, "caddy", "conf.d", "other.conf")
+	require.NoError(t, os.WriteFile(other, []byte("# kept\n"), 0o600))
+
+	m := newForTest(repo, func() error { return fmt.Errorf("%w: bad", ErrInvalidConfig) })
+	err := m.Enable("myapp")
+	require.ErrorIs(t, err, ErrInvalidConfig)
+	assert.Contains(t, err.Error(), "rolled back")
+
+	_, err = os.Lstat(filepath.Join(repo, "caddy", "conf.d", "myapp.conf"))
+	assert.True(t, os.IsNotExist(err), "the new link must be removed")
+	data, err := os.ReadFile(other)
+	require.NoError(t, err)
+	assert.Equal(t, "# kept\n", string(data), "unrelated config is untouched")
+}
+
+// Snapshot/Restore is what cmd/enable uses around writes made by other hands.
+func TestSnapshot_RestoreUndoesAddsChangesAndRemovals(t *testing.T) {
+	repo := newRepo(t)
+	dir := filepath.Join(repo, "caddy", "conf.d-cf")
+	changed := filepath.Join(dir, "changed.conf")
+	removed := filepath.Join(dir, "removed.conf")
+	require.NoError(t, os.WriteFile(changed, []byte("old\n"), 0o600))
+	require.NoError(t, os.WriteFile(removed, []byte("gone\n"), 0o600))
+
+	m := mgr(t, repo)
+	snap, err := m.Snapshot()
+	require.NoError(t, err)
+
+	require.NoError(t, os.WriteFile(changed, []byte("new\n"), 0o600))
+	require.NoError(t, os.Remove(removed))
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, "caddy", "conf.d-tor"), 0o750))
+	added := filepath.Join(repo, "caddy", "conf.d-tor", "added.conf")
+	require.NoError(t, os.WriteFile(added, []byte("x\n"), 0o600))
+
+	require.NoError(t, snap.Restore())
+
+	data, _ := os.ReadFile(changed)
+	assert.Equal(t, "old\n", string(data))
+	data, _ = os.ReadFile(removed)
+	assert.Equal(t, "gone\n", string(data))
+	_, err = os.Stat(added)
+	assert.True(t, os.IsNotExist(err))
+}
+
+// Only a validation failure rolls back; any other reload error (Caddy down)
+// leaves the change in place for the next start.
+func TestReloadOrRestore_KeepsChangeOnOtherErrors(t *testing.T) {
+	repo := newRepo(t)
+	addService(t, repo, "myapp")
+	writeCaddyConf(t, repo, "myapp")
+	m := newForTest(repo, func() error { return errors.New("caddy not running") })
+	require.Error(t, m.Enable("myapp"))
+	_, err := os.Lstat(filepath.Join(repo, "caddy", "conf.d", "myapp.conf"))
+	assert.NoError(t, err)
 }

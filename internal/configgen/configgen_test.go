@@ -227,7 +227,9 @@ func TestBuildBlock_TorIsWrittenByItsLayer(t *testing.T) {
 // port (22:22) therefore gets no mesh block, rather than one that sits there
 // never receiving a request.
 func TestBuildBlock_MeshSkipsExplicitListenPorts(t *testing.T) {
-	for _, ext := range []string{"i2p"} {
+	// private and cf too: a 22:22 port is raw TCP (ssh), so an HTTPS
+	// reverse_proxy on :22, or a plain-HTTP cf listener there, can never work.
+	for _, ext := range []string{"i2p", "private", "cf"} {
 		block, err := buildBlock(ext, "forgejo", "forgejo",
 			PortSelection{Name: "22", Port: 22, Listen: 22, Protocol: "tcp"})
 		require.NoError(t, err, ext)
@@ -335,4 +337,42 @@ func TestI2PHost_NamespacedUnderHomeSubdomain(t *testing.T) {
 
 	// No home subdomain configured: fall back rather than emit "searxng..i2p".
 	assert.Equal(t, "searxng.i2p", I2PHost("searxng", ""))
+}
+
+// Layers with one name per service outside Caddy (the i2p hostoverride, the cf
+// DNS route) must resolve the same host Generate puts in the site block.
+func TestSiteHost_MatchesGeneratedSiteAddress(t *testing.T) {
+	dir := t.TempDir()
+	svcDir := filepath.Join(dir, "services", "vaultwarden")
+	require.NoError(t, os.MkdirAll(svcDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(svcDir, "config.yaml"),
+		[]byte("ports:\n  - vault:80\n"), 0o644))
+
+	info, err := LoadServiceInfo(dir, "vaultwarden")
+	require.NoError(t, err)
+	assert.Equal(t, "vault", SiteHost(info, ""), "declared subdomain")
+	assert.Equal(t, "vault", SiteHost(info, "vaultwarden"), "service name is not an override")
+
+	for _, display := range []string{"", "vaultwarden"} {
+		blocks, err := Generate(Request{ServiceName: "vaultwarden", DisplayName: display,
+			Extensions: []string{"cf", "i2p"}, ConfigDir: dir})
+		require.NoError(t, err)
+		assert.Contains(t, blocks[0].Content, "http://vault.{$DOMAIN} {")
+		assert.Contains(t, blocks[1].Content, "http://"+I2PHost(SiteHost(info, display), HomeSubdomainVar)+" {")
+	}
+
+	// --name wins over the service name on a port without a subdomain.
+	plain := ServiceInfo{Name: "gitea", Ports: config.PortEntries{"default": {Port: 3000, Protocols: []string{"tcp"}}}}
+	assert.Equal(t, "git", SiteHost(plain, "git"))
+	assert.Equal(t, "gitea", SiteHost(plain, ""))
+}
+
+// CFHost reads the enabled cf block, which records a --name the declaration
+// cannot know about.
+func TestCFHost_PrefersGeneratedBlock(t *testing.T) {
+	dir := t.TempDir()
+	assert.Equal(t, "gitea", CFHost(dir, "gitea"), "nothing enabled, nothing declared")
+
+	require.NoError(t, WriteFile(dir, "cf", "gitea", "", "http://git.{$DOMAIN} {\n    reverse_proxy gitea:3000\n}\n"))
+	assert.Equal(t, "git", CFHost(dir, "gitea"))
 }

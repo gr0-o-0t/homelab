@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"path/filepath"
 
+	"github.com/groot/homelab/internal/configgen"
 	"github.com/groot/homelab/internal/network"
 	"github.com/groot/homelab/internal/run"
 )
@@ -70,15 +71,17 @@ func (l *Layer) CaddyConfigDir(configRoot string) string {
 	return filepath.Join(configRoot, "caddy", "conf.d-cf")
 }
 
-// ServiceAddresses returns the public hostname Cloudflare fronts. Templated,
-// not looked up: the tunnel serves whatever DNS name is routed to it, and that
-// name is the one this layer wrote into Caddy.
+// ServiceAddresses returns the public hostname Cloudflare fronts: the host
+// configgen wrote into the service's conf.d-cf block, which carries any --name
+// or declared subdomain — not the bare service name, which matched no site
+// block whenever those were set.
 func (l *Layer) ServiceAddresses(svcName string, env map[string]string) []network.ServiceAddress {
 	dom := env["DOMAIN"]
 	if dom == "" {
 		return []network.ServiceAddress{{Note: "DOMAIN not set — run homelab setup"}}
 	}
-	return []network.ServiceAddress{{URL: fmt.Sprintf("https://%s.%s", svcName, dom)}}
+	host := configgen.CFHost(l.repoRoot, svcName)
+	return []network.ServiceAddress{{URL: fmt.Sprintf("https://%s.%s", host, dom)}}
 }
 
 func (l *Layer) env() map[string]string {

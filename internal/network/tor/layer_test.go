@@ -50,7 +50,7 @@ func TestLayer_Enable_WritesTorrcConfig(t *testing.T) {
 	// at the service — which this used to do — meant onion traffic never
 	// reached Caddy, so the generated site blocks did nothing and any service
 	// with a caddy.routes.conf path fan-out was broken over Tor.
-	assert.Contains(t, string(data), "HiddenServicePort 80 tailscale:80")
+	assert.Contains(t, string(data), "HiddenServicePort 80 tailscale:8081")
 	assert.NotContains(t, string(data), "HiddenServicePort 80 gitea:3000")
 
 	// The per-service key directory must NOT be pre-created: tor makes it
@@ -120,7 +120,9 @@ func TestLayer_Enable_WritesCaddyBlockForTheRealOnion(t *testing.T) {
 
 	block, err := os.ReadFile(filepath.Join(root, "caddy", "conf.d-tor", "gitea.conf"))
 	require.NoError(t, err)
-	assert.Contains(t, string(block), "http://giteaonionaddressxxxxxxxxxxxx.onion {")
+	// On the onion-only listener, not :80 — which also serves the cf and i2p
+	// vhosts, reachable by a Tor client that sends their Host header.
+	assert.Contains(t, string(block), "http://giteaonionaddressxxxxxxxxxxxx.onion:8081 {")
 	assert.Contains(t, string(block), "reverse_proxy gitea:3000")
 	assert.NotContains(t, string(block), "gitea.onion", "the templated name is not an address")
 }
@@ -140,7 +142,7 @@ func TestLayer_Enable_ExplicitListenPortsBypassCaddy(t *testing.T) {
 
 	data, err := os.ReadFile(filepath.Join(root, "tor", "torrc.d", "forgejo.conf"))
 	require.NoError(t, err)
-	assert.Contains(t, string(data), "HiddenServicePort 80 tailscale:80", "HTTP via Caddy")
+	assert.Contains(t, string(data), "HiddenServicePort 80 tailscale:8081", "HTTP via Caddy")
 	assert.Contains(t, string(data), "HiddenServicePort 22 forgejo:22", "ssh direct")
 }
 

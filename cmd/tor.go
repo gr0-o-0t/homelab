@@ -163,6 +163,11 @@ Use --port to override the port detected from caddy.conf.`,
 			[]network.PortSelection{{Name: "default", Port: portNum, Protocol: "tcp"}}); err != nil {
 			return err
 		}
+		// The layer wrote the onion's Caddy block; without a reload Caddy
+		// keeps serving the old config and the .onion answers nothing.
+		if err := caddyReload(); err != nil {
+			fmt.Printf("  %s  Caddy reload: %v\n", styles.Warning.Render("!"), err)
+		}
 		fmt.Printf("  %s  Hidden service configured and tor reloaded\n", styles.Success.Render("✓"))
 
 		// Show .onion address if available
@@ -203,6 +208,9 @@ var torDisableCmd = &cobra.Command{
 		}
 		if err := l.Disable(name); err != nil {
 			return err
+		}
+		if err := caddyReload(); err != nil {
+			fmt.Printf("  %s  Caddy reload: %v\n", styles.Warning.Render("!"), err)
 		}
 		fmt.Printf("  %s  %s removed and tor reloaded\n\n",
 			styles.Warning.Render("→"), styles.Bold.Render(name))

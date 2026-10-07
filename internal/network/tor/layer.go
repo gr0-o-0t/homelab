@@ -25,6 +25,15 @@ const (
 	// "caddy" record. cloudflared and i2pd use the same address.
 	caddyUpstream = "tailscale"
 
+	// caddyPort is the Caddy listener that serves only onion site blocks.
+	//
+	// Not :80. That port also carries the cf and i2p vhosts, and nothing on the
+	// way in pins the Host header for a Tor client (unlike i2pd's
+	// hostoverride), so an onion visitor could send Host: <svc>.<domain> and
+	// reach a service exposed only on Cloudflare or I2P. On a listener whose
+	// only sites are .onion addresses, any other Host matches nothing.
+	caddyPort = 8081
+
 	onionWaitAttempts = 20
 	onionWaitInterval = 500 * time.Millisecond
 )
@@ -211,7 +220,8 @@ func (l *Layer) torServicePath(name string) string {
 
 // writeTorService writes the service's torrc.d snippet.
 //
-// HTTP ports are pointed at Caddy (tailscale:80), not at the service
+// HTTP ports are pointed at Caddy's onion-only listener (tailscale:8081, see
+// caddyPort), not at the service
 // container. Going direct — which this used to do — meant onion traffic never
 // reached Caddy at all, so the conf.d-tor site blocks were decoration and any
 // service whose routing is more than one upstream (a caddy.routes.conf path
@@ -244,7 +254,7 @@ func (l *Layer) writeTorService(name string, ports []network.PortSelection) erro
 		if httpRouted {
 			continue // one :80 vhost per onion; Caddy splits by Host from there
 		}
-		fmt.Fprintf(&b, "HiddenServicePort 80 %s:80\n", caddyUpstream)
+		fmt.Fprintf(&b, "HiddenServicePort 80 %s:%d\n", caddyUpstream, caddyPort)
 		httpRouted = true
 	}
 	return os.WriteFile(l.torServicePath(name), []byte(b.String()), 0o600)
@@ -276,7 +286,7 @@ func (l *Layer) writeCaddyBlock(svcName string, ports []network.PortSelection) e
 		return fmt.Errorf("creating caddy config dir: %w", err)
 	}
 	block := "# Tor: " + svcName + "\n" +
-		configgen.WrapSiteBlock("http://"+onion, body)
+		configgen.WrapSiteBlock(fmt.Sprintf("http://%s:%d", onion, caddyPort), body)
 	return os.WriteFile(filepath.Join(dir, svcName+".conf"), []byte(block), 0o600)
 }
 

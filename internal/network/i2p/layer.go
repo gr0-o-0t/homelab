@@ -98,8 +98,12 @@ func (l *Layer) Status() network.Status {
 // reloads i2pd. Caddy config (host-override routing to Caddy) is written
 // separately by internal/configgen — see cmd/enable.go.
 func (l *Layer) Enable(svcName, displayName string, info network.ServiceInfo, ports []network.PortSelection) error {
+	// The hostoverride has to be the host configgen put in the site block for
+	// this same displayName, not the bare service name: with --name or a
+	// declared subdomain those differ, and the eepsite 404s.
+	host := l.hostFor(svcName, displayName)
 	for _, port := range ports {
-		if err := l.AppendTunnel(svcName, port.Port); err != nil {
+		if err := l.appendTunnel(svcName, host, port.Port); err != nil {
 			return fmt.Errorf("writing i2p tunnel: %w", err)
 		}
 	}
@@ -135,7 +139,7 @@ func (l *Layer) ServiceAddresses(svcName string, _ map[string]string) []network.
 		addrs = append(addrs, network.ServiceAddress{URL: "http://" + b32})
 	}
 	addrs = append(addrs, network.ServiceAddress{
-		URL:  "http://" + l.hostFor(svcName),
+		URL:  "http://" + l.currentHost(svcName),
 		Note: "name, not an address — register it with the addresshelper URL from `homelab i2p list`",
 	})
 	return addrs
@@ -180,7 +184,7 @@ func (l *Layer) AddressHelperURL(svcName string) string {
 	if b64 == "" {
 		return ""
 	}
-	return fmt.Sprintf("http://%s/?i2paddresshelper=%s", l.hostFor(svcName), b64)
+	return fmt.Sprintf("http://%s/?i2paddresshelper=%s", l.currentHost(svcName), b64)
 }
 
 // i2pBase64 is base64 with I2P's alphabet: '+' and '/' become '-' and '~'.
@@ -254,6 +258,11 @@ func (l *Layer) TunnelsPath() string {
 // (e.g. once via `homelab i2p enable`, once via `homelab enable --i2p`) is a
 // normal, expected sequence, not a conflict.
 func (l *Layer) AppendTunnel(name string, port int) error {
+	return l.appendTunnel(name, l.hostFor(name, ""), port)
+}
+
+// appendTunnel is AppendTunnel with the hostoverride already resolved.
+func (l *Layer) appendTunnel(name, host string, port int) error {
 	tunPath := l.TunnelsPath()
 
 	if err := os.MkdirAll(filepath.Dir(tunPath), 0o750); err != nil {
@@ -268,7 +277,7 @@ func (l *Layer) AppendTunnel(name string, port int) error {
 		if t.Name != name {
 			continue
 		}
-		if t.HostOverride == l.hostFor(name) {
+		if t.HostOverride == host {
 			return nil // already configured
 		}
 		// The host changed — a renamed service, or the home subdomain moved.
@@ -295,17 +304,37 @@ func (l *Layer) AppendTunnel(name string, port int) error {
 	// is what Caddy's site block matches on — so it must be byte-identical to
 	// what configgen generates, which is why both call I2PHost.
 	section := fmt.Sprintf("\n[%s]\ntype = http\nhost = tailscale\nport = 80\nhostoverride = %s\nkeys = %s.dat\n",
-		name, l.hostFor(name), name)
+		name, host, name)
 	if _, err := f.WriteString(section); err != nil {
 		return fmt.Errorf("writing tunnels.conf: %w", err)
 	}
 	return nil
 }
 
-// hostFor is the Host header this tunnel stamps: <service>.<home>.i2p, with
-// the home subdomain resolved — i2pd does no environment expansion.
-func (l *Layer) hostFor(name string) string {
-	return configgen.I2PHost(name, l.env()["HOME_SUBDOMAIN"])
+// hostFor is the Host header this tunnel stamps: <label>.<home>.i2p, with the
+// home subdomain resolved — i2pd does no environment expansion. The label is
+// resolved by configgen.SiteHost, the same function configgen uses for the
+// Caddy site block, so --name and declared subdomains agree on both sides.
+func (l *Layer) hostFor(name, displayName string) string {
+	info, err := configgen.LoadServiceInfo(l.repoRoot, name)
+	if err != nil {
+		info = configgen.ServiceInfo{Name: name}
+	}
+	return configgen.I2PHost(configgen.SiteHost(info, displayName), l.env()["HOME_SUBDOMAIN"])
+}
+
+// currentHost is the host the service's tunnel actually stamps — read back from
+// tunnels.conf, since only it knows a --name the service was enabled with —
+// falling back to the resolved default.
+func (l *Layer) currentHost(name string) string {
+	if tunnels, err := l.ParseTunnels(); err == nil {
+		for _, t := range tunnels {
+			if t.Name == name && t.HostOverride != "" {
+				return t.HostOverride
+			}
+		}
+	}
+	return l.hostFor(name, "")
 }
 
 // RemoveTunnel removes a named tunnel section from tunnels.conf.

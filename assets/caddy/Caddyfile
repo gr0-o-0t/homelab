@@ -56,7 +56,10 @@ import /homelab/caddy/conf.d-cf/*.conf
 import /homelab/caddy/conf.d-i2p/*.conf
 
 # ── Tor onion service blocks ───────────────────────────────────────────────────
-# Written by `homelab enable <name> --tor`.
+# Written by `homelab enable <name> --tor`. Each site is http://<onion>:8081:
+# tor's HiddenServicePort targets tailscale:8081, a listener that serves only
+# onion vhosts. Sharing :80 would let a Tor client send the Host header of a
+# cf/i2p-only site and reach it.
 import /homelab/caddy/conf.d-tor/*.conf
 
 # ── Yggdrasil mesh blocks ─────────────────────────────────────────────────────

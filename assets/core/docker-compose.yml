@@ -22,6 +22,8 @@
 #
 #   tor          → optional; profile "tor". Exposes services as .onion
 #                  addresses. Activate with: homelab ext enable tor
+#                  Forwards to Caddy's onion-only listener at
+#                  tailscale:8081 (not :80, which also serves cf/i2p vhosts).
 #
 #   i2p          → optional; profile "i2p". I2P router + eepsite hosting
 #                  via i2pd (C++). Activate with: homelab ext enable i2p
@@ -128,7 +130,7 @@ services:
 
   # ── Cloudflare Tunnel (optional) ───────────────────────────────────────────
   # Activated automatically by `homelab core start` when CF_TUNNEL_TOKEN is
-  # set. Forwards *.{PUB_SUBDOMAIN}.{DOMAIN} public traffic to Caddy.
+  # set. Forwards *.{DOMAIN} public traffic to Caddy.
   cloudflared:
     image: cloudflare/cloudflared:latest
     container_name: cloudflared

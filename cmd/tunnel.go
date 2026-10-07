@@ -1,9 +1,14 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
+	"net/http"
+	neturl "net/url"
 	"strings"
+	"time"
 
+	"github.com/groot/homelab/internal/configgen"
 	"github.com/groot/homelab/internal/run"
 	"github.com/groot/homelab/internal/tui/styles"
 	"github.com/spf13/cobra"
@@ -59,7 +64,7 @@ var tunnelStatusCmd = &cobra.Command{
 		fmt.Printf("\n  %s\n", styles.Bold.Render("Active connections"))
 		if err := run.Default().DockerExec(cloudflaredContainer, "cloudflared", "tunnel", "info"); err != nil {
 			fmt.Printf("  %s  (run %s for details)\n",
-				styles.Muted.Render("!"), styles.Primary.Render("homelab tunnel logs"))
+				styles.Muted.Render("!"), styles.Primary.Render("homelab cf logs"))
 		}
 		fmt.Println()
 		return nil
@@ -132,22 +137,116 @@ var tunnelRouteRmCmd = &cobra.Command{
 		}
 		hostname := publicHostname(name, env)
 		fmt.Printf("%s Removing DNS route: %s\n", styles.Warning.Render("→"), styles.Bold.Render(hostname))
-		// cloudflared doesn't expose a direct "delete DNS record" sub-command;
-		// overwriting with an empty tunnel name is the closest workaround.
-		// Instruct the user to remove the CNAME from the Cloudflare dashboard if this fails.
-		if err := run.Default().DockerExec(cloudflaredContainer,
-			"cloudflared", "tunnel", "route", "dns", "--overwrite-dns",
-			env["CF_TUNNEL_NAME"], hostname,
-		); err != nil {
-			fmt.Printf("  %s  Auto-remove failed. Delete the CNAME record for %s manually:\n",
-				styles.Warning.Render("!"), styles.Bold.Render(hostname))
-			fmt.Printf("  %s\n\n",
-				styles.Muted.Render("  → Cloudflare Dashboard → DNS → delete CNAME pointing to your tunnel"))
-			return nil
+		// cloudflared cannot delete DNS records — `route dns --overwrite-dns`,
+		// which this used to run, re-creates the CNAME and then reported it
+		// removed. The Cloudflare API can, with the token Caddy already uses
+		// for DNS-01 (Zone:Read + DNS:Edit).
+		n, err := deleteTunnelCNAME(cfAPIBase, env["CLOUDFLARE_API_TOKEN"], env["DOMAIN"], hostname)
+		if err != nil {
+			fmt.Printf("  %s  Could not remove the CNAME automatically: %v\n",
+				styles.Warning.Render("!"), err)
+			fmt.Printf("  Delete the CNAME record %s in the Cloudflare dashboard (DNS → Records), or:\n",
+				styles.Bold.Render(hostname))
+			fmt.Printf("    %s\n", styles.Muted.Render(fmt.Sprintf(
+				`curl -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "%s/zones/<zone_id>/dns_records?type=CNAME&name=%s"`,
+				cfAPIBase, hostname)))
+			fmt.Printf("    %s\n\n", styles.Muted.Render(fmt.Sprintf(
+				`curl -X DELETE -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "%s/zones/<zone_id>/dns_records/<record_id>"`,
+				cfAPIBase)))
+			return fmt.Errorf("DNS route %s not removed", hostname)
 		}
-		fmt.Printf("%s DNS route removed: %s\n\n", styles.Success.Render("✓"), styles.Bold.Render(hostname))
+		fmt.Printf("%s DNS route removed: %s (%d record(s))\n\n",
+			styles.Success.Render("✓"), styles.Bold.Render(hostname), n)
 		return nil
 	},
+}
+
+// cfAPIBase is the Cloudflare v4 API root; a variable so tests can point it at
+// an httptest server.
+var cfAPIBase = "https://api.cloudflare.com/client/v4"
+
+// cfResponse is the envelope every Cloudflare v4 API response shares.
+type cfResponse struct {
+	Success bool `json:"success"`
+	Errors  []struct {
+		Message string `json:"message"`
+	} `json:"errors"`
+	Result json.RawMessage `json:"result"`
+}
+
+// cfCall performs one Cloudflare API request and decodes its result into out.
+func cfCall(method, url, token string, out any) error {
+	req, err := http.NewRequest(method, url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var body cfResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return fmt.Errorf("%s %s: HTTP %d, undecodable body: %w", method, url, resp.StatusCode, err)
+	}
+	if !body.Success {
+		msgs := make([]string, 0, len(body.Errors))
+		for _, e := range body.Errors {
+			msgs = append(msgs, e.Message)
+		}
+		return fmt.Errorf("cloudflare API: HTTP %d: %s", resp.StatusCode, strings.Join(msgs, "; "))
+	}
+	if out == nil {
+		return nil
+	}
+	return json.Unmarshal(body.Result, out)
+}
+
+// deleteTunnelCNAME deletes the tunnel CNAME for hostname in zone and returns
+// how many records it removed. Only CNAMEs pointing at a tunnel
+// (*.cfargotunnel.com) are touched — a hand-made record of the same name is
+// not ours to delete. Zero matches is an error: nothing was removed.
+func deleteTunnelCNAME(apiBase, token, zone, hostname string) (int, error) {
+	if token == "" {
+		return 0, fmt.Errorf("CLOUDFLARE_API_TOKEN not configured")
+	}
+	if zone == "" {
+		return 0, fmt.Errorf("DOMAIN not set")
+	}
+	var zones []struct {
+		ID string `json:"id"`
+	}
+	if err := cfCall(http.MethodGet, apiBase+"/zones?name="+neturl.QueryEscape(zone), token, &zones); err != nil {
+		return 0, fmt.Errorf("looking up zone %s: %w", zone, err)
+	}
+	if len(zones) == 0 {
+		return 0, fmt.Errorf("zone %s not visible to CLOUDFLARE_API_TOKEN", zone)
+	}
+	zoneURL := apiBase + "/zones/" + zones[0].ID + "/dns_records"
+
+	var records []struct {
+		ID      string `json:"id"`
+		Content string `json:"content"`
+	}
+	if err := cfCall(http.MethodGet, zoneURL+"?type=CNAME&name="+neturl.QueryEscape(hostname), token, &records); err != nil {
+		return 0, fmt.Errorf("listing CNAME %s: %w", hostname, err)
+	}
+	removed := 0
+	for _, r := range records {
+		if !strings.HasSuffix(r.Content, ".cfargotunnel.com") {
+			continue
+		}
+		if err := cfCall(http.MethodDelete, zoneURL+"/"+r.ID, token, nil); err != nil {
+			return removed, fmt.Errorf("deleting record %s: %w", r.ID, err)
+		}
+		removed++
+	}
+	if removed == 0 {
+		return 0, fmt.Errorf("no tunnel CNAME named %s in zone %s", hostname, zone)
+	}
+	return removed, nil
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -168,8 +267,11 @@ func requireTunnelConfig(env map[string]string) error {
 }
 
 // publicHostname returns the public FQDN for a service (e.g. jellyfin.example.com).
+// The label is the one the service's cf site block answers on — a --name or a
+// declared subdomain, not necessarily the service name — so the DNS route and
+// the Caddy route name the same host.
 func publicHostname(svcName string, env map[string]string) string {
-	return fmt.Sprintf("%s.%s", svcName, env["DOMAIN"])
+	return fmt.Sprintf("%s.%s", configgen.CFHost(configDir(), svcName), env["DOMAIN"])
 }
 
 func init() {

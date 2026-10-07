@@ -75,6 +75,19 @@ func (m *Manager) hasRoutes(name string) bool {
 // writeRoutesLayer generates and writes one layer's config for a routes-driven
 // service, then reloads Caddy.
 func (m *Manager) writeRoutesLayer(name, ext string) error {
+	snap, err := m.Snapshot()
+	if err != nil {
+		return err
+	}
+	if err := m.writeRoutesFiles(name, ext); err != nil {
+		return err
+	}
+	return m.ReloadOrRestore(snap)
+}
+
+// writeRoutesFiles generates and writes one layer's config for a routes-driven
+// service, without reloading.
+func (m *Manager) writeRoutesFiles(name, ext string) error {
 	blocks, err := configgen.Generate(configgen.Request{
 		ServiceName: name,
 		Extensions:  []string{ext},
@@ -88,7 +101,7 @@ func (m *Manager) writeRoutesLayer(name, ext string) error {
 			return fmt.Errorf("writing %s config: %w", ext, err)
 		}
 	}
-	return m.Reload()
+	return nil
 }
 
 // generatedExists reports whether a routes-driven service's generated config for
@@ -213,12 +226,15 @@ func (m *Manager) DisableBoth(name string) error {
 // ── Per-service config reload ─────────────────────────────────────────────────
 
 // ReloadService re-links the private and public Caddy config symlinks for a
-// service and reloads Caddy. Missing config files are silently skipped so the
-// command is safe to run on any service regardless of which routes are active.
+// service and reloads Caddy. Only layers already enabled are touched — in both
+// branches — so a reload never switches on a layer the user had not enabled.
 func (m *Manager) ReloadService(name string) error {
-	// Routes-driven services have nothing to re-link: regenerate instead. Only
-	// layers already in place are rewritten, so a reload never switches a layer
-	// on that the user had not enabled.
+	snap, err := m.Snapshot()
+	if err != nil {
+		return err
+	}
+
+	// Routes-driven services have nothing to re-link: regenerate instead.
 	if m.hasRoutes(name) {
 		reloaded := false
 		for _, ext := range []string{"private", "cf"} {
@@ -229,7 +245,7 @@ func (m *Manager) ReloadService(name string) error {
 			if !active {
 				continue
 			}
-			if err := m.writeRoutesLayer(name, ext); err != nil {
+			if err := m.writeRoutesFiles(name, ext); err != nil {
 				return err
 			}
 			reloaded = true
@@ -237,36 +253,38 @@ func (m *Manager) ReloadService(name string) error {
 		if !reloaded {
 			return fmt.Errorf("service %q has no active routes to reload", name)
 		}
-		return nil
+		return m.ReloadOrRestore(snap)
 	}
 
 	linked := false
-
-	privateSrc := filepath.Join(m.RepoRoot, "services", name, "caddy.conf")
-	privateDest := filepath.Join(m.RepoRoot, "caddy", "conf.d", name+".conf")
-	if _, err := os.Stat(privateSrc); err == nil {
-		relTarget := filepath.Join("..", "..", "services", name, "caddy.conf")
-		if err := m.replaceSymlink(privateDest, relTarget); err != nil {
-			return fmt.Errorf("re-linking private config: %w", err)
+	for _, l := range []struct{ conf, dir, label string }{
+		{"caddy.conf", "conf.d", "private"},
+		{"caddy.cf.conf", "conf.d-cf", "public"},
+	} {
+		src := filepath.Join(m.RepoRoot, "services", name, l.conf)
+		dest := filepath.Join(m.RepoRoot, "caddy", l.dir, name+".conf")
+		// The link must already exist: a caddy.cf.conf on disk only means the
+		// service *can* go public, not that the user enabled it. Re-linking
+		// whenever the source existed is how a reload published services.
+		active, err := isSymlink(dest)
+		if err != nil {
+			return err
 		}
-		linked = true
-	}
-
-	publicSrc := filepath.Join(m.RepoRoot, "services", name, "caddy.cf.conf")
-	publicDest := filepath.Join(m.RepoRoot, "caddy", "conf.d-cf", name+".conf")
-	if _, err := os.Stat(publicSrc); err == nil {
-		relTarget := filepath.Join("..", "..", "services", name, "caddy.cf.conf")
-		if err := m.replaceSymlink(publicDest, relTarget); err != nil {
-			return fmt.Errorf("re-linking public config: %w", err)
+		if _, err := os.Stat(src); err != nil || !active {
+			continue
+		}
+		relTarget := filepath.Join("..", "..", "services", name, l.conf)
+		if err := m.replaceSymlink(dest, relTarget); err != nil {
+			return fmt.Errorf("re-linking %s config: %w", l.label, err)
 		}
 		linked = true
 	}
 
 	if !linked {
-		return fmt.Errorf("no caddy.conf or caddy.cf.conf found for service %q", name)
+		return fmt.Errorf("service %q has no active routes to reload", name)
 	}
 
-	return m.Reload()
+	return m.ReloadOrRestore(snap)
 }
 
 // replaceSymlink removes any existing symlink at dest and creates a new one.
@@ -297,7 +315,12 @@ func (m *Manager) Reload() error {
 		return m.reloadFn()
 	}
 	if err := m.Validate(); err != nil {
-		return fmt.Errorf("caddy validate failed: %w", err)
+		// A stopped Caddy fails validation too; that is not a config problem
+		// and must not trigger a rollback in ReloadOrRestore.
+		if m.runner.ContainerStatus(caddyContainer) != "running" {
+			return fmt.Errorf("caddy validate failed (is the caddy container running?): %w", err)
+		}
+		return fmt.Errorf("%w: %w", ErrInvalidConfig, err)
 	}
 	// Use --force to ensure the admin API fully replaces the active config
 	// rather than skipping if the new config is structurally identical.
@@ -312,10 +335,15 @@ func (m *Manager) Reload() error {
 // ── internal helpers ──────────────────────────────────────────────────────────
 
 // link creates a relative symlink at dest pointing to relTarget, first
-// verifying that src exists. Any stale symlink at dest is replaced.
+// verifying that src exists. Any stale symlink at dest is replaced. If Caddy
+// rejects the result, the link is rolled back.
 func (m *Manager) link(src, dest, relTarget, name, confFile string) error {
 	if _, err := os.Stat(src); os.IsNotExist(err) {
 		return fmt.Errorf("no %s found for service %q (expected %s)", confFile, name, src)
+	}
+	snap, err := m.Snapshot()
+	if err != nil {
+		return err
 	}
 
 	// Remove stale symlink if present (re-link to pick up any path changes).
@@ -329,7 +357,7 @@ func (m *Manager) link(src, dest, relTarget, name, confFile string) error {
 		return fmt.Errorf("creating symlink: %w", err)
 	}
 
-	return m.Reload()
+	return m.ReloadOrRestore(snap)
 }
 
 // unlink removes a symlink at dest, erroring if it does not exist or is not a symlink.

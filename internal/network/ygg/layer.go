@@ -298,40 +298,43 @@ func (l *Layer) writeCaddyBlock(svcName, portName string, meshPort int, body str
 // removeCaddyBlocks removes every generated site block for the service — the
 // default-name one and any per-port ones, mirroring removeForwarder.
 func (l *Layer) removeCaddyBlocks(name string) error {
-	dir := l.CaddyConfigDir(l.repoRoot)
-	return removeMatching(
-		filepath.Join(dir, name+".conf"),
-		filepath.Join(dir, name+"-*.conf"),
-	)
+	return removeExact(l.CaddyConfigDir(l.repoRoot), l.fileNames(name), ".conf")
 }
 
 // removeForwarder removes every forward file for the service — both the
 // default-name one and any per-port ones — since Disable isn't told which
 // ports were previously enabled.
 func (l *Layer) removeForwarder(name string) error {
-	socatDir := l.socatDir()
-	return removeMatching(
-		filepath.Join(socatDir, name+".forward"),
-		filepath.Join(socatDir, name+"-*.forward"),
-	)
+	return removeExact(l.socatDir(), l.fileNames(name), ".forward")
 }
 
-// removeMatching removes every file matching the given glob patterns,
-// returning the first error that isn't "already gone".
-func removeMatching(patterns ...string) error {
-	var firstErr error
-	for _, pattern := range patterns {
-		matches, err := filepath.Glob(pattern)
-		if err != nil {
-			if firstErr == nil {
-				firstErr = err
-			}
-			continue
+// fileNames lists every basename this service's forwarders and site blocks can
+// have: the default one plus one per declared port (see configgen.PortFileName).
+//
+// Exact names, not a `<name>-*` glob: the glob for "foo" also matches the files
+// of a service called "foo-bar", so disabling one tore down the other's mesh
+// exposure.
+func (l *Layer) fileNames(name string) []string {
+	names := []string{name}
+	info, err := configgen.LoadServiceInfo(l.repoRoot, name)
+	if err != nil {
+		return names
+	}
+	for portName := range info.Ports {
+		if n := configgen.PortFileName(name, portName); n != name {
+			names = append(names, n)
 		}
-		for _, m := range matches {
-			if err := os.Remove(m); err != nil && !os.IsNotExist(err) && firstErr == nil {
-				firstErr = err
-			}
+	}
+	return names
+}
+
+// removeExact removes dir/<name><ext> for each name, returning the first error
+// that isn't "already gone".
+func removeExact(dir string, names []string, ext string) error {
+	var firstErr error
+	for _, n := range names {
+		if err := os.Remove(filepath.Join(dir, n+ext)); err != nil && !os.IsNotExist(err) && firstErr == nil {
+			firstErr = err
 		}
 	}
 	return firstErr

@@ -3,8 +3,10 @@ package cf
 import (
 	"testing"
 
+	"github.com/groot/homelab/internal/configgen"
 	"github.com/groot/homelab/internal/network"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func noopReload() error { return nil }
@@ -38,4 +40,17 @@ func TestLayer_Enable_IsNoop(t *testing.T) {
 func TestLayer_Disable_IsNoop(t *testing.T) {
 	l := newForTest(t.TempDir(), noopReload)
 	assert.NoError(t, l.Disable("nonexistent"))
+}
+
+// The advertised hostname is the one in the cf site block, so --name and
+// declared subdomains show up instead of the bare service name.
+func TestLayer_ServiceAddresses_UsesSiteHost(t *testing.T) {
+	root := t.TempDir()
+	l := New(root, nil, nil)
+	env := map[string]string{"DOMAIN": "example.com"}
+	assert.Equal(t, "https://gitea.example.com", l.ServiceAddresses("gitea", env)[0].URL)
+
+	require.NoError(t, configgen.WriteFile(root, "cf", "gitea", "",
+		"http://git.{$DOMAIN} {\n    reverse_proxy gitea:3000\n}\n"))
+	assert.Equal(t, "https://git.example.com", l.ServiceAddresses("gitea", env)[0].URL)
 }

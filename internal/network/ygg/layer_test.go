@@ -139,6 +139,7 @@ func TestLayer_Enable_Reenable_KeepsAllocatedPort(t *testing.T) {
 func TestLayer_Disable_RemovesCaddyBlocks(t *testing.T) {
 	root := t.TempDir()
 	l := newForTest(root, noopRestart)
+	writeGiteaPorts(t, root)
 	require.NoError(t, l.Enable("gitea", "gitea", network.ServiceInfo{},
 		[]network.PortSelection{
 			{Name: "web", Port: 3000, Protocol: "tcp"},
@@ -155,6 +156,7 @@ func TestLayer_Disable_RemovesCaddyBlocks(t *testing.T) {
 func TestLayer_Disable_RemovesConfigs(t *testing.T) {
 	root := t.TempDir()
 	l := newForTest(root, noopRestart)
+	writeGiteaPorts(t, root)
 	require.NoError(t, l.Enable("gitea", "gitea", network.ServiceInfo{},
 		[]network.PortSelection{
 			{Name: "web", Port: 3000, Protocol: "tcp"},
@@ -170,4 +172,36 @@ func TestLayer_Disable_RemovesConfigs(t *testing.T) {
 func TestLayer_Disable_Idempotent(t *testing.T) {
 	l := newForTest(t.TempDir(), noopRestart)
 	assert.NoError(t, l.Disable("nonexistent"))
+}
+
+// writeGiteaPorts declares the ports the multi-port tests enable, since Disable
+// derives the per-port file names from the declaration.
+func writeGiteaPorts(t *testing.T, root string) {
+	t.Helper()
+	dir := filepath.Join(root, "services", "gitea")
+	require.NoError(t, os.MkdirAll(dir, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.yaml"),
+		[]byte("ports:\n  - web:3000\n  - ssh:2222\n"), 0o600))
+}
+
+// Disabling "foo" used to glob foo-*.forward / foo-*.conf, which also matched
+// every file of a service called "foo-bar".
+func TestLayer_Disable_LeavesPrefixSiblingAlone(t *testing.T) {
+	root := t.TempDir()
+	l := newForTest(root, noopRestart)
+	ports := []network.PortSelection{{Name: "default", Port: 8080, Protocol: "tcp"}}
+	require.NoError(t, l.Enable("foo", "foo", network.ServiceInfo{}, ports))
+	require.NoError(t, l.Enable("foo-bar", "foo-bar", network.ServiceInfo{}, ports))
+
+	require.NoError(t, l.Disable("foo"))
+
+	for _, f := range []string{
+		filepath.Join(root, "yggdrasil", "socat.d", "foo-bar.forward"),
+		filepath.Join(root, "caddy", "conf.d-ygg", "foo-bar.conf"),
+	} {
+		_, err := os.Stat(f)
+		assert.NoError(t, err, "%s belongs to foo-bar and must survive disabling foo", f)
+	}
+	_, err := os.Stat(filepath.Join(root, "yggdrasil", "socat.d", "foo.forward"))
+	assert.True(t, os.IsNotExist(err))
 }
