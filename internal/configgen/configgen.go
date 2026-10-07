@@ -188,7 +188,17 @@ func Render(l network.NetworkLayer, e Exposure) ([]CaddyBlock, error) {
 		if s.TLS {
 			b.WriteString("\timport wildcard_tls\n")
 		}
-		b.WriteString(indentBody(stripLeadingComments(body)))
+		if len(s.AllowFrom) == 0 {
+			b.WriteString(indentBody(stripLeadingComments(body)))
+		} else {
+			// `route` keeps the written order. Without it Caddy sorts
+			// directives, and a `handle` block in a routes body would run
+			// before the abort and bypass the guard.
+			b.WriteString("\t@outside not remote_ip " + strings.Join(s.AllowFrom, " ") + "\n")
+			b.WriteString("\troute {\n\t\tabort @outside\n")
+			b.WriteString(indentBody(indentBody(stripLeadingComments(body))))
+			b.WriteString("\t}\n")
+		}
 		b.WriteString("}\n")
 		blocks = append(blocks, CaddyBlock{PortName: s.PortName, Content: b.String()})
 	}

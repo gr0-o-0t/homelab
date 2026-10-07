@@ -54,6 +54,10 @@ type Site struct {
 	Port     int    // upstream container port a generated reverse_proxy targets
 	TLS      bool   // import the wildcard_tls snippet (tailnet only)
 	Comment  string // header written above the block, newline-terminated; may be empty
+	// AllowFrom, when set, limits the site to these client address ranges;
+	// any other client has its connection closed. For listeners that are
+	// reachable from more networks than the layer they serve.
+	AllowFrom []string
 }
 
 // NetworkLayer is one way a service can be reached: the tailnet, Cloudflare,
