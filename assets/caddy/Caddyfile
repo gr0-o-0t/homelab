@@ -10,23 +10,22 @@
 #   https://caddyserver.com/docs/caddyfile/options
 #   https://github.com/caddy-dns/cloudflare
 # ─────────────────────────────────────────────────────────────────────────────
-
 {
-    # Global ACME settings
-    email {$ACME_EMAIL}
+	# Global ACME settings
+	email {$ACME_EMAIL}
 
-    # Obtain & renew ALL certificates via Cloudflare DNS-01.
-    # The `cloudflare` directive comes from the caddy-dns/cloudflare plugin
-    # compiled into our custom image (see core/Dockerfile.caddy).
-    acme_dns cloudflare {$CLOUDFLARE_API_TOKEN}
+	# Obtain & renew ALL certificates via Cloudflare DNS-01.
+	# The `cloudflare` directive comes from the caddy-dns/cloudflare plugin
+	# compiled into our custom image (see core/Dockerfile.caddy).
+	acme_dns cloudflare {$CLOUDFLARE_API_TOKEN}
 
-    # Optional: use Let's Encrypt staging while testing to avoid rate limits.
-    # Comment out for production.
-    # acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
+	# Optional: use Let's Encrypt staging while testing to avoid rate limits.
+	# Comment out for production.
+	# acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
 
-    # Disable the Caddy admin API on the public interface; bind only to
-    # localhost inside the container's network namespace (= Tailscale namespace)
-    admin localhost:2019
+	# Disable the Caddy admin API on the public interface; bind only to
+	# localhost inside the container's network namespace (= Tailscale namespace)
+	admin localhost:2019
 }
 
 # ── Wildcard TLS snippet ──────────────────────────────────────────────────────
@@ -35,13 +34,13 @@
 # Public site blocks in conf.d-cf/ use direct ACME for 
 # *.{$DOMAIN}.
 (wildcard_tls) {
-    tls {
-        dns cloudflare {$CLOUDFLARE_API_TOKEN}
-    }
+	tls {
+		dns cloudflare {$CLOUDFLARE_API_TOKEN}
+	}
 }
 
 # ── Private site blocks (tailnet only) ───────────────────────────────────────
-# Symlinked by `homelab service enable <name> --private`.
+# Written by `homelab enable <name>`.
 # Each file handles <service>.{$HOME_SUBDOMAIN}.{$DOMAIN}.
 import /homelab/caddy/conf.d/*.conf
 
@@ -65,3 +64,16 @@ import /homelab/caddy/conf.d-tor/*.conf
 # ── Yggdrasil mesh blocks ─────────────────────────────────────────────────────
 # Written by `homelab enable <name> --ygg`.
 import /homelab/caddy/conf.d-ygg/*.conf
+
+# ── Catch-alls for the plain-HTTP listeners ──────────────────────────────────
+# cloudflared and i2p reach Caddy on :80, tor on :8081. A Host that matches no
+# site there is closed rather than answered: without these, Caddy replies with
+# an empty 200, and on :80 redirects private hostnames to https, which tells a
+# tunnel client the names of tailnet-only services. Specific sites above win.
+http://:80 {
+	abort
+}
+
+http://:8081 {
+	abort
+}
