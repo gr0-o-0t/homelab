@@ -16,5 +16,8 @@ secrets:
   # APP_SECRET_KEY:
   #   required: true
 
+# The port the container serves HTTP on. `homelab enable {{.Name}}` routes
+# {{.Name}}.<HOME_SUBDOMAIN>.<DOMAIN> to it. A bare number is the container
+# port; `name:port` would make "name" the subdomain instead.
 ports:
-  - web:{{.Port}}
+  - {{.Port}}

@@ -11,61 +11,6 @@ import (
 	"github.com/groot/homelab/internal/config"
 )
 
-func TestLayerDisplayURL_Private(t *testing.T) {
-	env := map[string]string{"HOME_SUBDOMAIN": "home", "DOMAIN": "example.com"}
-	url := LayerDisplayURL("private", "gitea", env)
-	assert.Equal(t, "https://gitea.home.example.com", url)
-}
-
-func TestLayerDisplayURL_PrivateFallback(t *testing.T) {
-	env := map[string]string{} // no HOME_SUBDOMAIN or DOMAIN
-	url := LayerDisplayURL("private", "gitea", env)
-	assert.Equal(t, "https://gitea.{HOME_SUBDOMAIN}.{DOMAIN}", url)
-}
-
-func TestLayerDisplayURL_CF(t *testing.T) {
-	env := map[string]string{"DOMAIN": "example.com"}
-	url := LayerDisplayURL("cf", "gitea", env)
-	assert.Equal(t, "https://gitea.example.com", url)
-}
-
-func TestLayerDisplayURL_Tor(t *testing.T) {
-	url := LayerDisplayURL("tor", "gitea", nil)
-	assert.Equal(t, "http://gitea.onion (via Caddy)", url)
-}
-
-func TestLayerDisplayURL_I2P(t *testing.T) {
-	url := LayerDisplayURL("i2p", "gitea", nil)
-	assert.Equal(t, "http://gitea.i2p (via Caddy)", url)
-}
-
-func TestLayerDisplayURL_Ygg(t *testing.T) {
-	url := LayerDisplayURL("ygg", "gitea", nil)
-	// No .ygg naming exists — the URL is the node address and allocated port,
-	// neither of which this function can know. Real callers use
-	// ygg.ServiceURL; this is only the fallback.
-	assert.Contains(t, url, "homelab ygg status")
-	assert.NotContains(t, url, "gitea.ygg")
-}
-
-func TestLayerDisplayURL_Unknown(t *testing.T) {
-	url := LayerDisplayURL("unknown", "gitea", nil)
-	assert.Equal(t, "", url)
-}
-
-func TestLayerDisplayURL_EmptyDisplayName(t *testing.T) {
-	env := map[string]string{"HOME_SUBDOMAIN": "home", "DOMAIN": "example.com"}
-	url := LayerDisplayURL("private", "", env)
-	// When both env vars are set, they are resolved even with an empty display name.
-	assert.Equal(t, "https://.home.example.com", url)
-}
-
-func TestLayerDisplayURL_CFWithoutDomain(t *testing.T) {
-	env := map[string]string{} // no DOMAIN
-	url := LayerDisplayURL("cf", "gitea", env)
-	assert.Equal(t, "https://gitea.{DOMAIN}", url)
-}
-
 // ── PortEntries integration ────────────────────────────────────────────────
 
 func TestLoadServiceInfo_NewFormat(t *testing.T) {
@@ -375,4 +320,20 @@ func TestCFHost_PrefersGeneratedBlock(t *testing.T) {
 
 	require.NoError(t, WriteFile(dir, "cf", "gitea", "", "http://git.{$DOMAIN} {\n    reverse_proxy gitea:3000\n}\n"))
 	assert.Equal(t, "git", CFHost(dir, "gitea"))
+}
+
+// GeneratedHost reads back every layer configgen writes, including a listen
+// port on the address, and refuses addresses it did not write.
+func TestGeneratedHost_PerLayer(t *testing.T) {
+	dir := t.TempDir()
+	assert.Equal(t, "", GeneratedHost(dir, "private", "gitea"), "no block, no host")
+
+	require.NoError(t, WriteFile(dir, "private", "gitea", "", "git.{$HOME_SUBDOMAIN}.{$DOMAIN}:8443 {\n}\n"))
+	require.NoError(t, WriteFile(dir, "i2p", "gitea", "", "http://"+I2PHost("git", HomeSubdomainVar)+" {\n}\n"))
+	require.NoError(t, WriteFile(dir, "cf", "gitea", "", "http://example.org {\n}\n"))
+	assert.Equal(t, "git", GeneratedHost(dir, "private", "gitea"))
+	assert.Equal(t, "git", GeneratedHost(dir, "i2p", "gitea"))
+	assert.Equal(t, "", GeneratedHost(dir, "cf", "gitea"))
+	assert.Equal(t, "gitea", CFHost(dir, "gitea"), "unreadable block falls back to the declaration")
+	assert.Equal(t, "git", PrivateHost(dir, "gitea"))
 }

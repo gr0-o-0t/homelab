@@ -395,9 +395,7 @@ func scaffoldService(root, name, container, port string, dryRun bool) error {
 
 	fmt.Printf("\n%s  Scaffolded services/%s/\n", styles.Success.Render("✓"), name)
 	fmt.Printf("  %s docker-compose.yml\n", styles.Muted.Render("├──"))
-	fmt.Printf("  %s caddy.conf        %s\n", styles.Muted.Render("├──"), styles.Muted.Render("(private — tailnet)"))
-	fmt.Printf("  %s caddy.cf.conf     %s\n", styles.Muted.Render("├──"), styles.Muted.Render("(Cloudflare Tunnel)"))
-	fmt.Printf("  %s config.yaml       %s\n\n", styles.Muted.Render("└──"), styles.Muted.Render("(vars + secrets schema)"))
+	fmt.Printf("  %s config.yaml       %s\n\n", styles.Muted.Render("└──"), styles.Muted.Render("(vars, secrets, ports — routes are generated from ports)"))
 	fmt.Printf("%s\n", styles.Muted.Render("Next steps:"))
 	fmt.Printf("  1. Edit %s\n", styles.Primary.Render(fmt.Sprintf("services/%s/docker-compose.yml", name)))
 	fmt.Printf("  2. %s\n", styles.Primary.Render(fmt.Sprintf("homelab setup %s", name)))

@@ -1,10 +1,9 @@
 // Package configgen generates Caddy config blocks from service port declarations
 // and extension flags. Used by `homelab enable <service> --cf --i2p ...`.
 //
-// This is the modern routing path alongside the legacy symlink path in
-// caddy.Manager. New services declare ports in config.yaml and this package
-// generates Caddy config directly. Old services ship static caddy.conf files
-// that caddy.Manager symlinks into place.
+// It is the only way a route is written: every service declares ports in
+// config.yaml, optionally with a caddy.routes.conf for routing that is more
+// than one host → one upstream, and this package generates the Caddy config.
 package configgen
 
 import (
@@ -208,7 +207,7 @@ func Generate(req Request) ([]CaddyBlock, error) {
 
 // declaredSubdomain returns the subdomain a service declares, if it declares
 // exactly one. More than one would need more than one site block, which a
-// routes body cannot express — those services keep a static caddy.conf.
+// routes body cannot express.
 func declaredSubdomain(ports config.PortEntries) string {
 	found := ""
 	for _, e := range ports {
@@ -288,25 +287,68 @@ func primaryHTTPPort(ports config.PortEntries) (PortSelection, bool) {
 // it records any --name the service was enabled with — so it is read first;
 // without one, the host is resolved from the declaration as Generate would.
 func CFHost(configRoot, svcName string) string {
-	if data, err := os.ReadFile(GeneratedFilePath(configRoot, "cf", svcName, "")); err == nil {
-		for _, line := range strings.Split(string(data), "\n") {
-			line = strings.TrimSpace(line)
-			if line == "" || strings.HasPrefix(line, "#") {
-				continue
-			}
-			addr := strings.TrimSpace(strings.TrimSuffix(line, "{"))
-			addr = strings.TrimPrefix(strings.TrimPrefix(addr, "http://"), "https://")
-			if label, ok := strings.CutSuffix(addr, ".{$DOMAIN}"); ok && label != "" {
-				return label
-			}
-			break
-		}
+	if host := GeneratedHost(configRoot, "cf", svcName); host != "" {
+		return host
 	}
+	return declaredHost(configRoot, svcName)
+}
+
+// PrivateHost is CFHost for the tailnet layer: the label in front of
+// .<HOME_SUBDOMAIN>.<DOMAIN>.
+func PrivateHost(configRoot, svcName string) string {
+	if host := GeneratedHost(configRoot, "private", svcName); host != "" {
+		return host
+	}
+	return declaredHost(configRoot, svcName)
+}
+
+// declaredHost resolves a service's host label from its declaration alone, as
+// Generate would with no --name.
+func declaredHost(configRoot, svcName string) string {
 	info, err := LoadServiceInfo(configRoot, svcName)
 	if err != nil {
 		return svcName
 	}
 	return SiteHost(info, "")
+}
+
+// hostSuffix is the part of each layer's site address after the host label,
+// as domainForExt and I2PHost write it.
+var hostSuffix = map[string]string{
+	"private": ".{$HOME_SUBDOMAIN}.{$DOMAIN}",
+	"cf":      ".{$DOMAIN}",
+	extI2P:    "." + HomeSubdomainVar + ".i2p",
+}
+
+// GeneratedHost reads the host label back out of a service's generated block
+// for a layer — the one place a --name it was enabled with is recorded. It
+// returns "" when the layer has no block for the service, or the block's
+// address is not one this package wrote.
+func GeneratedHost(configRoot, ext, svcName string) string {
+	suffix, ok := hostSuffix[ext]
+	if !ok {
+		return ""
+	}
+	data, err := os.ReadFile(GeneratedFilePath(configRoot, ext, svcName, ""))
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		addr := strings.TrimSpace(strings.TrimSuffix(line, "{"))
+		addr = strings.TrimPrefix(strings.TrimPrefix(addr, "http://"), "https://")
+		if i := strings.LastIndex(addr, "}:"); i >= 0 {
+			addr = addr[:i+1] // drop a listen port
+		}
+		if label, ok := strings.CutSuffix(addr, suffix); ok && label != "" {
+			return label
+		}
+		return ""
+	}
+	return ""
 }
 
 // PrimaryPort picks the port a routes-driven service should report to the
@@ -558,52 +600,6 @@ func siteAddress(displayName, ext string, port PortSelection) string {
 	return addr
 }
 
-// LayerDisplayURL returns the human-readable access URL for a service on the
-// given network extension layer. The URL is cosmetic — it matches how Caddy
-// routes traffic for this service+layer combination, not the actual network
-// address (e.g. Tor .onion addresses are opaque hashes; the displayed URL is
-// the Caddy vhost pattern).
-//
-//   - private: https://<name>.{$HOME_SUBDOMAIN}.{$DOMAIN}
-//   - cf:      https://<name>.{$DOMAIN}
-//   - tor:     http://<name>.onion (via Caddy)
-//   - i2p:     http://<name>.i2p (via Caddy)
-//   - ygg:     a placeholder — the real URL is http://[<node address>]:<port>,
-//     and neither part is knowable here (see `homelab ygg list`)
-//
-// ext is one of "private", "cf", "tor", "i2p", "ygg".
-// env provides HOME_SUBDOMAIN and DOMAIN for URL template substitution.
-// Returns empty string for unknown extensions.
-func LayerDisplayURL(ext, displayName string, env map[string]string) string {
-	switch ext {
-	case "private":
-		sub := env["HOME_SUBDOMAIN"]
-		dom := env["DOMAIN"]
-		if sub != "" && dom != "" {
-			return fmt.Sprintf("https://%s.%s.%s", displayName, sub, dom)
-		}
-		return fmt.Sprintf("https://%s.{HOME_SUBDOMAIN}.{DOMAIN}", displayName)
-	case "cf":
-		dom := env["DOMAIN"]
-		if dom != "" {
-			return fmt.Sprintf("https://%s.%s", displayName, dom)
-		}
-		return fmt.Sprintf("https://%s.{DOMAIN}", displayName)
-	case "tor":
-		return fmt.Sprintf("http://%s.onion (via Caddy)", displayName)
-	case extI2P:
-		return fmt.Sprintf("http://%s.i2p (via Caddy)", displayName)
-	case "ygg":
-		// No naming on the mesh: the URL is the node address and the allocated
-		// port, neither of which is knowable from a display name. Callers that
-		// can reach the node and socat.d use ygg.ServiceURL instead — which is
-		// all of them today; this is the fallback, kept in shape with it.
-		// (configgen cannot call it: the ygg layer imports this package.)
-		return "http://[<node address: homelab ygg status>]"
-	}
-	return ""
-}
-
 // ExtensionLabel returns a human-readable label for an extension.
 func ExtensionLabel(ext string) string {
 	switch ext {
@@ -676,9 +672,9 @@ func RemoveFile(configRoot, ext, svcName, portName string) error {
 // service declares under the given extension. Since a multi-port service
 // gets one generated file per port (see PortFileName), removing only the
 // default-named file (portName "") would orphan the rest. Falls back to a
-// single default-name removal for services with no declared ports (legacy
-// static-caddy.conf services, or a config.yaml with none at all) — that's
-// the only file that could exist for them.
+// single default-name removal for services with no declared ports — that's
+// the only file that could exist for them (and the name a symlink from the
+// retired static-caddy.conf scheme would have, so disable still clears one).
 func RemoveAllPortFiles(configRoot, ext, svcName string) error {
 	info, err := LoadServiceInfo(configRoot, svcName)
 	// A routes-driven service has exactly one file per layer regardless of how

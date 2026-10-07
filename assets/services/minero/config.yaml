@@ -12,5 +12,11 @@ vars:
     value: "127.0.0.1"
     required: false
     description: "Host IP to publish the monerod (18080) and p2pool (37888) P2P ports on. Loopback disables incoming peers; set to the host's LAN IP (with a router forward) to accept them"
+# Only monerod's restricted RPC (18089) speaks HTTP, so it is the only route:
+# caddy.routes.conf sends minero.<home>.<domain> to it (the container is
+# `monerod`, not `minero`). P2P (18080), ZMQ (18084) and p2pool stratum (3333)
+# are raw TCP that an HTTP proxy cannot carry; the P2P ports are published on
+# P2P_BIND_IP in docker-compose.yml, and ZMQ/stratum stay on the internal
+# network where p2pool and xmrig reach them.
 ports:
-  - 18080
+  - 18089

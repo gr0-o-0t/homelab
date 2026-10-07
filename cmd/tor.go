@@ -131,7 +131,7 @@ Docker volume. If the volume is removed, the address changes.
 After enabling, the .onion address can be found with:
   homelab tor list
 
-Use --port to override the port detected from caddy.conf.`,
+Use --port to override the port declared in config.yaml.`,
 	Args:              cobra.ExactArgs(1),
 	ValidArgsFunction: completeServiceNames,
 	RunE: func(cmd *cobra.Command, args []string) error {

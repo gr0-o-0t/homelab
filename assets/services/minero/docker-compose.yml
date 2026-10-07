@@ -13,8 +13,8 @@ networks:
 services:
   monerod:
     image: ghcr.io/gr0-o-0t/minero-monerod:latest
-    # caddy.conf proxies to `monerod`/`p2pool`; without container_name those
-    # resolve only via the compose service alias, and `homelab status` has no
+    # caddy.routes.conf proxies to `monerod`; without container_name that
+    # resolves only via the compose service alias, and `homelab status` has no
     # stable name to show. Every other service in the catalog sets this.
     container_name: monerod
     user: 1000:1000

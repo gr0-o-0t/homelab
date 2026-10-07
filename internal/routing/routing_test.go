@@ -27,9 +27,7 @@ func writeSvc(t *testing.T, root, name string, files map[string]string) {
 	}
 }
 
-// A service that declares ports and ships no caddy.conf gets a generated
-// block. The TUI could not do this before — it only ever tried the symlink —
-// so the same key did different things there and on the CLI.
+// A service that declares ports gets a generated block.
 func TestEnablePrivate_GeneratesFromDeclaredPorts(t *testing.T) {
 	root := repo(t)
 	writeSvc(t, root, "gitea", map[string]string{"config.yaml": "ports:\n  - web:3000\n"})
@@ -42,7 +40,7 @@ func TestEnablePrivate_GeneratesFromDeclaredPorts(t *testing.T) {
 	assert.Contains(t, string(data), "import wildcard_tls")
 }
 
-// A service with no ports, no routes and no caddy.conf cannot be routed, and
+// A service with no ports and no routes cannot be routed, and
 // says so instead of writing an empty block.
 func TestEnablePrivate_HeadlessServiceIsAnError(t *testing.T) {
 	root := repo(t)

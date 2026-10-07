@@ -139,26 +139,12 @@ func writeSvc(t *testing.T, root, name string, files map[string]string) {
 func TestDetectServicePort_PrefersDeclaredPorts(t *testing.T) {
 	root := t.TempDir()
 	writeSvc(t, root, "gitea", map[string]string{
-		"config.yaml": "ports:\n  - web:3000\n",
-		// A stale generated file that disagrees — the declaration wins.
-		"caddy.conf": "gitea.home {\n    reverse_proxy gitea:9999\n}\n",
+		"config.yaml": "ports:\n  - 3000\n",
 	})
 
 	port, err := detectServicePort(root, "gitea")
 	require.NoError(t, err)
 	assert.Equal(t, "3000", port)
-}
-
-// Legacy services ship a static caddy.conf and declare no ports.
-func TestDetectServicePort_FallsBackToCaddyConf(t *testing.T) {
-	root := t.TempDir()
-	writeSvc(t, root, "legacy", map[string]string{
-		"caddy.conf": "legacy.home {\n    reverse_proxy legacy:8080\n}\n",
-	})
-
-	port, err := detectServicePort(root, "legacy")
-	require.NoError(t, err)
-	assert.Equal(t, "8080", port)
 }
 
 func TestDetectServicePort_NeitherSource(t *testing.T) {

@@ -117,32 +117,8 @@ func TestDiscover_BasicService(t *testing.T) {
 	svc := svcs[0]
 	assert.Equal(t, "myapp", svc.Name)
 	assert.Equal(t, filepath.Join(repo, "services", "myapp"), svc.Dir)
-	assert.False(t, svc.HasCaddyConf)
-	assert.False(t, svc.HasPublicCaddyConf)
 	assert.False(t, svc.Enabled)
 	assert.False(t, svc.PublicEnabled)
-}
-
-func TestDiscover_HasCaddyConf(t *testing.T) {
-	repo := newRepo(t)
-	addService(t, repo, "myapp", "caddy.conf", "# conf\n")
-
-	svcs, err := service.Discover(repo)
-	require.NoError(t, err)
-	require.Len(t, svcs, 1)
-	assert.True(t, svcs[0].HasCaddyConf)
-	assert.False(t, svcs[0].HasPublicCaddyConf)
-}
-
-func TestDiscover_HasPublicCaddyConf(t *testing.T) {
-	repo := newRepo(t)
-	addService(t, repo, "myapp", "caddy.cf.conf", "# pub conf\n")
-
-	svcs, err := service.Discover(repo)
-	require.NoError(t, err)
-	require.Len(t, svcs, 1)
-	assert.False(t, svcs[0].HasCaddyConf)
-	assert.True(t, svcs[0].HasPublicCaddyConf)
 }
 
 func TestDiscover_PrivateEnabled(t *testing.T) {
@@ -290,4 +266,23 @@ func TestDiscover_ExtensionLayerWithoutService(t *testing.T) {
 	require.NoError(t, err)
 	// The non-existent service should not appear in the list at all
 	assert.Empty(t, svcs, "no service dir → no discovery, even with orphaned config")
+}
+
+func TestDiscover_NamedPortCountsAsExposed(t *testing.T) {
+	repo := newRepo(t)
+	addService(t, repo, "vaultwarden")
+	addService(t, repo, "vault") // a prefix sibling must not borrow its files
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "services", "vaultwarden", "config.yaml"),
+		[]byte("ports:\n  - vault:80\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "caddy", "conf.d", "vaultwarden-vault.conf"),
+		[]byte("# generated"), 0o644))
+
+	svcs, err := service.Discover(repo)
+	require.NoError(t, err)
+	byName := map[string]service.Service{}
+	for _, s := range svcs {
+		byName[s.Name] = s
+	}
+	assert.True(t, byName["vaultwarden"].Enabled, "<svc>-<port>.conf is a private route")
+	assert.False(t, byName["vault"].Enabled)
 }

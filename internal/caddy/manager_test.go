@@ -12,412 +12,138 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/groot/homelab/internal/configgen"
 )
-
-// ── repo fixture helpers ──────────────────────────────────────────────────────
-
-func newRepo(t *testing.T) string {
-	t.Helper()
-	dir := t.TempDir()
-	for _, d := range []string{
-		"caddy/conf.d",
-		"caddy/conf.d-cf",
-		"services",
-	} {
-		require.NoError(t, os.MkdirAll(filepath.Join(dir, d), 0o755))
-	}
-	return dir
-}
-
-func addService(t *testing.T, repo, name string) {
-	t.Helper()
-	svcDir := filepath.Join(repo, "services", name)
-	require.NoError(t, os.MkdirAll(svcDir, 0o755))
-}
-
-func writeCaddyConf(t *testing.T, repo, name string) {
-	t.Helper()
-	path := filepath.Join(repo, "services", name, "caddy.conf")
-	require.NoError(t, os.WriteFile(path, []byte("# caddy.conf\n"), 0o644))
-}
-
-func writePubCaddyConf(t *testing.T, repo, name string) {
-	t.Helper()
-	path := filepath.Join(repo, "services", name, "caddy.cf.conf")
-	require.NoError(t, os.WriteFile(path, []byte("# caddy.cf.conf\n"), 0o644))
-}
 
 // noopReload is injected in every test to skip Docker exec.
 func noopReload() error { return nil }
 
-// mgr returns a test Manager with a no-op reload.
-func mgr(t *testing.T, repo string) *Manager {
+// writeSvc lays out an installed service with the given files.
+func writeSvc(t *testing.T, root, name string, files map[string]string) {
 	t.Helper()
-	return newForTest(repo, noopReload)
+	dir := filepath.Join(root, "services", name)
+	require.NoError(t, os.MkdirAll(dir, 0o750))
+	for f, body := range files {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, f), []byte(body), 0o600))
+	}
 }
 
-// ── Enable ────────────────────────────────────────────────────────────────────
+const routesBody = "handle /api/* {\n\treverse_proxy svc-api:8000\n}\n\nhandle {\n\treverse_proxy svc:80\n}\n"
 
-func TestEnable_CreatesSymlink(t *testing.T) {
-	repo := newRepo(t)
-	addService(t, repo, "myapp")
-	writeCaddyConf(t, repo, "myapp")
-
-	require.NoError(t, mgr(t, repo).Enable("myapp"))
-
-	dest := filepath.Join(repo, "caddy", "conf.d", "myapp.conf")
-	fi, err := os.Lstat(dest)
+func read(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
 	require.NoError(t, err)
-	assert.True(t, fi.Mode()&os.ModeSymlink != 0, "should be a symlink")
+	return string(data)
 }
 
-func TestEnable_SymlinkIsRelative(t *testing.T) {
-	repo := newRepo(t)
-	addService(t, repo, "myapp")
-	writeCaddyConf(t, repo, "myapp")
+// ── ReloadService ─────────────────────────────────────────────────────────────
 
-	require.NoError(t, mgr(t, repo).Enable("myapp"))
+// A reload must refresh the layers that are on without switching on the ones
+// that are off.
+func TestReloadService_Routes_OnlyTouchesActiveLayers(t *testing.T) {
+	root := t.TempDir()
+	writeSvc(t, root, "appflowy", map[string]string{
+		"config.yaml": "ports:\n  - 80\n", configgen.RoutesFileName: routesBody,
+	})
+	privatePath := configgen.GeneratedFilePath(root, "private", "appflowy", "")
+	cfPath := configgen.GeneratedFilePath(root, "cf", "appflowy", "")
+	require.NoError(t, configgen.WriteFile(root, "private", "appflowy", "", "stale\n"))
 
-	dest := filepath.Join(repo, "caddy", "conf.d", "myapp.conf")
-	target, err := os.Readlink(dest)
-	require.NoError(t, err)
-	assert.False(t, filepath.IsAbs(target),
-		"symlink target must be relative for portability, got: %s", target)
-	assert.Equal(t, filepath.Join("..", "..", "services", "myapp", "caddy.conf"), target)
+	require.NoError(t, newForTest(root, noopReload).ReloadService("appflowy"))
+
+	assert.Contains(t, read(t, privatePath), "reverse_proxy svc-api:8000", "active layer should be regenerated")
+	assert.NoFileExists(t, cfPath, "reload must not enable a layer the user left off")
 }
 
-func TestEnable_ErrorWhenNoCaddyConf(t *testing.T) {
-	repo := newRepo(t)
-	addService(t, repo, "myapp") // no caddy.conf
+// Port-driven services — most of the catalog — have no symlink and no routes
+// file. Reload used to fail on them with "no active routes".
+func TestReloadService_Ports_RegeneratesAndKeepsName(t *testing.T) {
+	root := t.TempDir()
+	writeSvc(t, root, "gitea", map[string]string{"config.yaml": "ports:\n  - 3000\n"})
+	priv := configgen.GeneratedFilePath(root, "private", "gitea", "")
+	cf := configgen.GeneratedFilePath(root, "cf", "gitea", "")
+	// Enabled earlier with --name git on both layers; the upstream port since changed.
+	require.NoError(t, configgen.WriteFile(root, "private", "gitea", "",
+		"git.{$HOME_SUBDOMAIN}.{$DOMAIN} {\n    reverse_proxy gitea:2000\n}\n"))
+	require.NoError(t, configgen.WriteFile(root, "cf", "gitea", "",
+		"http://git.{$DOMAIN} {\n    reverse_proxy gitea:2000\n}\n"))
 
-	err := mgr(t, repo).Enable("myapp")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "caddy.conf")
+	reloads := 0
+	m := newForTest(root, func() error { reloads++; return nil })
+	require.NoError(t, m.ReloadService("gitea"))
+
+	assert.Contains(t, read(t, priv), "git.{$HOME_SUBDOMAIN}.{$DOMAIN} {")
+	assert.Contains(t, read(t, priv), "reverse_proxy gitea:3000")
+	assert.Contains(t, read(t, cf), "http://git.{$DOMAIN} {")
+	assert.Contains(t, read(t, cf), "reverse_proxy gitea:3000")
+	assert.Equal(t, 1, reloads, "every layer is rewritten, then Caddy reloads once")
 }
 
-func TestEnable_ReplacesStaleSymlink(t *testing.T) {
-	repo := newRepo(t)
-	addService(t, repo, "myapp")
-	writeCaddyConf(t, repo, "myapp")
-
-	m := mgr(t, repo)
-	require.NoError(t, m.Enable("myapp")) // first enable
-	require.NoError(t, m.Enable("myapp")) // second enable should not error
-
-	dest := filepath.Join(repo, "caddy", "conf.d", "myapp.conf")
-	fi, err := os.Lstat(dest)
-	require.NoError(t, err)
-	assert.True(t, fi.Mode()&os.ModeSymlink != 0)
+func TestReloadService_NothingActive(t *testing.T) {
+	root := t.TempDir()
+	writeSvc(t, root, "gitea", map[string]string{"config.yaml": "ports:\n  - 3000\n"})
+	err := newForTest(root, noopReload).ReloadService("gitea")
+	assert.ErrorContains(t, err, "no active routes",
+		"reloading a service with no enabled layer should say so, not silently succeed")
+	assert.NoFileExists(t, configgen.GeneratedFilePath(root, "private", "gitea", ""))
 }
 
-func TestEnable_PropagatesReloadError(t *testing.T) {
-	repo := newRepo(t)
-	addService(t, repo, "myapp")
-	writeCaddyConf(t, repo, "myapp")
-
-	reloadErr := errors.New("caddy config invalid")
-	m := newForTest(repo, func() error { return reloadErr })
-
-	err := m.Enable("myapp")
-	assert.ErrorIs(t, err, reloadErr)
-}
-
-// ── Disable ───────────────────────────────────────────────────────────────────
-
-func TestDisable_RemovesSymlink(t *testing.T) {
-	repo := newRepo(t)
-	addService(t, repo, "myapp")
-	writeCaddyConf(t, repo, "myapp")
-	m := mgr(t, repo)
-	require.NoError(t, m.Enable("myapp"))
-
-	require.NoError(t, m.Disable("myapp"))
-
-	dest := filepath.Join(repo, "caddy", "conf.d", "myapp.conf")
-	_, err := os.Lstat(dest)
-	assert.True(t, os.IsNotExist(err), "symlink should be gone after Disable")
-}
-
-func TestDisable_ErrorWhenNotEnabled(t *testing.T) {
-	repo := newRepo(t)
-	addService(t, repo, "myapp")
-
-	err := mgr(t, repo).Disable("myapp")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "no active private route")
-}
-
-func TestDisable_RefusesRegularFile(t *testing.T) {
-	repo := newRepo(t)
-	// Write a plain file where the symlink would go — should refuse to remove it.
-	dest := filepath.Join(repo, "caddy", "conf.d", "myapp.conf")
-	require.NoError(t, os.WriteFile(dest, []byte("# real file"), 0o644))
-
-	err := mgr(t, repo).Disable("myapp")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "not a symlink")
-}
-
-// ── IsEnabled ─────────────────────────────────────────────────────────────────
-
-func TestIsEnabled_TrueAfterEnable(t *testing.T) {
-	repo := newRepo(t)
-	addService(t, repo, "myapp")
-	writeCaddyConf(t, repo, "myapp")
-	m := mgr(t, repo)
-	require.NoError(t, m.Enable("myapp"))
-
-	ok, err := m.IsEnabled("myapp")
-	require.NoError(t, err)
-	assert.True(t, ok)
-}
-
-func TestIsEnabled_FalseWhenNotEnabled(t *testing.T) {
-	repo := newRepo(t)
-	ok, err := mgr(t, repo).IsEnabled("myapp")
-	require.NoError(t, err)
-	assert.False(t, ok)
-}
-
-func TestIsEnabled_FalseAfterDisable(t *testing.T) {
-	repo := newRepo(t)
-	addService(t, repo, "myapp")
-	writeCaddyConf(t, repo, "myapp")
-	m := mgr(t, repo)
-	require.NoError(t, m.Enable("myapp"))
-	require.NoError(t, m.Disable("myapp"))
-
-	ok, err := m.IsEnabled("myapp")
-	require.NoError(t, err)
-	assert.False(t, ok)
-}
-
-// ── EnablePublic ──────────────────────────────────────────────────────────────
-
-func TestEnablePublic_CreatesSymlink(t *testing.T) {
-	repo := newRepo(t)
-	addService(t, repo, "myapp")
-	writePubCaddyConf(t, repo, "myapp")
-
-	require.NoError(t, mgr(t, repo).EnablePublic("myapp"))
-
-	dest := filepath.Join(repo, "caddy", "conf.d-cf", "myapp.conf")
-	fi, err := os.Lstat(dest)
-	require.NoError(t, err)
-	assert.True(t, fi.Mode()&os.ModeSymlink != 0)
-}
-
-func TestEnablePublic_SymlinkIsRelative(t *testing.T) {
-	repo := newRepo(t)
-	addService(t, repo, "myapp")
-	writePubCaddyConf(t, repo, "myapp")
-	require.NoError(t, mgr(t, repo).EnablePublic("myapp"))
-
-	dest := filepath.Join(repo, "caddy", "conf.d-cf", "myapp.conf")
-	target, err := os.Readlink(dest)
-	require.NoError(t, err)
-	assert.False(t, filepath.IsAbs(target))
-	assert.Equal(t, filepath.Join("..", "..", "services", "myapp", "caddy.cf.conf"), target)
-}
-
-func TestEnablePublic_ErrorWhenNoPublicCaddyConf(t *testing.T) {
-	repo := newRepo(t)
-	addService(t, repo, "myapp") // no caddy.cf.conf
-
-	err := mgr(t, repo).EnablePublic("myapp")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "caddy.cf.conf")
-}
-
-// ── DisablePublic ─────────────────────────────────────────────────────────────
-
-func TestDisablePublic_RemovesSymlink(t *testing.T) {
-	repo := newRepo(t)
-	addService(t, repo, "myapp")
-	writePubCaddyConf(t, repo, "myapp")
-	m := mgr(t, repo)
-	require.NoError(t, m.EnablePublic("myapp"))
-	require.NoError(t, m.DisablePublic("myapp"))
-
-	dest := filepath.Join(repo, "caddy", "conf.d-cf", "myapp.conf")
-	_, err := os.Lstat(dest)
-	assert.True(t, os.IsNotExist(err))
-}
-
-func TestDisablePublic_ErrorWhenNotEnabled(t *testing.T) {
-	repo := newRepo(t)
-	err := mgr(t, repo).DisablePublic("myapp")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "no active public route")
-}
-
-// ── IsPublicEnabled ───────────────────────────────────────────────────────────
-
-func TestIsPublicEnabled_TrueAfterEnable(t *testing.T) {
-	repo := newRepo(t)
-	addService(t, repo, "myapp")
-	writePubCaddyConf(t, repo, "myapp")
-	m := mgr(t, repo)
-	require.NoError(t, m.EnablePublic("myapp"))
-
-	ok, err := m.IsPublicEnabled("myapp")
-	require.NoError(t, err)
-	assert.True(t, ok)
-}
-
-func TestIsPublicEnabled_FalseWhenNotEnabled(t *testing.T) {
-	repo := newRepo(t)
-	ok, err := mgr(t, repo).IsPublicEnabled("myapp")
-	require.NoError(t, err)
-	assert.False(t, ok)
-}
-
-// ── DisableBoth ───────────────────────────────────────────────────────────────
-
-func TestDisableBoth_RemovesBothSymlinks(t *testing.T) {
-	repo := newRepo(t)
-	addService(t, repo, "myapp")
-	writeCaddyConf(t, repo, "myapp")
-	writePubCaddyConf(t, repo, "myapp")
-	m := mgr(t, repo)
-	require.NoError(t, m.Enable("myapp"))
-	require.NoError(t, m.EnablePublic("myapp"))
-
-	require.NoError(t, m.DisableBoth("myapp"))
-
-	privDest := filepath.Join(repo, "caddy", "conf.d", "myapp.conf")
-	pubDest := filepath.Join(repo, "caddy", "conf.d-cf", "myapp.conf")
-	_, errPriv := os.Lstat(privDest)
-	_, errPub := os.Lstat(pubDest)
-	assert.True(t, os.IsNotExist(errPriv), "private symlink should be removed")
-	assert.True(t, os.IsNotExist(errPub), "public symlink should be removed")
-}
-
-func TestDisableBoth_IdempotentWhenNeitherEnabled(t *testing.T) {
-	repo := newRepo(t)
-	// Neither symlink exists — DisableBoth should still succeed.
-	assert.NoError(t, mgr(t, repo).DisableBoth("myapp"))
-}
-
-func TestDisableBoth_PartialState_OnlyPrivateEnabled(t *testing.T) {
-	repo := newRepo(t)
-	addService(t, repo, "myapp")
-	writeCaddyConf(t, repo, "myapp")
-	m := mgr(t, repo)
-	require.NoError(t, m.Enable("myapp"))
-	// Public is NOT enabled.
-
-	require.NoError(t, m.DisableBoth("myapp"))
-
-	privDest := filepath.Join(repo, "caddy", "conf.d", "myapp.conf")
-	_, err := os.Lstat(privDest)
-	assert.True(t, os.IsNotExist(err))
-}
-
-func TestDisableBoth_RemovesRegularFile(t *testing.T) {
-	repo := newRepo(t)
-	// Simulate a generated config file (regular file) where the symlink should be.
-	dest := filepath.Join(repo, "caddy", "conf.d", "myapp.conf")
-	require.NoError(t, os.WriteFile(dest, []byte("# generated config"), 0o644))
-
-	// Should succeed — generated files are removed by configgen.RemoveFile path.
-	err := mgr(t, repo).DisableBoth("myapp")
-	require.NoError(t, err)
-
-	// Verify the file was removed.
-	_, err = os.Lstat(dest)
-	assert.True(t, os.IsNotExist(err))
-}
-
-// ── ReloadService / rollback ─────────────────────────────────────────────────
-
-// A caddy.cf.conf on disk means the service *can* go public, not that it is.
-// Reload used to link every static file it found, publishing the service.
-func TestReloadService_Static_OnlyRelinksActiveLayers(t *testing.T) {
-	repo := newRepo(t)
-	addService(t, repo, "myapp")
-	writeCaddyConf(t, repo, "myapp")
-	writePubCaddyConf(t, repo, "myapp")
-	m := mgr(t, repo)
-	require.NoError(t, m.Enable("myapp"))
-
-	require.NoError(t, m.ReloadService("myapp"))
-
-	pub, err := m.IsPublicEnabled("myapp")
-	require.NoError(t, err)
-	assert.False(t, pub, "reload must not enable the cf layer")
-	priv, err := m.IsEnabled("myapp")
-	require.NoError(t, err)
-	assert.True(t, priv)
-}
-
-func TestReloadService_Static_NothingActive(t *testing.T) {
-	repo := newRepo(t)
-	addService(t, repo, "myapp")
-	writeCaddyConf(t, repo, "myapp")
-	assert.Error(t, mgr(t, repo).ReloadService("myapp"))
-	_, err := os.Lstat(filepath.Join(repo, "caddy", "conf.d", "myapp.conf"))
-	assert.True(t, os.IsNotExist(err))
-}
+// ── Rollback ──────────────────────────────────────────────────────────────────
 
 // A config Caddy rejects must not stay on disk: Caddy would refuse to start at
 // its next restart, taking every route down.
-func TestEnable_RollsBackWhenValidationFails(t *testing.T) {
-	repo := newRepo(t)
-	addService(t, repo, "myapp")
-	writeCaddyConf(t, repo, "myapp")
-	other := filepath.Join(repo, "caddy", "conf.d", "other.conf")
+func TestReloadService_RollsBackWhenValidationFails(t *testing.T) {
+	root := t.TempDir()
+	writeSvc(t, root, "gitea", map[string]string{"config.yaml": "ports:\n  - 3000\n"})
+	require.NoError(t, configgen.WriteFile(root, "private", "gitea", "", "old\n"))
+	other := filepath.Join(configgen.ConfigDir(root, "private"), "other.conf")
 	require.NoError(t, os.WriteFile(other, []byte("# kept\n"), 0o600))
 
-	m := newForTest(repo, func() error { return fmt.Errorf("%w: bad", ErrInvalidConfig) })
-	err := m.Enable("myapp")
+	m := newForTest(root, func() error { return fmt.Errorf("%w: bad", ErrInvalidConfig) })
+	err := m.ReloadService("gitea")
 	require.ErrorIs(t, err, ErrInvalidConfig)
 	assert.Contains(t, err.Error(), "rolled back")
 
-	_, err = os.Lstat(filepath.Join(repo, "caddy", "conf.d", "myapp.conf"))
-	assert.True(t, os.IsNotExist(err), "the new link must be removed")
-	data, err := os.ReadFile(other)
-	require.NoError(t, err)
-	assert.Equal(t, "# kept\n", string(data), "unrelated config is untouched")
-}
-
-// Snapshot/Restore is what cmd/enable uses around writes made by other hands.
-func TestSnapshot_RestoreUndoesAddsChangesAndRemovals(t *testing.T) {
-	repo := newRepo(t)
-	dir := filepath.Join(repo, "caddy", "conf.d-cf")
-	changed := filepath.Join(dir, "changed.conf")
-	removed := filepath.Join(dir, "removed.conf")
-	require.NoError(t, os.WriteFile(changed, []byte("old\n"), 0o600))
-	require.NoError(t, os.WriteFile(removed, []byte("gone\n"), 0o600))
-
-	m := mgr(t, repo)
-	snap, err := m.Snapshot()
-	require.NoError(t, err)
-
-	require.NoError(t, os.WriteFile(changed, []byte("new\n"), 0o600))
-	require.NoError(t, os.Remove(removed))
-	require.NoError(t, os.MkdirAll(filepath.Join(repo, "caddy", "conf.d-tor"), 0o750))
-	added := filepath.Join(repo, "caddy", "conf.d-tor", "added.conf")
-	require.NoError(t, os.WriteFile(added, []byte("x\n"), 0o600))
-
-	require.NoError(t, snap.Restore())
-
-	data, _ := os.ReadFile(changed)
-	assert.Equal(t, "old\n", string(data))
-	data, _ = os.ReadFile(removed)
-	assert.Equal(t, "gone\n", string(data))
-	_, err = os.Stat(added)
-	assert.True(t, os.IsNotExist(err))
+	assert.Equal(t, "old\n", read(t, configgen.GeneratedFilePath(root, "private", "gitea", "")))
+	assert.Equal(t, "# kept\n", read(t, other), "unrelated config is untouched")
 }
 
 // Only a validation failure rolls back; any other reload error (Caddy down)
 // leaves the change in place for the next start.
 func TestReloadOrRestore_KeepsChangeOnOtherErrors(t *testing.T) {
-	repo := newRepo(t)
-	addService(t, repo, "myapp")
-	writeCaddyConf(t, repo, "myapp")
-	m := newForTest(repo, func() error { return errors.New("caddy not running") })
-	require.Error(t, m.Enable("myapp"))
-	_, err := os.Lstat(filepath.Join(repo, "caddy", "conf.d", "myapp.conf"))
-	assert.NoError(t, err)
+	root := t.TempDir()
+	writeSvc(t, root, "gitea", map[string]string{"config.yaml": "ports:\n  - 3000\n"})
+	require.NoError(t, configgen.WriteFile(root, "private", "gitea", "", "old\n"))
+
+	m := newForTest(root, func() error { return errors.New("caddy not running") })
+	require.Error(t, m.ReloadService("gitea"))
+	assert.Contains(t, read(t, configgen.GeneratedFilePath(root, "private", "gitea", "")), "reverse_proxy gitea:3000")
+}
+
+// Snapshot/Restore is what cmd/enable uses around writes made by other hands.
+func TestSnapshot_RestoreUndoesAddsChangesAndRemovals(t *testing.T) {
+	repo := t.TempDir()
+	dir := configgen.ConfigDir(repo, "cf")
+	require.NoError(t, os.MkdirAll(dir, 0o750))
+	changed := filepath.Join(dir, "changed.conf")
+	removed := filepath.Join(dir, "removed.conf")
+	require.NoError(t, os.WriteFile(changed, []byte("old\n"), 0o600))
+	require.NoError(t, os.WriteFile(removed, []byte("gone\n"), 0o600))
+
+	snap, err := newForTest(repo, noopReload).Snapshot()
+	require.NoError(t, err)
+
+	require.NoError(t, os.WriteFile(changed, []byte("new\n"), 0o600))
+	require.NoError(t, os.Remove(removed))
+	require.NoError(t, os.MkdirAll(configgen.ConfigDir(repo, "tor"), 0o750))
+	added := filepath.Join(configgen.ConfigDir(repo, "tor"), "added.conf")
+	require.NoError(t, os.WriteFile(added, []byte("x\n"), 0o600))
+
+	require.NoError(t, snap.Restore())
+
+	assert.Equal(t, "old\n", read(t, changed))
+	assert.Equal(t, "gone\n", read(t, removed))
+	assert.NoFileExists(t, added)
 }

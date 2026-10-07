@@ -112,10 +112,9 @@ services:
     volumes:
       # Main Caddyfile
       - ../caddy/Caddyfile:/etc/caddy/Caddyfile:ro
-      # Every conf.d* dir the Caddyfile imports must be mounted here, plus
-      # services, under a shared /homelab/ prefix so that relative symlinks
-      # (../../services/…) from conf.d/ resolve to /homelab/services/… in the
-      # container — matching the host repo layout. A missing mount is silent:
+      # Every conf.d* dir the Caddyfile imports must be mounted here, under
+      # /homelab/. Generated site blocks are self-contained, so Caddy gets no
+      # access to services/ (and its config.yaml files). A missing mount is silent:
       # Caddy treats an import glob that matches nothing as a no-op, so the
       # layer just never routes.
       - ../caddy/conf.d:/homelab/caddy/conf.d:ro
@@ -123,7 +122,6 @@ services:
       - ../caddy/conf.d-i2p:/homelab/caddy/conf.d-i2p:ro
       - ../caddy/conf.d-tor:/homelab/caddy/conf.d-tor:ro
       - ../caddy/conf.d-ygg:/homelab/caddy/conf.d-ygg:ro
-      - ../services:/homelab/services:ro
       # Persistent ACME certs and Caddy state — never delete this volume!
       - caddy-data:/data
       - caddy-config:/config

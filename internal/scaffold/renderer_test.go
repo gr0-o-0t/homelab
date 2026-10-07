@@ -3,12 +3,12 @@ package scaffold_test
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/groot/homelab/internal/configgen"
 	"github.com/groot/homelab/internal/scaffold"
 )
 
@@ -20,12 +20,6 @@ var testData = scaffold.ServiceData{
 
 // ── Render ────────────────────────────────────────────────────────────────────
 
-func TestRender_ProducesFourFiles(t *testing.T) {
-	files, err := scaffold.Render(testData)
-	require.NoError(t, err)
-	require.Len(t, files, 4, "expected docker-compose, caddy.conf, caddy.cf.conf, config.yaml")
-}
-
 func TestRender_ExpectedPaths(t *testing.T) {
 	files, err := scaffold.Render(testData)
 	require.NoError(t, err)
@@ -34,10 +28,10 @@ func TestRender_ExpectedPaths(t *testing.T) {
 	for i, f := range files {
 		paths[i] = f.RelPath
 	}
-	assert.Contains(t, paths, "services/myapp/docker-compose.yml")
-	assert.Contains(t, paths, "services/myapp/caddy.conf")
-	assert.Contains(t, paths, "services/myapp/caddy.cf.conf")
-	assert.Contains(t, paths, "services/myapp/config.yaml")
+	assert.ElementsMatch(t, []string{
+		"services/myapp/docker-compose.yml",
+		"services/myapp/config.yaml",
+	}, paths, "routes are generated from ports:, so no caddy file is scaffolded")
 }
 
 func TestRender_DockerCompose_ContainsServiceName(t *testing.T) {
@@ -49,27 +43,6 @@ func TestRender_DockerCompose_ContainsServiceName(t *testing.T) {
 	assert.Contains(t, compose, "home-services", "should join the shared network")
 }
 
-func TestRender_PrivateCaddyConf(t *testing.T) {
-	files, err := scaffold.Render(testData)
-	require.NoError(t, err)
-
-	conf := findFile(t, files, "services/myapp/caddy.conf")
-	assert.Contains(t, conf, "myapp.{$HOME_SUBDOMAIN}.{$DOMAIN}",
-		"private caddy.conf should use HOME_SUBDOMAIN")
-	assert.Contains(t, conf, "reverse_proxy myapp-server:3000")
-	assert.Contains(t, conf, "import wildcard_tls")
-}
-
-func TestRender_PublicCaddyConf(t *testing.T) {
-	files, err := scaffold.Render(testData)
-	require.NoError(t, err)
-
-	conf := findFile(t, files, "services/myapp/caddy.cf.conf")
-	assert.Contains(t, conf, "http://myapp.{$DOMAIN}",
-		"public caddy.cf.conf should use DOMAIN directly with http://")
-	assert.Contains(t, conf, "reverse_proxy myapp-server:3000")
-}
-
 func TestRender_ConfigYAML_ContainsScaffoldComments(t *testing.T) {
 	files, err := scaffold.Render(testData)
 	require.NoError(t, err)
@@ -79,25 +52,35 @@ func TestRender_ConfigYAML_ContainsScaffoldComments(t *testing.T) {
 	assert.Contains(t, cfg, "secrets:")
 }
 
-func TestRender_PortSubstitution(t *testing.T) {
-	data := scaffold.ServiceData{Name: "porttest", Container: "porttest", Port: "9999"}
-	files, err := scaffold.Render(data)
-	require.NoError(t, err)
-
-	conf := findFile(t, files, "services/porttest/caddy.conf")
-	assert.Contains(t, conf, ":9999")
-}
-
-func TestRender_PrivateAndPublicDiffer(t *testing.T) {
+// The scaffolded declaration must parse as a plain container port. It used to
+// be `web:<port>`, which the grammar reads as SUBDOMAIN "web": every new
+// service was routed at web.<home>.<domain> instead of its own name.
+func TestRender_DeclaresBarePort(t *testing.T) {
+	root := t.TempDir()
 	files, err := scaffold.Render(testData)
 	require.NoError(t, err)
+	require.NoError(t, scaffold.Write(root, files))
 
-	private := findFile(t, files, "services/myapp/caddy.conf")
-	public := findFile(t, files, "services/myapp/caddy.cf.conf")
-	assert.NotEqual(t, private, public,
-		"private and public Caddy configs should use different subdomain variables")
-	assert.True(t, strings.Contains(private, "HOME_SUBDOMAIN") && strings.Contains(public, "http://"),
-		"private uses HOME_SUBDOMAIN, public has http:// prefix")
+	info, err := configgen.LoadServiceInfo(root, "myapp")
+	require.NoError(t, err)
+	ports, err := configgen.ResolvePorts(info.Ports, nil)
+	require.NoError(t, err)
+	require.Len(t, ports, 1)
+	assert.Equal(t, 3000, ports[0].Port)
+	assert.Empty(t, ports[0].Subdomain)
+	assert.Equal(t, "myapp", configgen.SiteHost(info, ""))
+}
+
+// Generated routes proxy to <service>:<port>; a container named differently
+// must still answer to the service name.
+func TestRender_ComposeAliasesServiceName(t *testing.T) {
+	files, err := scaffold.Render(testData)
+	require.NoError(t, err)
+	assert.Contains(t, findFile(t, files, "services/myapp/docker-compose.yml"), "aliases:\n          - myapp\n")
+
+	same, err := scaffold.Render(scaffold.ServiceData{Name: "app", Container: "app", Port: "80"})
+	require.NoError(t, err)
+	assert.NotContains(t, findFile(t, same, "services/app/docker-compose.yml"), "aliases:")
 }
 
 // ── Write ─────────────────────────────────────────────────────────────────────

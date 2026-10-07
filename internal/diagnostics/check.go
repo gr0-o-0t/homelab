@@ -353,9 +353,7 @@ func RunServiceContainerChecks(name string, dc *docker.Client) CheckGroup {
 // Not being exposed is a valid state — `homelab disable` exists to get there —
 // so it is a warning, never a failure. It used to fail, and `doctor --fix`
 // "repaired" it by re-enabling every deliberately disabled service. Exposure is
-// read through service discovery, which understands generated route files as
-// well as the legacy symlinks; the old symlink-only check called every
-// port-declared service unexposed.
+// read through service discovery, which reads the generated route files.
 func RunServiceRoutingChecks(dir, name string) CheckGroup {
 	var layers []string
 	svcs, _ := service.Discover(dir)

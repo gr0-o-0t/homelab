@@ -8,5 +8,16 @@ vars:
     description: "Host IP to publish DNS on. Loopback by default; set to the host's Tailscale or LAN IP so clients can query it (never 0.0.0.0 — Docker bypasses ufw)"
 
 secrets: {}
+
+# The admin panel and DNS-over-HTTPS share AdGuard's web port — keep it at 3000
+# in the first-run wizard. Caddy terminates TLS and DoH arrives as plain HTTP on
+# /dns-query, so set `allow_unencrypted_doh: true` in AdGuardHome.yaml. Plain
+# DNS, DoT, DoQ and DNSCrypt are not HTTP and cannot go through Caddy — they are
+# published on DNS_BIND_IP in docker-compose.yml.
+#
+# Every layer gets the same routes, so `homelab enable adguardhome --cf` would
+# publish the admin panel, not just DoH. Don't: the old public block served only
+# /dns-query, and a DoH-only public endpoint needs per-layer routes, which
+# neither ports: nor caddy.routes.conf can express yet.
 ports:
-  - 80
+  - 3000

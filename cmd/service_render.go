@@ -126,32 +126,28 @@ func truncate(s string, max int) string {
 
 // serviceJSON is the machine-readable shape of a service entry.
 type serviceJSON struct {
-	Name               string   `json:"name"`
-	Enabled            bool     `json:"enabled"`
-	PublicEnabled      bool     `json:"publicEnabled"`
-	HasCaddyConf       bool     `json:"hasCaddyConf"`
-	HasPublicCaddyConf bool     `json:"hasPublicCaddyConf"`
-	TorEnabled         bool     `json:"torEnabled"`
-	I2PEnabled         bool     `json:"i2pEnabled"`
-	YggEnabled         bool     `json:"yggEnabled"`
-	HostPorts          []string `json:"hostPorts,omitempty"`
-	Dir                string   `json:"dir"`
+	Name          string   `json:"name"`
+	Enabled       bool     `json:"enabled"`
+	PublicEnabled bool     `json:"publicEnabled"`
+	TorEnabled    bool     `json:"torEnabled"`
+	I2PEnabled    bool     `json:"i2pEnabled"`
+	YggEnabled    bool     `json:"yggEnabled"`
+	HostPorts     []string `json:"hostPorts,omitempty"`
+	Dir           string   `json:"dir"`
 }
 
 func printServiceJSON(svcs []service.Service) error {
 	out := make([]serviceJSON, len(svcs))
 	for i, s := range svcs {
 		out[i] = serviceJSON{
-			Name:               s.Name,
-			Enabled:            s.Enabled,
-			PublicEnabled:      s.PublicEnabled,
-			HasCaddyConf:       s.HasCaddyConf,
-			HasPublicCaddyConf: s.HasPublicCaddyConf,
-			TorEnabled:         s.HasTor,
-			I2PEnabled:         s.HasI2P,
-			YggEnabled:         s.HasYgg,
-			HostPorts:          s.HostPorts,
-			Dir:                s.Dir,
+			Name:          s.Name,
+			Enabled:       s.Enabled,
+			PublicEnabled: s.PublicEnabled,
+			TorEnabled:    s.HasTor,
+			I2PEnabled:    s.HasI2P,
+			YggEnabled:    s.HasYgg,
+			HostPorts:     s.HostPorts,
+			Dir:           s.Dir,
 		}
 	}
 	enc := json.NewEncoder(os.Stdout)

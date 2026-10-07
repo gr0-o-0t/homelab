@@ -22,9 +22,8 @@ var nameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 // containerRe matches Docker's own container-name constraint. Unlike Name
 // (constrained above), Container had no format check at all — it flows
 // unvalidated into docker-compose.yml as both a YAML mapping key and
-// container_name value, and into caddy.conf as a reverse_proxy target, so a
-// value with a space, colon, or slash would produce a corrupt compose file
-// or Caddyfile directive that's only caught later, if at all.
+// container_name value, so a value with a space, colon, or slash would
+// produce a corrupt compose file that's only caught later, if at all.
 var containerRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`)
 
 type step int
@@ -360,13 +359,12 @@ func (m Model) renderDone() string {
 	b.WriteString("  " + styles.Success.Render("✓") + "  Scaffolded " +
 		styles.Bold.Render("services/"+name+"/") + "\n\n")
 	b.WriteString("  " + styles.Muted.Render("├──") + " docker-compose.yml\n")
-	b.WriteString("  " + styles.Muted.Render("├──") + " caddy.conf\n")
-	b.WriteString("  " + styles.Muted.Render("└──") + " .env.example\n\n")
+	b.WriteString("  " + styles.Muted.Render("└──") + " config.yaml\n\n")
 	b.WriteString("  " + styles.Text.Render("Next steps:") + "\n")
 	fmt.Fprintf(&b, "    1. Edit %s\n",
 		styles.Primary.Render(fmt.Sprintf("services/%s/docker-compose.yml", name)))
 	fmt.Fprintf(&b, "    2. %s\n",
-		styles.Muted.Render(fmt.Sprintf("cp services/%s/.env.example services/%s/.env", name, name)))
+		styles.Primary.Render(fmt.Sprintf("homelab setup %s", name)))
 	fmt.Fprintf(&b, "    3. %s\n",
 		styles.Primary.Render(fmt.Sprintf("homelab up %s", name)))
 	fmt.Fprintf(&b, "    4. %s\n\n",

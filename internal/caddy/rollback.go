@@ -23,14 +23,13 @@ var snapshotExts = []string{"private", "cf", "i2p", "tor", "ygg"}
 // in time, so a write that produced an invalid config can be undone.
 //
 // It covers whole directories rather than the files a writer meant to touch:
-// enable writes through several hands (configgen, each network layer, the
-// symlink path), and only the directory listing knows everything they did.
+// enable writes through several hands (configgen and each network layer), and
+// only the directory listing knows everything they did.
 type Snapshot struct {
 	dirs map[string]map[string]entry // dir → basename → state
 }
 
 type entry struct {
-	link string // symlink target; "" for a regular file
 	data []byte
 	mode os.FileMode
 }
@@ -51,17 +50,12 @@ func (m *Manager) Snapshot() (*Snapshot, error) {
 				continue
 			}
 			path := filepath.Join(dir, de.Name())
-			fi, err := os.Lstat(path)
+			fi, err := os.Stat(path)
+			if os.IsNotExist(err) {
+				continue // dangling link left by the retired symlink scheme
+			}
 			if err != nil {
 				return nil, err
-			}
-			if fi.Mode()&os.ModeSymlink != 0 {
-				target, err := os.Readlink(path)
-				if err != nil {
-					return nil, err
-				}
-				files[de.Name()] = entry{link: target}
-				continue
 			}
 			data, err := os.ReadFile(path) //nolint:gosec // path from our own listing
 			if err != nil {
@@ -104,9 +98,6 @@ func (s *Snapshot) Restore() error {
 func restoreEntry(path string, e entry) error {
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return err
-	}
-	if e.link != "" {
-		return os.Symlink(e.link, path)
 	}
 	return os.WriteFile(path, e.data, e.mode)
 }

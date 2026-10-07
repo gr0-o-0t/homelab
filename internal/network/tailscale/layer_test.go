@@ -1,10 +1,13 @@
 package tailscale
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/groot/homelab/internal/network"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestLayer_Identity(t *testing.T) {
@@ -32,4 +35,17 @@ func TestLayer_Enable_Noop(t *testing.T) {
 func TestLayer_Disable_Noop(t *testing.T) {
 	l := New("/test/repo", nil, nil)
 	assert.NoError(t, l.Disable("any"))
+}
+
+// The URL names the host the generated block answers on, not the service.
+func TestLayer_ServiceAddresses_UsesSiteHost(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "services", "vaultwarden")
+	require.NoError(t, os.MkdirAll(dir, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.yaml"), []byte("ports:\n  - vault:80\n"), 0o600))
+	env := map[string]string{"HOME_SUBDOMAIN": "home", "DOMAIN": "example.com"}
+
+	addrs := New(root, nil, nil).ServiceAddresses("vaultwarden", env)
+	require.Len(t, addrs, 1)
+	assert.Equal(t, "https://vault.home.example.com", addrs[0].URL)
 }

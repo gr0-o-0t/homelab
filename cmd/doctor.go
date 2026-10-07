@@ -186,7 +186,10 @@ func renderCheckGroup(g diagnostics.CheckGroup, pass *bool) {
 	}
 }
 
-// caddyRoutingCheck checks Caddy conf.d directories and broken symlinks.
+// caddyRoutingCheck checks Caddy conf.d directories, and with --fix removes
+// dangling symlinks — routes are generated files now, but installs from before
+// the static caddy.conf scheme was retired can still hold links into service
+// directories, and a dangling one makes Caddy's import fail.
 // Returns results and handles --fix repair.
 func caddyRoutingCheck(dir string, fix bool, pass *bool) []diagnostics.CheckResult {
 	var results []diagnostics.CheckResult

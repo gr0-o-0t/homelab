@@ -11,6 +11,8 @@ package tailscale
 
 import (
 	"fmt"
+
+	"github.com/groot/homelab/internal/configgen"
 	"github.com/groot/homelab/internal/network"
 	"github.com/groot/homelab/internal/run"
 )
@@ -81,14 +83,15 @@ func (l *Layer) CaddyConfigDir(configRoot string) string {
 }
 
 // ServiceAddresses returns the tailnet hostname. Templated, not looked up:
-// the wildcard cert and DNS record cover every *.<home>.<domain> name, so the
-// name is fully determined by the service name and root config.
+// the wildcard cert and DNS record cover every *.<home>.<domain> name. The
+// label is the one the generated conf.d block answers on — any --name or
+// declared subdomain (vaultwarden → vault) — not the bare service name.
 func (l *Layer) ServiceAddresses(svcName string, env map[string]string) []network.ServiceAddress {
 	sub, dom := env["HOME_SUBDOMAIN"], env["DOMAIN"]
 	if sub == "" || dom == "" {
 		return []network.ServiceAddress{{Note: "HOME_SUBDOMAIN/DOMAIN not set — run homelab setup"}}
 	}
-	return []network.ServiceAddress{{URL: fmt.Sprintf("https://%s.%s.%s", svcName, sub, dom)}}
+	return []network.ServiceAddress{{URL: fmt.Sprintf("https://%s.%s.%s", configgen.PrivateHost(l.repoRoot, svcName), sub, dom)}}
 }
 
 func (l *Layer) env() map[string]string {

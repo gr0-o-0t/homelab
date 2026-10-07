@@ -8,17 +8,19 @@ import (
 	"sort"
 	"time"
 
+	"github.com/groot/homelab/internal/configgen"
 	"github.com/groot/homelab/internal/docker"
 )
 
 // Service represents a single entry under services/<name>/.
 type Service struct {
-	Name               string
-	Dir                string // absolute path to services/<name>/
-	HasCaddyConf       bool   // services/<name>/caddy.conf exists
-	HasPublicCaddyConf bool   // services/<name>/caddy.cf.conf exists
-	Enabled            bool   // regular file in caddy/conf.d/<name>.conf (private)
-	PublicEnabled      bool   // regular file in caddy/conf.d-cf/<name>.conf (cf)
+	Name string
+	Dir  string // absolute path to services/<name>/
+	// HasCaddyConf is always false: static caddy.conf files are no longer
+	// shipped or read. Kept only because internal/tui tests still set it.
+	HasCaddyConf  bool
+	Enabled       bool // regular file in caddy/conf.d/<name>.conf (private)
+	PublicEnabled bool // regular file in caddy/conf.d-cf/<name>.conf (cf)
 
 	// Network extension layer exposure — detected from caddy/conf.d-<ext>/ file existence.
 	// These are always regular files (written by configgen.WriteFile), not symlinks.
@@ -200,18 +202,13 @@ func discover(repoRoot string) ([]Service, error) {
 		dir := filepath.Join(servicesDir, name)
 
 		services = append(services, Service{
-			Name:         name,
-			Dir:          dir,
-			HasCaddyConf: fileExists(filepath.Join(dir, "caddy.conf")),
-			// A caddy.routes.conf covers every layer including cf, so it also
-			// means "public exposure is available for this service".
-			HasPublicCaddyConf: fileExists(filepath.Join(dir, "caddy.cf.conf")) ||
-				fileExists(filepath.Join(dir, "caddy.routes.conf")),
-			Enabled:       fileExists(filepath.Join(repoRoot, "caddy", "conf.d", name+".conf")),
-			PublicEnabled: fileExists(filepath.Join(repoRoot, "caddy", "conf.d-cf", name+".conf")),
-			HasTor:        fileExists(filepath.Join(repoRoot, "caddy", "conf.d-tor", name+".conf")),
-			HasI2P:        fileExists(filepath.Join(repoRoot, "caddy", "conf.d-i2p", name+".conf")),
-			HasYgg:        fileExists(filepath.Join(repoRoot, "caddy", "conf.d-ygg", name+".conf")),
+			Name:          name,
+			Dir:           dir,
+			Enabled:       exposedOn(repoRoot, "private", name),
+			PublicEnabled: exposedOn(repoRoot, "cf", name),
+			HasTor:        exposedOn(repoRoot, "tor", name),
+			HasI2P:        exposedOn(repoRoot, "i2p", name),
+			HasYgg:        exposedOn(repoRoot, "ygg", name),
 			Installed:     true,
 		})
 	}
@@ -220,6 +217,28 @@ func discover(repoRoot string) ([]Service, error) {
 		return services[i].Name < services[j].Name
 	})
 	return services, nil
+}
+
+// exposedOn reports whether any generated block for name exists in layer
+// ext. Checking only <name>.conf missed services whose ports are named (a
+// subdomain port lands in <name>-<port>.conf); the file names are computed
+// from the declared ports rather than globbed, because "<name>-*" would also
+// match a different service called "<name>-something".
+func exposedOn(root, ext, name string) bool {
+	files := []string{configgen.GeneratedFilePath(root, ext, name, "")}
+	if info, err := configgen.LoadServiceInfo(root, name); err == nil {
+		if ports, err := configgen.ResolvePorts(info.Ports, nil); err == nil {
+			for _, p := range ports {
+				files = append(files, configgen.GeneratedFilePath(root, ext, name, p.Name))
+			}
+		}
+	}
+	for _, f := range files {
+		if fileExists(f) {
+			return true
+		}
+	}
+	return false
 }
 
 func fileExists(path string) bool {

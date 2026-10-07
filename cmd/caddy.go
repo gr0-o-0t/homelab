@@ -57,8 +57,11 @@ var reloadCmd = &cobra.Command{
 	Long: `Reload configuration changes.
 
 Without arguments, reloads the Caddy config (validate + graceful reload).
-With a service name, re-links the service's Caddy config files and reloads
-Caddy — picks up edits to caddy.conf or caddy.cf.conf without redeploying.`,
+With a service name, regenerates the service's Caddy config for every layer
+it is currently enabled on (private, cf, i2p — keeping its --name) and reloads
+Caddy once: picks up edits to its config.yaml ports or caddy.routes.conf
+without redeploying. Tor and Yggdrasil blocks are written by their own layers
+and are left as they are.`,
 	Args:              cobra.MaximumNArgs(1),
 	ValidArgsFunction: completeServiceNames,
 	RunE: func(cmd *cobra.Command, args []string) error {

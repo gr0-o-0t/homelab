@@ -3,10 +3,10 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/groot/homelab/internal/configgen"
 	"github.com/groot/homelab/internal/docker"
 	"github.com/groot/homelab/internal/service"
 	"github.com/groot/homelab/internal/tui/styles"
@@ -60,7 +60,7 @@ func runServiceStatus(dir, name string, env map[string]string) error {
 
 	var url string
 	if svc.Enabled && env["HOME_SUBDOMAIN"] != "" && env["DOMAIN"] != "" {
-		url = fmt.Sprintf("https://%s.%s.%s", name, env["HOME_SUBDOMAIN"], env["DOMAIN"])
+		url = fmt.Sprintf("https://%s.%s.%s", configgen.PrivateHost(dir, name), env["HOME_SUBDOMAIN"], env["DOMAIN"])
 	}
 
 	fmt.Printf("\n%s\n\n", styles.Header.Render(fmt.Sprintf("Status: %s", name)))
@@ -70,8 +70,9 @@ func runServiceStatus(dir, name string, env map[string]string) error {
 	if url != "" {
 		fmt.Printf("  %s  URL:     %s\n", styles.Muted.Render("↳"), styles.Primary.Render(url))
 	}
-	if svc.Enabled && svc.HasCaddyConf {
-		fmt.Printf("  %s  Config:  %s\n", styles.Muted.Render("↳"), styles.Muted.Render(filepath.Join(svc.Dir, "caddy.conf")))
+	if svc.Enabled {
+		fmt.Printf("  %s  Config:  %s\n", styles.Muted.Render("↳"),
+			styles.Muted.Render(configgen.GeneratedFilePath(dir, "private", name, "")))
 	}
 
 	// ── Network Exposure section ──────────────────────────────────────────

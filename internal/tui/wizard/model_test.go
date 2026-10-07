@@ -253,7 +253,8 @@ func Test_Wizard_PreviewShowsFiles(t *testing.T) {
 		names[i] = f.RelPath
 	}
 	assert.Contains(t, names, "services/paperless/docker-compose.yml")
-	assert.Contains(t, names, "services/paperless/caddy.conf")
+	assert.Contains(t, names, "services/paperless/config.yaml")
+	assert.NotContains(t, names, "services/paperless/caddy.conf", "routes are generated from config.yaml ports")
 }
 
 func Test_Wizard_PreviewEscGoesBack(t *testing.T) {

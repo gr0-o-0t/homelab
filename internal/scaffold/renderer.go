@@ -13,7 +13,7 @@ import (
 //go:embed templates/*
 var templateFS embed.FS
 
-// ServiceData is the template context used for all three scaffold files.
+// ServiceData is the template context used for every scaffold file.
 type ServiceData struct {
 	Name      string
 	Container string
@@ -26,7 +26,10 @@ type File struct {
 	Content string
 }
 
-// Render executes all three templates with data and returns the results.
+// Render executes every template with data and returns the results.
+//
+// No Caddy file is rendered: `homelab enable` generates the routes from the
+// `ports:` declaration in config.yaml.
 func Render(data ServiceData) ([]File, error) {
 	type entry struct {
 		tmpl    string
@@ -34,8 +37,6 @@ func Render(data ServiceData) ([]File, error) {
 	}
 	entries := []entry{
 		{"docker-compose.yml.tmpl", fmt.Sprintf("services/%s/docker-compose.yml", data.Name)},
-		{"caddy.conf.tmpl", fmt.Sprintf("services/%s/caddy.conf", data.Name)},
-		{"caddy.cf.conf.tmpl", fmt.Sprintf("services/%s/caddy.cf.conf", data.Name)},
 		{"config.yaml.tmpl", fmt.Sprintf("services/%s/config.yaml", data.Name)},
 	}
 
