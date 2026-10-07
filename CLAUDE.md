@@ -9,7 +9,8 @@ A modular self-hosted infrastructure stack managed by a Go CLI (`homelab`). All 
 ## Building
 
 ```bash
-make build      # go build -o homelab .
+make build      # go build -o homelab .   (pure Go, no cgo)
+make gui        # go build -tags gui — adds the experimental `homelab --gui` (cgo + OpenGL/X11 headers)
 make install    # go install .
 make tidy       # go mod tidy
 make test       # go test ./...
@@ -31,22 +32,32 @@ go test ./internal/scaffold/...
 homelab add [name]                                 # install a bundled service from the catalog (no name → list catalog)
 homelab new [name]                                 # scaffold wizard (TUI) or --container/--port flags
 homelab setup [service]                            # configure vars and secrets interactively (no arg → root wizard)
-homelab up [service]                               # create + start containers (--all, --group, --build)
-homelab down [service]                             # stop + REMOVE containers (--all, --group)
-homelab start [service]                            # resume existing stopped containers (--all, --group)
-homelab stop [service]                             # stop containers, keep them (--all, --group)
-homelab restart [service]                          # restart containers (--all, --group, --build)
+homelab up [service...]                            # create + start containers (-a/--all, --group, --build)
+homelab down [service...]                          # stop + REMOVE containers; exposure is kept (-a, --group)
+homelab start [service...]                         # resume existing stopped containers (-a, --group)
+homelab stop [service...]                          # stop containers, keep them (-a, --group)
+homelab restart [service...]                       # restart containers (-a, --group, --build)
 homelab reload [service]                           # reload Caddy config or a service's routing
-homelab update [service]                           # pull latest images + restart (--all)
-homelab delete <service>    (alias: rm)            # remove service entirely
+homelab pull [service...]                          # pull images only (-a, --group)
+homelab update [service...]                        # pull + up -d (-a, --group)
+homelab delete <service>... (alias: rm)            # containers + exposure + config; type the name or -y
 ```
+
+The lifecycle verbs mirror `docker compose`: several services may be named,
+batch runs continue past a failing service and report every failure at the
+end, and with no service they act on the core stack. Exposure is
+configuration, not container state: `down` leaves routes in place (they answer
+502 while the service is down) and `up` brings it back exactly as it was. Only
+`disable` and `delete` remove exposure.
 
 ### Observation and diagnostics
 
 ```bash
 homelab                                            # interactive TUI (service browser)
-homelab status [service]                           # show status overview or per-service detail
-homelab logs [service]                             # logs (TUI on TTY, plain otherwise) — installed services only
+homelab --gui                                      # experimental desktop GUI (giu; needs `make gui`)
+homelab ls [-q]                                    # list installed services (table, --json, -q names)
+homelab status [service]   (alias: ps)             # show status overview or per-service detail
+homelab logs [service]                             # print logs like docker compose (-f, -n, -t, --since, --until, --tui)
 homelab caddy status                               # Caddy container status
 homelab caddy logs                                 # stream Caddy container logs individually
 homelab doctor [service] [--fix] [--all]           # health check with optional auto-repair
@@ -55,15 +66,12 @@ homelab config [service]                           # show resolved docker compos
 homelab images [service]                           # list Docker images used by services
 homelab port <service> <private-port>              # print the public port for a binding
 homelab version                                    # print the homelab version
-homelab service list                               # list services + exposure status (legacy, hidden)
-homelab service ps <name>                          # container status (legacy, hidden)
 ```
 
 ### Container access
 
 ```bash
-homelab exec <service> <command> [args...]         # run a command in a running service container
-homelab pull [service]                             # pull latest images without restarting
+homelab exec <service> <command> [args...]         # like docker compose exec; flags after the service go to the command (-u, -w, -e, -T)
 ```
 
 ### Backup, restore, prune
@@ -115,7 +123,8 @@ homelab disable <service> --cf                     # remove Cloudflare Tunnel
 homelab disable <service> --i2p                    # remove I2P eepsite
 homelab disable <service> --tor                    # remove Tor .onion
 homelab disable <service> --ygg                    # remove Yggdrasil mesh
-homelab disable <service> -a                       # remove all layers + stop container
+homelab disable <service> -a                       # remove every layer, private included
+homelab disable <service> -a --stop                # …and take the service down
 ```
 
 ### Configuration
@@ -134,6 +143,8 @@ homelab completion bash|zsh|fish|powershell        # generate shell completion s
 ### Network extensions (`homelab ext`)
 
 ```bash
+homelab ext enable <ext>                           # turn an extension on (config.yaml) and start it
+homelab ext disable <ext>                          # stop it and turn it off
 homelab ext list                                   # list extensions and their enabled/disabled status
 homelab ext status [ext]                           # show container status for all or one extension
 homelab ext logs [ext]                             # stream logs for all or one extension
@@ -282,9 +293,9 @@ homelab up --group media              # start all media services
 homelab down --group media            # stop all media services
 ```
 
-Note: `--group` is only supported on `start`/`up`, `stop`/`down`, and `restart`.
-`enable` and `disable` operate on single services only — use `--all` to affect
-every layer at once.
+`--group` works on `up`, `down`, `start`, `stop`, `restart`, `pull`, `update`,
+`backup` and `prune`. `enable` and `disable` operate on one service; there
+`--all` means every layer, not every service.
 
 ### Go package layout
 
@@ -303,6 +314,7 @@ every layer at once.
 | `internal/tui/logs` | Bubble Tea streaming log viewer |
 | `internal/tui/wizard` | Multi-step new-service scaffold wizard |
 | `internal/tui/spinner` | Goroutine spinner (TTY-aware) |
+| `internal/gui` | Experimental giu (Dear ImGui) desktop front end, `homelab --gui`; compiled only with `-tags gui` |
 | `internal/tui/styles` | Lipgloss Tokyo Night palette, shared across TUI and plain output |
 
 ### Key design decisions
@@ -310,6 +322,7 @@ every layer at once.
 - **Docker SDK for status, shell-out for lifecycle**: SDK used only for read-only inspection (ContainerList, ContainerInspect). `docker compose` CLI is shelled out for lifecycle ops to preserve Compose's reconciliation logic.
 - **No secrets on disk**: Commander injects via `cmd.Env` — no temp `.env` files.
 - **TTY detection**: `isatty.IsTerminal(os.Stdout.Fd()) && !noColor()` — TUI when interactive, plain table when piped/CI.
+- **Front ends run the CLI**: the TUI dashboard and the GUI never reimplement an action — each button/key execs this binary (`selfCLI`) with the matching command, so they cannot drift from the CLI.
 - **Spinner + captured output**: Caddy reload output is captured in a `bytes.Buffer` Commander while the spinner runs; buffer is printed only on error.
 
 ## Adding a New Service

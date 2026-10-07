@@ -48,6 +48,7 @@ See [docs/architecture.md](docs/architecture.md) for the full design rationale.
 git clone https://github.com/you/homelab
 cd homelab
 make build        # builds homelab binary in current directory
+make gui          # same, plus the experimental `homelab --gui` (needs cgo + OpenGL/X11 headers)
 make install      # go install → puts 'homelab' on your PATH
 ```
 
@@ -120,29 +121,33 @@ Visit `https://status.home.example.com` from any device on your tailnet.
 homelab add [name]              Install from catalog (no name → list catalog)
 homelab new [name]              Scaffold a new service directory (interactive wizard)
 homelab setup [service]         Configure vars and secrets (no arg → root setup wizard)
-homelab up [service]            Create and start containers (first use or after config changes)
-homelab down [service]          Stop and remove containers
-homelab start [service]         Resume existing stopped containers (no create)
-homelab stop [service]          Pause running containers without removing them
-homelab restart [service]       Restart containers
+homelab up [service...]         Create and start containers (first use or after config changes)
+homelab down [service...]       Stop and remove containers (exposure is kept)
+homelab start [service...]      Resume existing stopped containers (no create)
+homelab stop [service...]       Stop running containers without removing them
+homelab restart [service...]    Restart containers
 homelab reload [service]        Reload Caddy config or a service's routing config
-homelab update [service]        Pull latest images and recreate containers
-homelab delete <service>        Remove service entirely (alias: rm)
-homelab status [service]        Show status overview or per-service detail
-homelab ps [service]            Show container status and ports
-homelab ps <service>            Show per-service container details with merged state/health
-homelab logs [service]          Tail logs (TTY → interactive TUI log viewer)
+homelab pull [service...]       Pull latest images without recreating
+homelab update [service...]     Pull latest images and recreate containers
+homelab delete <service>...     Remove service entirely, asks for the name (alias: rm, -y to skip)
+homelab ls [-q]                 List installed services
+homelab status [service]        Show status overview or per-service detail (alias: ps)
+homelab logs [service]          Print logs like docker compose logs (-f, -n, -t, --since, --until; --tui)
+homelab exec <svc> <cmd...>     Run a command in a service container (-u, -w, -e, -T)
 homelab doctor [service]        Environment health check
+homelab --gui                   Experimental desktop GUI (build with `make gui`)
 ```
 
-`up`, `down`, and `restart` accept batch flags:
+With no service, lifecycle commands act on the core stack. Several services may
+be named at once, as with `docker compose`. Lifecycle commands accept batch
+flags, and a batch keeps going past a failing service:
 
 ```
 homelab up --all                     # create and start all installed services
 homelab up --group media             # create and start by group (defined in config.yaml)
 homelab up --group media --all       # error: mutually exclusive
 homelab up --build                   # rebuild images before creating and starting
-homelab down --all                   # stop and remove all installed services
+homelab down -a                      # stop and remove all installed services
 homelab down --group media           # stop and remove by group
 ```
 
@@ -184,6 +189,8 @@ homelab completion bash|zsh|fish|powershell   Generate shell completion scripts
 Extensions are managed via the `ext` subcommand:
 
 ```
+homelab ext enable <ext>           Turn an extension on and start its container
+homelab ext disable <ext>          Stop it and turn it off
 homelab ext list                   List extensions and their enabled/disabled status
 homelab ext status [ext]           Show container status for all or one
 homelab ext logs [ext]             Stream container logs for all or one
@@ -204,17 +211,8 @@ homelab disable <svc> --i2p   remove I2P exposure
 Extension-specific advanced subcommands:
 
 ```
-homelab ext cf route add <service>     # add Cloudflare DNS route
-homelab ext cf route rm <service>      # remove Cloudflare DNS route
-```
-
-### Service subcommand (legacy, hidden)
-
-The `service` subcommand still exists for backward compatibility:
-
-```
-homelab service list               # list all services and their exposure status
-homelab service ps <service>       # show container status
+homelab cf route add <service>     # add Cloudflare DNS route
+homelab cf route rm <service>      # remove it (needs CLOUDFLARE_API_TOKEN with DNS:Edit)
 ```
 
 ---
