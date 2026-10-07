@@ -122,8 +122,6 @@ func TestStateTag_KnownValues(t *testing.T) {
 	}
 }
 
-// ── detectServicePort ─────────────────────────────────────────────────────────
-
 func writeSvc(t *testing.T, root, name string, files map[string]string) {
 	t.Helper()
 	dir := filepath.Join(root, "services", name)
@@ -131,27 +129,6 @@ func writeSvc(t *testing.T, root, name string, files map[string]string) {
 	for f, content := range files {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, f), []byte(content), 0o600))
 	}
-}
-
-// config.yaml is the source of truth: it is the same declaration `homelab
-// enable` reads, so the standalone `tor enable`/`ygg enable` commands cannot
-// pick a different port for the same service.
-func TestDetectServicePort_PrefersDeclaredPorts(t *testing.T) {
-	root := t.TempDir()
-	writeSvc(t, root, "gitea", map[string]string{
-		"config.yaml": "ports:\n  - 3000\n",
-	})
-
-	port, err := detectServicePort(root, "gitea")
-	require.NoError(t, err)
-	assert.Equal(t, "3000", port)
-}
-
-func TestDetectServicePort_NeitherSource(t *testing.T) {
-	root := t.TempDir()
-	writeSvc(t, root, "empty", map[string]string{})
-	_, err := detectServicePort(root, "empty")
-	assert.ErrorContains(t, err, "no ports declared in config.yaml")
 }
 
 func TestInstallAssets_KeepsUserAndStateFiles(t *testing.T) {

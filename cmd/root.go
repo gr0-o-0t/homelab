@@ -131,7 +131,8 @@ func noColor() bool {
 	return rootFlags.noColor || os.Getenv("NO_COLOR") != ""
 }
 
-// extEnabled checks whether a named extension is enabled in the root config.
+// extEnabled checks whether a named extension is enabled in the root config,
+// under its canonical name or a config.yaml alias ("yggdrasil" for ygg).
 // Cache loaded config to avoid re-parsing config.yaml on every call.
 func extEnabled(cfgDir, name string) bool {
 	loadOnce.Do(func() {
@@ -140,10 +141,7 @@ func extEnabled(cfgDir, name string) bool {
 			rootCfg = cfg
 		}
 	})
-	if rootCfg == nil {
-		return false
-	}
-	return rootCfg.HasExtension(name)
+	return hasResolvedExtension(rootCfg, config.ResolveExtension(name))
 }
 
 // buildEnv assembles the full docker compose environment map.

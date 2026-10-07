@@ -54,27 +54,11 @@ func printServiceTable(svcs []service.Service, env map[string]string, wide bool)
 		}
 
 		// LAYERS column
-		var layerTags string
-		hasAnyLayer := svc.Enabled || svc.PublicEnabled || svc.HasTor || svc.HasI2P || svc.HasYgg
-		if hasAnyLayer {
-			var parts []string
-			if svc.Enabled {
-				parts = append(parts, styles.Success.Render("ts"))
-			}
-			if svc.PublicEnabled {
-				parts = append(parts, styles.Primary.Render("cf"))
-			}
-			if svc.HasTor {
-				parts = append(parts, styles.Accent.Render("tor"))
-			}
-			if svc.HasI2P {
-				parts = append(parts, styles.Warning.Render("i2p"))
-			}
-			if svc.HasYgg {
-				parts = append(parts, styles.Primary.Render("ygg"))
-			}
-			layerTags = strings.Join(parts, " ")
+		var parts []string
+		for _, l := range svc.ActiveLayers() {
+			parts = append(parts, layerTag(l))
 		}
+		layerTags := strings.Join(parts, " ")
 
 		fmt.Printf("  %s  %s  %s", name, styles.Width(12).Render(stateCol), layerTags)
 		if wide {
@@ -85,7 +69,7 @@ func printServiceTable(svcs []service.Service, env map[string]string, wide bool)
 				portsStr = styles.Width(styles.ColWidthPorts).Render(styles.Muted.Render("–"))
 			}
 			var ustr string
-			if svc.Enabled && env["HOME_SUBDOMAIN"] != "" && env["DOMAIN"] != "" {
+			if svc.On("ts") && env["HOME_SUBDOMAIN"] != "" && env["DOMAIN"] != "" {
 				ustr = styles.Muted.Render(fmt.Sprintf("https://%s.%s.%s", svc.Name, env["HOME_SUBDOMAIN"], env["DOMAIN"]))
 			}
 			fmt.Printf("  %s  %s", portsStr, ustr)
@@ -141,11 +125,11 @@ func printServiceJSON(svcs []service.Service) error {
 	for i, s := range svcs {
 		out[i] = serviceJSON{
 			Name:          s.Name,
-			Enabled:       s.Enabled,
-			PublicEnabled: s.PublicEnabled,
-			TorEnabled:    s.HasTor,
-			I2PEnabled:    s.HasI2P,
-			YggEnabled:    s.HasYgg,
+			Enabled:       s.On("ts"),
+			PublicEnabled: s.On("cf"),
+			TorEnabled:    s.On("tor"),
+			I2PEnabled:    s.On("i2p"),
+			YggEnabled:    s.On("ygg"),
 			HostPorts:     s.HostPorts,
 			Dir:           s.Dir,
 		}

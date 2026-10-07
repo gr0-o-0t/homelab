@@ -1,11 +1,11 @@
-// Package network defines the NetworkLayer interface and Registry for managing
-// homelab's network extension layers (tailscale, cloudflared, tor, i2p,
-// yggdrasil). Each layer implements NetworkLayer and registers with
-// the Registry, providing uniform lifecycle (Start/Stop/Status) and service
-// exposure (Enable/Disable) regardless of the underlying implementation.
+// Package network defines the NetworkLayer interface and Registry for
+// homelab's network layers (tailscale, cloudflared, tor, i2p, yggdrasil).
+// The layers themselves live in subpackages; internal/network/layers builds
+// the registry, the only list of them.
 package network
 
 import (
+	"strings"
 	"sync"
 	"time"
 )
@@ -28,44 +28,63 @@ type Status struct {
 // TS_AUTHKEY and drop the host off the tailnet.
 type EnvFunc func() map[string]string
 
-// ServiceInfo holds parsed service configuration for Enable/Disable operations.
-// Layers use this to generate Caddy blocks and tunnel configs.
-// Ports maps port name → port number; Protocol is carried in PortSelection.
-type ServiceInfo struct {
-	Name    string
-	Ports   map[string]int // port name → port number
-	HasVars bool
-}
-
-// PortSelection describes a single exposed port for a service.
+// PortSelection is one resolved port of a service, as declared in its
+// config.yaml (see config.PortEntry for the grammar).
 type PortSelection struct {
-	Name     string // declaration key: "default", a listen port, or a subdomain
-	Port     int    // container port number
-	Listen   int    // site port clients connect on; 0 = the layer's default
-	Protocol string // "tcp" or "udp"
+	Name      string // declaration key: "default", a listen port, or a subdomain; "" for a routes-driven service
+	Port      int    // container port traffic is forwarded to
+	Listen    int    // site port clients connect on; 0 = the layer's default
+	Subdomain string // replaces the service name in the site address; "" = service name
+	Protocol  string // "tcp" or "udp"
 }
 
-// NetworkLayer defines the interface that every network extension must implement.
-// Each layer provides:
-//   - Identity (Name, Label, ContainerName, Profile) for CLI display and lookup
-//   - Lifecycle (Start, Stop, Status) for Docker Compose management
-//   - Service exposure (Enable, Disable) for per-service routing configuration
-//   - Config directory (CaddyConfigDir) for Caddy conf.d-<ext>/ placement
+// RoutableByCaddy reports whether this port can be served as a Caddy site.
+// UDP cannot: Caddy speaks HTTP, and nothing in this stack proxies datagrams.
+// Declaring 53/udp is still useful — compose publishes it — it just gets no
+// site block instead of one that silently answers nothing.
+func (p PortSelection) RoutableByCaddy() bool { return p.Protocol != "udp" }
+
+// Site is one Caddy site block a layer serves for a service. A layer only says
+// where the site lives; internal/configgen writes the block, so the choice
+// between a service's caddy.routes.conf and a plain reverse_proxy is made in
+// exactly one place for every layer.
+type Site struct {
+	PortName string // the port the file is named after (configgen.PortFileName); "" = <service>.conf
+	Address  string // Caddy site address, e.g. "http://gitea.{$DOMAIN}" or ":9000"
+	Port     int    // upstream container port a generated reverse_proxy targets
+	TLS      bool   // import the wildcard_tls snippet (tailnet only)
+	Comment  string // header written above the block, newline-terminated; may be empty
+}
+
+// NetworkLayer is one way a service can be reached: the tailnet, Cloudflare,
+// Tor, I2P, Yggdrasil. Everything that differs between layers lives behind
+// this interface, so adding one means writing a layer and registering it in
+// internal/network/layers — not editing every command that lists layers.
 type NetworkLayer interface {
 	// ── Identity ─────────────────────────────────────────────────────────
 
-	// Name returns the short identifier (e.g. "tor", "cf", "ts").
+	// Name returns the short identifier (e.g. "tor", "cf", "ts"), the
+	// registry key.
 	Name() string
 
 	// Label returns a human-readable description (e.g. "Tor onion service proxy").
 	Label() string
 
+	// Flag returns the `homelab enable|disable --<flag>` that selects this
+	// layer, or "" for the private tailnet layer, which is what the bare
+	// commands act on.
+	Flag() string
+
 	// ContainerName returns the Docker container name for this layer.
 	ContainerName() string
 
-	// Profile returns the Docker Compose profile name for this layer.
-	// Used during startup to activate the correct compose profiles.
+	// Profile returns the Docker Compose profile name for this layer, "" when
+	// the container is part of the always-on core.
 	Profile() string
+
+	// ConfDir returns the directory under caddy/ holding this layer's
+	// generated site blocks (e.g. "conf.d-tor"). The Caddyfile imports it.
+	ConfDir() string
 
 	// ── Lifecycle ────────────────────────────────────────────────────────
 
@@ -78,18 +97,17 @@ type NetworkLayer interface {
 	// Status returns the current operational state.
 	Status() Status
 
-	// ── Service exposure ─────────────────────────────────────────────────
+	// ── Routing ──────────────────────────────────────────────────────────
 
-	// Enable configures Caddy routing AND extension-specific tunnel config
-	// for the given service. Writes Caddy config to CaddyConfigDir() and
-	// extension-specific config (torrc.d, tunnels.conf, socat.d, etc.).
-	Enable(svcName, displayName string, info ServiceInfo, ports []PortSelection) error
-
-	// Disable removes extension-specific routing for the given service.
-	// Removes Caddy config from CaddyConfigDir() AND extension-specific config.
-	Disable(svcName string) error
-
-	// ── Addressing ───────────────────────────────────────────────────────
+	// Sites returns the Caddy sites this layer serves for a service: where
+	// each block lives and which upstream port it is for. host is the label
+	// the service answers on (the service name, --name, or a declared
+	// subdomain); ports are the service's resolved ports, or a single port
+	// with an empty Name for a caddy.routes.conf service.
+	//
+	// Called after Configure, since some addresses (an onion, an allocated
+	// mesh port) only exist once the layer's daemon side is set up.
+	Sites(svcName, host string, ports []PortSelection) ([]Site, error)
 
 	// ServiceAddresses returns every address a service answers on for this
 	// layer, most canonical first, or nil when it is not exposed here.
@@ -100,20 +118,73 @@ type NetworkLayer interface {
 	// allocated port, and the tailnet/Cloudflare layers template a hostname
 	// out of env. Callers render what they get.
 	//
-	// It was previously a string-templating function in configgen shared by
-	// nobody in particular, which is how `homelab status` came to advertise a
-	// <name>.i2p host that resolves for no one and a ygg placeholder that
-	// disagreed with `homelab ygg status`.
-	//
 	// Resolving may shell into a container, so callers listing many services
 	// should expect it to be slow and cache per command, not per row.
 	ServiceAddresses(svcName string, env map[string]string) []ServiceAddress
+}
 
-	// ── Config ───────────────────────────────────────────────────────────
+// Configurer is implemented by layers with daemon-side state per service — a
+// torrc.d entry, an i2pd tunnel, a socat forwarder. Layers that are nothing but
+// Caddy routing (the tailnet, Cloudflare) don't implement it.
+type Configurer interface {
+	// Configure sets the service up on the layer's daemon and reloads it.
+	// displayName is the --name override, or the service name.
+	Configure(svcName, displayName string, ports []PortSelection) error
 
-	// CaddyConfigDir returns the conf.d-<ext> directory path for Caddy config
-	// placement (e.g. "caddy/conf.d-tor" for tor).
-	CaddyConfigDir(configRoot string) string
+	// Teardown removes the service from the layer's daemon and reloads it.
+	// The Caddy blocks are removed by the caller.
+	Teardown(svcName string) error
+}
+
+// HostRouted is implemented by layers whose site address is a template of the
+// service's host label, so the label — including a --name it was enabled with —
+// can be read back out of a generated block and the block regenerated without
+// asking the layer's daemon anything.
+type HostRouted interface {
+	HostFromAddress(address string) (string, bool)
+}
+
+// HostTemplate is the site policy shared by the layers that route on the Host
+// header (tailnet, Cloudflare, I2P): one site per Caddy-routable port, at
+// Prefix + host + Suffix. Layers embed it.
+type HostTemplate struct {
+	Prefix, Suffix string
+	TLS            bool
+}
+
+// Sites implements NetworkLayer.Sites for a Host-routed layer.
+//
+// UDP gets no site: Caddy speaks HTTP. Nor does a port with an explicit listen
+// port (forgejo's 22:22): such a port is a raw TCP service published by
+// compose, not HTTP. Wrapping it in a site block produced an HTTPS
+// reverse_proxy on :22 (private) that no ssh client can speak, a plain-HTTP
+// listener on :22 (cf) that cloudflared never routes to, and an eepsite block
+// i2pd — which delivers only to :80 — could never reach.
+func (h HostTemplate) Sites(_, host string, ports []PortSelection) ([]Site, error) {
+	var sites []Site
+	for _, p := range ports {
+		if !p.RoutableByCaddy() || p.Listen != 0 {
+			continue
+		}
+		label := host
+		if p.Subdomain != "" {
+			label = p.Subdomain // replaces the service name, never prefixes it
+		}
+		sites = append(sites, Site{
+			PortName: p.Name, Address: h.Prefix + label + h.Suffix, Port: p.Port, TLS: h.TLS,
+		})
+	}
+	return sites, nil
+}
+
+// HostFromAddress implements HostRouted.
+func (h HostTemplate) HostFromAddress(address string) (string, bool) {
+	addr := strings.TrimPrefix(strings.TrimPrefix(address, "http://"), "https://")
+	if i := strings.LastIndex(addr, "}:"); i >= 0 {
+		addr = addr[:i+1] // drop a listen port
+	}
+	label, ok := strings.CutSuffix(addr, h.Suffix)
+	return label, ok && label != ""
 }
 
 // ServiceAddress is one way to reach a service on a layer.
@@ -129,9 +200,8 @@ type ServiceAddress struct {
 
 // ── Registry ──────────────────────────────────────────────────────────────────
 
-// Registry manages the set of registered network layers. Layers register
-// themselves during init() or programmatic setup, and the CLI/TUI iterate
-// the registry for lifecycle commands and status display.
+// Registry is an ordered set of network layers. internal/network/layers
+// builds the one every command, the TUI and the GUI iterate.
 type Registry struct {
 	layers map[string]NetworkLayer
 	order  []string // insertion order for deterministic iteration
@@ -181,13 +251,6 @@ func (r *Registry) Has(name string) bool {
 	_, ok := r.layers[name]
 	return ok
 }
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-// Compile-time check that a value satisfies the interface.
-// Layer packages use this in their own compilation unit:
-//
-//	var _ network.NetworkLayer = (*Layer)(nil)
 
 // ── Address caching ───────────────────────────────────────────────────────────
 

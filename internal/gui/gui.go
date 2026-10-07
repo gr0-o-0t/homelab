@@ -355,8 +355,8 @@ func (a *app) layerToggles(svc *service.Service) g.Widget {
 	for _, l := range a.opt.Layers {
 		layer := l.Name()
 		flag := []string{}
-		if layer != "ts" {
-			flag = []string{"--" + layer}
+		if l.Flag() != "" {
+			flag = []string{"--" + l.Flag()}
 		}
 		on := active[layer]
 		label := layer + " — " + l.Label()

@@ -73,7 +73,7 @@ var tunnelStatusCmd = &cobra.Command{
 
 // ── logs ──────────────────────────────────────────────────────────────────────
 
-var tunnelLogsCmd = containerLogsCmd("cloudflared",
+var tunnelLogsCmd = layerLogsCmd("cf",
 	"Stream cloudflared logs")
 
 // ── route ─────────────────────────────────────────────────────────────────────
@@ -271,7 +271,8 @@ func requireTunnelConfig(env map[string]string) error {
 // declared subdomain, not necessarily the service name — so the DNS route and
 // the Caddy route name the same host.
 func publicHostname(svcName string, env map[string]string) string {
-	return fmt.Sprintf("%s.%s", configgen.CFHost(configDir(), svcName), env["DOMAIN"])
+	cf, _ := extRegistry().Get("cf")
+	return fmt.Sprintf("%s.%s", configgen.CurrentHost(configDir(), cf, svcName), env["DOMAIN"])
 }
 
 func init() {

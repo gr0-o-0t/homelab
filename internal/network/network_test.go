@@ -24,15 +24,13 @@ func (f *fakeLayer) Profile() string        { return f.name }
 func (f *fakeLayer) Start() error           { return nil }
 func (f *fakeLayer) Stop() error            { return nil }
 func (f *fakeLayer) Status() network.Status { return network.Status{ContainerState: "running"} }
-func (f *fakeLayer) Enable(_, _ string, _ network.ServiceInfo, _ []network.PortSelection) error {
-	return nil
+func (f *fakeLayer) Flag() string           { return f.name }
+func (f *fakeLayer) ConfDir() string        { return "conf.d-" + f.name }
+func (f *fakeLayer) Sites(_, _ string, _ []network.PortSelection) ([]network.Site, error) {
+	return nil, nil
 }
-func (f *fakeLayer) Disable(_ string) error { return nil }
 func (f *fakeLayer) ServiceAddresses(_ string, _ map[string]string) []network.ServiceAddress {
 	return nil
-}
-func (f *fakeLayer) CaddyConfigDir(_ string) string {
-	return "caddy/conf.d-" + f.name
 }
 
 // ── Registry tests ────────────────────────────────────────────────────────────
@@ -116,4 +114,26 @@ func TestAddressCache_DoesNotCacheEmpty(t *testing.T) {
 	c.Get(func() string { calls++; return "" })
 	c.Get(func() string { calls++; return "" })
 	assert.Equal(t, 2, calls)
+}
+
+// ── HostTemplate ──────────────────────────────────────────────────────────────
+
+func TestHostTemplate_SitesAndReadBack(t *testing.T) {
+	h := network.HostTemplate{Prefix: "http://", Suffix: ".{$DOMAIN}"}
+	sites, err := h.Sites("forgejo", "git", []network.PortSelection{
+		{Name: "default", Port: 3000, Protocol: "tcp"},
+		{Name: "22", Port: 22, Listen: 22, Protocol: "tcp"}, // raw TCP: no site
+		{Name: "53", Port: 53, Listen: 53, Protocol: "udp"}, // udp: no site
+		{Name: "admin", Port: 9000, Subdomain: "adm", Protocol: "tcp"},
+	})
+	require.NoError(t, err)
+	require.Len(t, sites, 2)
+	assert.Equal(t, network.Site{PortName: "default", Address: "http://git.{$DOMAIN}", Port: 3000}, sites[0])
+	assert.Equal(t, "http://adm.{$DOMAIN}", sites[1].Address)
+
+	label, ok := h.HostFromAddress("http://git.{$DOMAIN}")
+	assert.True(t, ok)
+	assert.Equal(t, "git", label)
+	_, ok = h.HostFromAddress("http://example.org")
+	assert.False(t, ok)
 }

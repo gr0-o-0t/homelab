@@ -180,7 +180,7 @@ services:
   # Profile-activated. Enable with: homelab ext enable i2p
   # Uses i2pd (C++ implementation) — lighter than Java I2P.
   # Eepsite tunnels configured via tunnels.conf.
-  # Manage tunnels: homelab i2p enable <service>
+  # Manage tunnels: homelab enable <service> --i2p
   # Web Console: http://127.0.0.1:7070 (published to loopback below)
   i2p:
     logging: *default-logging

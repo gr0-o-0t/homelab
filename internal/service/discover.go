@@ -10,6 +10,7 @@ import (
 
 	"github.com/groot/homelab/internal/configgen"
 	"github.com/groot/homelab/internal/docker"
+	"github.com/groot/homelab/internal/network/layers"
 )
 
 // Service represents a single entry under services/<name>/.
@@ -18,15 +19,11 @@ type Service struct {
 	Dir  string // absolute path to services/<name>/
 	// HasCaddyConf is always false: static caddy.conf files are no longer
 	// shipped or read. Kept only because internal/tui tests still set it.
-	HasCaddyConf  bool
-	Enabled       bool // regular file in caddy/conf.d/<name>.conf (private)
-	PublicEnabled bool // regular file in caddy/conf.d-cf/<name>.conf (cf)
+	HasCaddyConf bool
 
-	// Network extension layer exposure — detected from caddy/conf.d-<ext>/ file existence.
-	// These are always regular files (written by configgen.WriteFile), not symlinks.
-	HasTor bool // caddy/conf.d-tor/<name>.conf exists
-	HasI2P bool // caddy/conf.d-i2p/<name>.conf exists
-	HasYgg bool // caddy/conf.d-ygg/<name>.conf exists
+	// Layers lists the network layers the service is exposed on, in registry
+	// order — detected from its generated files in each layer's conf dir.
+	Layers []LayerName
 
 	Installed bool // true = exists on disk; false = catalog-only (not yet added)
 
@@ -202,14 +199,10 @@ func discover(repoRoot string) ([]Service, error) {
 		dir := filepath.Join(servicesDir, name)
 
 		services = append(services, Service{
-			Name:          name,
-			Dir:           dir,
-			Enabled:       exposedOn(repoRoot, "private", name),
-			PublicEnabled: exposedOn(repoRoot, "cf", name),
-			HasTor:        exposedOn(repoRoot, "tor", name),
-			HasI2P:        exposedOn(repoRoot, "i2p", name),
-			HasYgg:        exposedOn(repoRoot, "ygg", name),
-			Installed:     true,
+			Name:      name,
+			Dir:       dir,
+			Layers:    exposedLayers(repoRoot, name),
+			Installed: true,
 		})
 	}
 
@@ -219,17 +212,28 @@ func discover(repoRoot string) ([]Service, error) {
 	return services, nil
 }
 
-// exposedOn reports whether any generated block for name exists in layer
-// ext. Checking only <name>.conf missed services whose ports are named (a
+// exposedLayers lists the layers name has a generated block in.
+func exposedLayers(root, name string) []LayerName {
+	var out []LayerName
+	for _, l := range layers.New(root, nil, nil).All() {
+		if exposedOn(root, l.ConfDir(), name) {
+			out = append(out, l.Name())
+		}
+	}
+	return out
+}
+
+// exposedOn reports whether any generated block for name exists in a layer's
+// conf dir. Checking only <name>.conf missed services whose ports are named (a
 // subdomain port lands in <name>-<port>.conf); the file names are computed
 // from the declared ports rather than globbed, because "<name>-*" would also
 // match a different service called "<name>-something".
-func exposedOn(root, ext, name string) bool {
-	files := []string{configgen.GeneratedFilePath(root, ext, name, "")}
+func exposedOn(root, confDir, name string) bool {
+	files := []string{configgen.GeneratedFilePath(root, confDir, name, "")}
 	if info, err := configgen.LoadServiceInfo(root, name); err == nil {
 		if ports, err := configgen.ResolvePorts(info.Ports, nil); err == nil {
 			for _, p := range ports {
-				files = append(files, configgen.GeneratedFilePath(root, ext, name, p.Name))
+				files = append(files, configgen.GeneratedFilePath(root, confDir, name, p.Name))
 			}
 		}
 	}
@@ -253,27 +257,14 @@ type LayerName = string
 
 // ActiveLayers returns the layers this service is currently exposed on, in
 // display order.
-//
-// Discovery records exposure as one bool per layer, so every caller that wants
-// to iterate them re-derives the same flag→name mapping — and they drifted:
-// `homelab status` printed a real Tor address while the TUI printed a
-// name-templated fake, and neither knew ygg had moved to port addressing. One
-// mapping, one order, both renderers.
-func (s Service) ActiveLayers() []LayerName {
-	var names []LayerName
-	for _, l := range []struct {
-		name    LayerName
-		exposed bool
-	}{
-		{"ts", s.Enabled},
-		{"cf", s.PublicEnabled},
-		{"tor", s.HasTor},
-		{"i2p", s.HasI2P},
-		{"ygg", s.HasYgg},
-	} {
-		if l.exposed {
-			names = append(names, l.name)
+func (s Service) ActiveLayers() []LayerName { return s.Layers }
+
+// On reports whether the service is exposed on the named layer.
+func (s Service) On(layer LayerName) bool {
+	for _, l := range s.Layers {
+		if l == layer {
+			return true
 		}
 	}
-	return names
+	return false
 }

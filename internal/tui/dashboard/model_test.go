@@ -21,9 +21,9 @@ func stubEnvBuilder(svcName string) map[string]string {
 
 func stubServices() []service.Service {
 	return []service.Service{
-		{Name: "caddy", Installed: true, Running: 1, Total: 1, HasCaddyConf: true, Enabled: true},
-		{Name: "immich", Installed: true, Running: 3, Total: 3, HasCaddyConf: true, Enabled: true},
-		{Name: "jellyfin", Installed: true, Running: 1, Total: 2, HasCaddyConf: true, Enabled: false},
+		{Name: "caddy", Installed: true, Running: 1, Total: 1, HasCaddyConf: true, Layers: []string{"ts"}},
+		{Name: "immich", Installed: true, Running: 3, Total: 3, HasCaddyConf: true, Layers: []string{"ts"}},
+		{Name: "jellyfin", Installed: true, Running: 1, Total: 2, HasCaddyConf: true},
 		{Name: "sonarr", Installed: true, Running: 0, Total: 1, HasCaddyConf: false},
 		{Name: "paperless", Installed: false}, // catalog-only
 		{Name: "vaultwarden", Installed: false},
@@ -439,6 +439,12 @@ type fakeLayer struct {
 
 func (f fakeLayer) Name() string          { return f.name }
 func (f fakeLayer) ContainerName() string { return f.ctr }
+func (f fakeLayer) Flag() string {
+	if f.name == "ts" {
+		return ""
+	}
+	return f.name
+}
 func (f fakeLayer) ServiceAddresses(svc string, _ map[string]string) []network.ServiceAddress {
 	return []network.ServiceAddress{{URL: "https://" + svc + "." + f.name}}
 }

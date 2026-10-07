@@ -5,7 +5,6 @@ package cf
 
 import (
 	"fmt"
-	"path/filepath"
 
 	"github.com/groot/homelab/internal/configgen"
 	"github.com/groot/homelab/internal/network"
@@ -15,20 +14,23 @@ import (
 const containerName = "cloudflared"
 
 // Layer implements network.NetworkLayer for Cloudflare Tunnel.
+//
+// Sites are plain http://<host>.<domain>: TLS is terminated at the Cloudflare
+// edge. cloudflared's ingress is managed by `homelab cf route`, so there is no
+// per-service daemon state and no network.Configurer.
 type Layer struct {
-	repoRoot   string
-	runner     *run.Commander
-	envFn      network.EnvFunc
-	reloadHook func() error
+	network.HostTemplate
+	repoRoot string
+	runner   *run.Commander
+	envFn    network.EnvFunc
 }
 
 // New creates a new Cloudflare layer.
 func New(repoRoot string, runner *run.Commander, envFn network.EnvFunc) *Layer {
-	return &Layer{repoRoot: repoRoot, runner: runner, envFn: envFn}
-}
-
-func newForTest(repoRoot string, hook func() error) *Layer {
-	return &Layer{repoRoot: repoRoot, runner: run.Default(), reloadHook: hook}
+	return &Layer{
+		HostTemplate: network.HostTemplate{Prefix: "http://", Suffix: ".{$DOMAIN}"},
+		repoRoot:     repoRoot, runner: runner, envFn: envFn,
+	}
 }
 
 var _ network.NetworkLayer = (*Layer)(nil)
@@ -37,6 +39,7 @@ func (l *Layer) Name() string          { return "cf" }
 func (l *Layer) Label() string         { return "Cloudflare Tunnel" }
 func (l *Layer) ContainerName() string { return containerName }
 func (l *Layer) Profile() string       { return "tunnel" }
+func (l *Layer) Flag() string          { return "cf" }
 
 func (l *Layer) Start() error {
 	return l.runner.DockerComposeEnv(
@@ -55,21 +58,7 @@ func (l *Layer) Status() network.Status {
 	return network.Status{ContainerState: state}
 }
 
-// Enable and Disable are no-ops: cf has no extension-native state beyond
-// Caddy routing, and Caddy config for every extension (including cf) is now
-// written/removed solely by internal/configgen — see cmd/enable.go and
-// cmd/disable.go. Kept on the interface for registry/status/logs use.
-func (l *Layer) Enable(svcName, displayName string, info network.ServiceInfo, ports []network.PortSelection) error {
-	return nil
-}
-
-func (l *Layer) Disable(svcName string) error {
-	return nil
-}
-
-func (l *Layer) CaddyConfigDir(configRoot string) string {
-	return filepath.Join(configRoot, "caddy", "conf.d-cf")
-}
+func (l *Layer) ConfDir() string { return "conf.d-cf" }
 
 // ServiceAddresses returns the public hostname Cloudflare fronts: the host
 // configgen wrote into the service's conf.d-cf block, which carries any --name
@@ -80,7 +69,7 @@ func (l *Layer) ServiceAddresses(svcName string, env map[string]string) []networ
 	if dom == "" {
 		return []network.ServiceAddress{{Note: "DOMAIN not set — run homelab setup"}}
 	}
-	host := configgen.CFHost(l.repoRoot, svcName)
+	host := configgen.CurrentHost(l.repoRoot, l, svcName)
 	return []network.ServiceAddress{{URL: fmt.Sprintf("https://%s.%s", host, dom)}}
 }
 

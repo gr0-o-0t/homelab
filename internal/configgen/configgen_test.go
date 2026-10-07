@@ -45,155 +45,6 @@ func TestResolvePorts_NewFormat(t *testing.T) {
 	assert.Equal(t, 3000, result[1].Port)
 }
 
-// The three declaration forms, as they appear in a site address. See
-// config.PortEntry for the grammar.
-func TestSiteAddress_DeclarationForms(t *testing.T) {
-	bare := PortSelection{Name: "default", Port: 8080}
-	assert.Equal(t, "gitea.{$HOME_SUBDOMAIN}.{$DOMAIN}", siteAddress("gitea", "private", bare))
-
-	mapped := PortSelection{Name: "22", Port: 22, Listen: 22}
-	assert.Equal(t, "gitea.{$HOME_SUBDOMAIN}.{$DOMAIN}:22", siteAddress("gitea", "private", mapped))
-
-	named := PortSelection{Name: "vault", Port: 80, Subdomain: "vault"}
-	assert.Equal(t, "vault.{$HOME_SUBDOMAIN}.{$DOMAIN}", siteAddress("vaultwarden", "private", named),
-		"a declared subdomain replaces the service name, it does not prefix it")
-
-	assert.Equal(t, "vault.{$DOMAIN}", siteAddress("vaultwarden", "cf", named))
-}
-
-func TestBuildBlock_PrivateDefaultPort(t *testing.T) {
-	block, err := buildBlock("private", "gitea", "gitea", PortSelection{Name: "default", Port: 3000, Protocol: "tcp"})
-	require.NoError(t, err)
-	assert.Equal(t, "private", block.Extension)
-	assert.Equal(t, "default", block.PortName)
-	assert.Contains(t, block.Content, "gitea.{$HOME_SUBDOMAIN}.{$DOMAIN}")
-	assert.Contains(t, block.Content, "import wildcard_tls")
-	assert.Contains(t, block.Content, "reverse_proxy gitea:3000")
-}
-
-func TestBuildBlock_CFNamedPort(t *testing.T) {
-	block, err := buildBlock("cf", "gitea", "gitea", PortSelection{Name: "web", Port: 8080, Protocol: "tcp"})
-	require.NoError(t, err)
-	assert.Equal(t, "cf", block.Extension)
-	assert.Contains(t, block.Content, "http://gitea.{$DOMAIN}")
-	assert.Contains(t, block.Content, "reverse_proxy gitea:8080")
-	assert.NotContains(t, block.Content, "import wildcard_tls")
-}
-
-// Mesh site addresses must carry the http:// scheme. Without it Caddy turns on
-// automatic HTTPS for .i2p/.onion/.ygg: it binds :443, serves a redirect on
-// :80 (which is the port the mesh layer actually dials), and burns ACME
-// attempts on a name no CA will sign.
-func TestBuildBlock_MeshLayersAreHTTPOnly(t *testing.T) {
-	for ext, want := range map[string]string{
-		"i2p": "http://mysvc.{$HOME_SUBDOMAIN}.i2p {",
-	} {
-		block, err := buildBlock(ext, "mysvc", "mysvc", PortSelection{Name: "default", Port: 80, Protocol: "tcp"})
-		require.NoError(t, err, ext)
-		assert.Contains(t, block.Content, want)
-		assert.Contains(t, block.Content, "reverse_proxy mysvc:80")
-	}
-}
-
-func TestBuildRoutesBlock_MeshLayersAreHTTPOnly(t *testing.T) {
-	for ext, want := range map[string]string{
-		"i2p": "http://appflowy.{$HOME_SUBDOMAIN}.i2p {",
-	} {
-		content, err := buildRoutesBlock(ext, "appflowy", "reverse_proxy appflowy:80\n")
-		require.NoError(t, err, ext)
-		assert.Contains(t, content, want)
-	}
-}
-
-// Yggdrasil has no naming, so there is no `<name>.ygg` host to match on: the
-// block is port-addressed and written by the ygg layer, which is the only
-// thing that knows the port. Empty content is the signal to skip the write.
-func TestBuildBlock_YggIsWrittenByItsLayer(t *testing.T) {
-	block, err := buildBlock("ygg", "mysvc", "mysvc", PortSelection{Name: "web", Port: 8080, Protocol: "tcp"})
-	require.NoError(t, err)
-	assert.Empty(t, block.Content)
-	assert.Equal(t, 8080, block.Port, "the port must still reach the layer")
-
-	routes, err := buildRoutesBlock("ygg", "appflowy", "reverse_proxy appflowy:80\n")
-	require.NoError(t, err)
-	assert.Empty(t, routes)
-}
-
-func TestWrapSiteBlock(t *testing.T) {
-	got := WrapSiteBlock(":9001", "# header comment\n\nreverse_proxy svc:80\n")
-	assert.Equal(t, ":9001 {\n\treverse_proxy svc:80\n}\n", got)
-}
-
-func TestBuildBlock_DisplayNameDiffers(t *testing.T) {
-	// displayName differs from svcName (--name override)
-	block, err := buildBlock("private", "My App", "my-app", PortSelection{Name: "web", Port: 3000, Protocol: "tcp"})
-	require.NoError(t, err)
-	assert.Contains(t, block.Content, "My App.{$HOME_SUBDOMAIN}.{$DOMAIN}")
-	assert.Contains(t, block.Content, "reverse_proxy my-app:3000")
-}
-
-func TestBuildBlock_UnknownExtension(t *testing.T) {
-	_, err := buildBlock("unknown", "svc", "svc", PortSelection{Name: "default", Port: 80, Protocol: "tcp"})
-	assert.ErrorContains(t, err, "unknown extension")
-}
-
-// Two i2p ports must not produce byte-identical blocks: combined with
-// per-port filenames, that leaves two files claiming one host, which Caddy
-// rejects at validate time.
-func TestBuildBlock_I2PPerPortAddressesAreDistinct(t *testing.T) {
-	web, err := buildBlock("i2p", "svc", "svc",
-		PortSelection{Name: "default", Port: 8080, Protocol: "tcp"})
-	require.NoError(t, err)
-	admin, err := buildBlock("i2p", "svc", "svc",
-		PortSelection{Name: "admin", Port: 9090, Subdomain: "admin", Protocol: "tcp"})
-	require.NoError(t, err)
-
-	assert.Contains(t, web.Content, "http://svc.{$HOME_SUBDOMAIN}.i2p {")
-	assert.Contains(t, admin.Content, "http://admin.{$HOME_SUBDOMAIN}.i2p {")
-	assert.NotEqual(t, web.Content, admin.Content)
-}
-
-// Tor joins ygg in writing its own Caddy config: a .onion is a hash of a key
-// tor generates, so it cannot be templated from a service name, and nothing
-// rewrites the Host header on the way in the way i2pd's hostoverride does.
-func TestBuildBlock_TorIsWrittenByItsLayer(t *testing.T) {
-	block, err := buildBlock("tor", "svc", "svc",
-		PortSelection{Name: "default", Port: 8080, Protocol: "tcp"})
-	require.NoError(t, err)
-	assert.Empty(t, block.Content)
-
-	routes, err := buildRoutesBlock("tor", "appflowy", "reverse_proxy appflowy:80\n")
-	require.NoError(t, err)
-	assert.Empty(t, routes)
-}
-
-// A mesh layer delivers to Caddy on :80 and nowhere else — i2pd's tunnel and
-// tor's HiddenServicePort both target it. A port declared with its own listen
-// port (22:22) therefore gets no mesh block, rather than one that sits there
-// never receiving a request.
-func TestBuildBlock_MeshSkipsExplicitListenPorts(t *testing.T) {
-	// private and cf too: a 22:22 port is raw TCP (ssh), so an HTTPS
-	// reverse_proxy on :22, or a plain-HTTP cf listener there, can never work.
-	for _, ext := range []string{"i2p", "private", "cf"} {
-		block, err := buildBlock(ext, "forgejo", "forgejo",
-			PortSelection{Name: "22", Port: 22, Listen: 22, Protocol: "tcp"})
-		require.NoError(t, err, ext)
-		assert.Empty(t, block.Content, ext)
-	}
-}
-
-// Caddy speaks HTTP; nothing here proxies datagrams. A udp port is recorded
-// for compose and skipped for routing.
-func TestBuildBlock_UDPGetsNoSiteBlock(t *testing.T) {
-	block, err := buildBlock("private", "adguardhome", "adguardhome",
-		PortSelection{Name: "53", Port: 53, Listen: 53, Protocol: "udp"})
-	require.NoError(t, err)
-	assert.Empty(t, block.Content)
-}
-
-// The ygg equivalent of this guard lives in internal/network/ygg: distinct
-// ports come from the layer's allocator, not from the site address.
-
 // ── WriteFile / RemoveFile filename scheme ───────────────────────────────────
 
 func TestBlockFilename_DefaultPort(t *testing.T) {
@@ -211,8 +62,8 @@ func TestWriteFile_MultiPortPrivate_DoesNotClobber(t *testing.T) {
 	// every private/cf filename to "<svc>.conf" regardless of port name, so
 	// a second port's write silently overwrote the first.
 	dir := t.TempDir()
-	require.NoError(t, WriteFile(dir, "private", "svc", "web", "web-block\n"))
-	require.NoError(t, WriteFile(dir, "private", "svc", "ssh", "ssh-block\n"))
+	require.NoError(t, WriteFile(dir, "conf.d", "svc", "web", "web-block\n"))
+	require.NoError(t, WriteFile(dir, "conf.d", "svc", "ssh", "ssh-block\n"))
 
 	webData, err := os.ReadFile(filepath.Join(dir, "caddy", "conf.d", "svc.conf"))
 	require.NoError(t, err, "default/web port should keep its own file")
@@ -225,8 +76,8 @@ func TestWriteFile_MultiPortPrivate_DoesNotClobber(t *testing.T) {
 
 func TestWriteFile_MultiPortCF_DoesNotClobber(t *testing.T) {
 	dir := t.TempDir()
-	require.NoError(t, WriteFile(dir, "cf", "svc", "web", "web-block\n"))
-	require.NoError(t, WriteFile(dir, "cf", "svc", "ssh", "ssh-block\n"))
+	require.NoError(t, WriteFile(dir, "conf.d-cf", "svc", "web", "web-block\n"))
+	require.NoError(t, WriteFile(dir, "conf.d-cf", "svc", "ssh", "ssh-block\n"))
 
 	_, err := os.Stat(filepath.Join(dir, "caddy", "conf.d-cf", "svc.conf"))
 	require.NoError(t, err)
@@ -244,10 +95,10 @@ func TestRemoveAllPortFiles_RemovesEveryDeclaredPort(t *testing.T) {
 		0o644,
 	))
 
-	require.NoError(t, WriteFile(dir, "private", "svc", "web", "web-block\n"))
-	require.NoError(t, WriteFile(dir, "private", "svc", "ssh", "ssh-block\n"))
+	require.NoError(t, WriteFile(dir, "conf.d", "svc", "web", "web-block\n"))
+	require.NoError(t, WriteFile(dir, "conf.d", "svc", "ssh", "ssh-block\n"))
 
-	require.NoError(t, RemoveAllPortFiles(dir, "private", "svc"))
+	require.NoError(t, RemoveAllPortFiles(dir, "conf.d", "svc"))
 
 	_, err := os.Stat(filepath.Join(dir, "caddy", "conf.d", "svc.conf"))
 	assert.True(t, os.IsNotExist(err), "default-port file should be removed")
@@ -257,8 +108,8 @@ func TestRemoveAllPortFiles_RemovesEveryDeclaredPort(t *testing.T) {
 
 func TestRemoveAllPortFiles_NoPortsDeclared_FallsBackToDefault(t *testing.T) {
 	dir := t.TempDir()
-	require.NoError(t, WriteFile(dir, "private", "svc", "", "content\n"))
-	require.NoError(t, RemoveAllPortFiles(dir, "private", "svc"))
+	require.NoError(t, WriteFile(dir, "conf.d", "svc", "", "content\n"))
+	require.NoError(t, RemoveAllPortFiles(dir, "conf.d", "svc"))
 	_, err := os.Stat(filepath.Join(dir, "caddy", "conf.d", "svc.conf"))
 	assert.True(t, os.IsNotExist(err))
 }
@@ -285,7 +136,8 @@ func TestI2PHost_NamespacedUnderHomeSubdomain(t *testing.T) {
 }
 
 // Layers with one name per service outside Caddy (the i2p hostoverride, the cf
-// DNS route) must resolve the same host Generate puts in the site block.
+// DNS route) must resolve the same host Resolve puts in the site block; see
+// render_test.go for the block side.
 func TestSiteHost_MatchesGeneratedSiteAddress(t *testing.T) {
 	dir := t.TempDir()
 	svcDir := filepath.Join(dir, "services", "vaultwarden")
@@ -298,42 +150,8 @@ func TestSiteHost_MatchesGeneratedSiteAddress(t *testing.T) {
 	assert.Equal(t, "vault", SiteHost(info, ""), "declared subdomain")
 	assert.Equal(t, "vault", SiteHost(info, "vaultwarden"), "service name is not an override")
 
-	for _, display := range []string{"", "vaultwarden"} {
-		blocks, err := Generate(Request{ServiceName: "vaultwarden", DisplayName: display,
-			Extensions: []string{"cf", "i2p"}, ConfigDir: dir})
-		require.NoError(t, err)
-		assert.Contains(t, blocks[0].Content, "http://vault.{$DOMAIN} {")
-		assert.Contains(t, blocks[1].Content, "http://"+I2PHost(SiteHost(info, display), HomeSubdomainVar)+" {")
-	}
-
 	// --name wins over the service name on a port without a subdomain.
 	plain := ServiceInfo{Name: "gitea", Ports: config.PortEntries{"default": {Port: 3000, Protocols: []string{"tcp"}}}}
 	assert.Equal(t, "git", SiteHost(plain, "git"))
 	assert.Equal(t, "gitea", SiteHost(plain, ""))
-}
-
-// CFHost reads the enabled cf block, which records a --name the declaration
-// cannot know about.
-func TestCFHost_PrefersGeneratedBlock(t *testing.T) {
-	dir := t.TempDir()
-	assert.Equal(t, "gitea", CFHost(dir, "gitea"), "nothing enabled, nothing declared")
-
-	require.NoError(t, WriteFile(dir, "cf", "gitea", "", "http://git.{$DOMAIN} {\n    reverse_proxy gitea:3000\n}\n"))
-	assert.Equal(t, "git", CFHost(dir, "gitea"))
-}
-
-// GeneratedHost reads back every layer configgen writes, including a listen
-// port on the address, and refuses addresses it did not write.
-func TestGeneratedHost_PerLayer(t *testing.T) {
-	dir := t.TempDir()
-	assert.Equal(t, "", GeneratedHost(dir, "private", "gitea"), "no block, no host")
-
-	require.NoError(t, WriteFile(dir, "private", "gitea", "", "git.{$HOME_SUBDOMAIN}.{$DOMAIN}:8443 {\n}\n"))
-	require.NoError(t, WriteFile(dir, "i2p", "gitea", "", "http://"+I2PHost("git", HomeSubdomainVar)+" {\n}\n"))
-	require.NoError(t, WriteFile(dir, "cf", "gitea", "", "http://example.org {\n}\n"))
-	assert.Equal(t, "git", GeneratedHost(dir, "private", "gitea"))
-	assert.Equal(t, "git", GeneratedHost(dir, "i2p", "gitea"))
-	assert.Equal(t, "", GeneratedHost(dir, "cf", "gitea"))
-	assert.Equal(t, "gitea", CFHost(dir, "gitea"), "unreadable block falls back to the declaration")
-	assert.Equal(t, "git", PrivateHost(dir, "gitea"))
 }

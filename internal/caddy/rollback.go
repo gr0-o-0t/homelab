@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/groot/homelab/internal/configgen"
+	"github.com/groot/homelab/internal/network/layers"
 )
 
 // ErrInvalidConfig marks a Reload that failed because `caddy validate`
@@ -15,9 +16,6 @@ import (
 // place means Caddy refuses to start at its next restart, taking every route
 // down with it.
 var ErrInvalidConfig = errors.New("caddy validate failed")
-
-// snapshotExts are the layers whose conf.d* directories the Caddyfile imports.
-var snapshotExts = []string{"private", "cf", "i2p", "tor", "ygg"}
 
 // Snapshot is the state of every imported Caddy config directory at one point
 // in time, so a write that produced an invalid config can be undone.
@@ -38,8 +36,8 @@ type entry struct {
 // call ReloadOrRestore instead of Reload.
 func (m *Manager) Snapshot() (*Snapshot, error) {
 	s := &Snapshot{dirs: map[string]map[string]entry{}}
-	for _, ext := range snapshotExts {
-		dir := configgen.ConfigDir(m.RepoRoot, ext)
+	for _, l := range layers.New(m.RepoRoot, nil, nil).All() {
+		dir := configgen.ConfigDir(m.RepoRoot, l.ConfDir())
 		files := map[string]entry{}
 		des, err := os.ReadDir(dir)
 		if err != nil && !os.IsNotExist(err) {

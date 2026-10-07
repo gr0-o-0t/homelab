@@ -44,6 +44,23 @@ func containerLogsCmd(container, short string) *cobra.Command {
 	}
 }
 
+// layerLogsCmd builds the `logs` subcommand for a network layer's container.
+// The layer is looked up when the command runs, not when it is built, so
+// --config-dir is honoured.
+func layerLogsCmd(name, short string) *cobra.Command {
+	return &cobra.Command{
+		Use:   "logs",
+		Short: short,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			l, err := layerByName(name)
+			if err != nil {
+				return err
+			}
+			return coreCompose("logs", "-f", l.ContainerName())
+		},
+	}
+}
+
 // requireExtEnabled reports whether an extension is enabled, printing the
 // standard notice and the command that enables it when it is not.
 func requireExtEnabled(root, ext, label string) bool {
@@ -74,10 +91,15 @@ func requireContainerRunning(container string) bool {
 // extStatusHeader prints the title and the two gates every layer's `status`
 // opens with. It returns false when the caller should stop — the extension is
 // off, or its container isn't up — having already explained why.
-func extStatusHeader(root, ext, container, title string) bool {
+func extStatusHeader(root, ext, title string) bool {
 	fmt.Printf("\n%s\n\n", styles.Header.Render(title))
 	if !requireExtEnabled(root, ext, title) {
 		return false
 	}
-	return requireContainerRunning(container)
+	l, err := layerByName(ext)
+	if err != nil {
+		fmt.Printf("  %s  %v\n", styles.Err.Render("✗"), err)
+		return false
+	}
+	return requireContainerRunning(l.ContainerName())
 }

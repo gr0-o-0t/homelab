@@ -7,17 +7,14 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/groot/homelab/internal/network"
 	"github.com/groot/homelab/internal/network/ygg"
 	"github.com/groot/homelab/internal/tui/styles"
 	"github.com/spf13/cobra"
 )
 
-const yggContainer = "yggdrasil"
-
 var yggCmd = &cobra.Command{
 	Use:     "ygg",
-	Aliases: []string{yggContainer},
+	Aliases: []string{"yggdrasil"},
 	Short:   "Manage Yggdrasil IPv6 mesh node",
 	Long:    "Inspect the Yggdrasil mesh node and manage per-service socat port forwarders.",
 }
@@ -30,7 +27,7 @@ var yggStatusCmd = &cobra.Command{
 	Short:   "Show Yggdrasil node and forwarding status",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		root := configDir()
-		if !extStatusHeader(root, "yggdrasil", yggContainer, "Yggdrasil Mesh Node") {
+		if !extStatusHeader(root, "ygg", "Yggdrasil Mesh Node") {
 			return nil
 		}
 
@@ -43,7 +40,7 @@ var yggStatusCmd = &cobra.Command{
 		if !printYggForwarders(root, addr) {
 			fmt.Printf("  %s  (none — run %s)\n",
 				styles.Muted.Render("!"),
-				styles.Primary.Render("homelab ygg enable <service>"))
+				styles.Primary.Render("homelab enable <service> --ygg"))
 		}
 		fmt.Println()
 		return nil
@@ -52,91 +49,7 @@ var yggStatusCmd = &cobra.Command{
 
 // ── logs ──────────────────────────────────────────────────────────────────────
 
-var yggLogsCmd = containerLogsCmd(yggContainer,
-	"Stream yggdrasil container logs")
-
-// ── enable ────────────────────────────────────────────────────────────────────
-
-var yggEnablePort string
-
-var yggEnableCmd = &cobra.Command{
-	Use:   "enable <service>",
-	Short: "Expose a service via Yggdrasil mesh node",
-	Long: `Create a socat TCP6→TCP4 port forwarder on the Yggdrasil node.
-
-The forwarder relays to Caddy, which gets a matching :<port> site block, so
-mesh peers reach the service at:
-  http://[<yggdrasil-ipv6>]:<port>
-
-The mesh port is allocated from 9000 up and stays put across re-enables — the
-mesh has no naming, so a service is only addressable by port and two services
-cannot share one. Use --port to override the service's own port (the upstream
-Caddy proxies to), normally detected from caddy.conf.`,
-	Args:              cobra.ExactArgs(1),
-	ValidArgsFunction: completeServiceNames,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		name := args[0]
-		root := configDir()
-
-		port, _ := cmd.Flags().GetString("port")
-		if port == "" {
-			var err error
-			port, err = detectServicePort(root, name)
-			if err != nil {
-				return fmt.Errorf("detecting port for %s: %w\n  Use --port to specify explicitly", name, err)
-			}
-		}
-		portNum, err := strconv.Atoi(port)
-		if err != nil {
-			return fmt.Errorf("invalid port %q: %w", port, err)
-		}
-
-		l, err := yggLayer()
-		if err != nil {
-			return err
-		}
-		// Same call path as `homelab enable <svc> --ygg`: this command used to
-		// keep its own copy that wrote a forwarder straight to the service
-		// container and no Caddy block at all.
-		if err := l.Enable(name, name, network.ServiceInfo{},
-			[]network.PortSelection{{Name: "default", Port: portNum, Protocol: "tcp"}}); err != nil {
-			return err
-		}
-		if err := caddyReload(); err != nil {
-			fmt.Printf("  %s  Caddy reload: %v\n", styles.Warning.Render("!"), err)
-		}
-
-		fmt.Printf("\n%s\n\n", styles.Header.Render("Yggdrasil: "+name))
-		printYggForwarders(root, yggNodeAddress())
-		fmt.Println()
-		return nil
-	},
-}
-
-// ── disable ───────────────────────────────────────────────────────────────────
-
-var yggDisableCmd = &cobra.Command{
-	Use:               "disable <service>",
-	Short:             "Remove a Yggdrasil port forwarder",
-	Args:              cobra.ExactArgs(1),
-	ValidArgsFunction: completeServiceNames,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		name := args[0]
-
-		l, err := yggLayer()
-		if err != nil {
-			return err
-		}
-		if err := l.Disable(name); err != nil {
-			return err
-		}
-		if err := caddyReload(); err != nil {
-			fmt.Printf("  %s  Caddy reload: %v\n", styles.Warning.Render("!"), err)
-		}
-		fmt.Printf("  %s  %s removed from the mesh\n\n", styles.Warning.Render("→"), styles.Bold.Render(name))
-		return nil
-	},
-}
+var yggLogsCmd = layerLogsCmd("ygg", "Stream yggdrasil container logs")
 
 // ── list ──────────────────────────────────────────────────────────────────────
 
@@ -219,10 +132,7 @@ func extractVar(data, key string) string {
 }
 
 func init() {
-	yggEnableCmd.Flags().StringVar(&yggEnablePort, "port", "", "Override service port")
 	yggCmd.AddCommand(yggStatusCmd)
 	yggCmd.AddCommand(yggLogsCmd)
 	yggCmd.AddCommand(yggListCmd)
-	yggCmd.AddCommand(yggEnableCmd)
-	yggCmd.AddCommand(yggDisableCmd)
 }

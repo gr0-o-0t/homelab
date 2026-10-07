@@ -261,7 +261,7 @@ func (m Model) renderListItem(svc service.Service, selected bool) string {
 	}
 
 	running := svc.Running > 0
-	exposed := svc.Enabled || svc.PublicEnabled
+	exposed := svc.On("ts") || svc.On("cf")
 	dot := styles.Dot(running, exposed)
 
 	ns := lipgloss.NewStyle().Width(installedNameW)
@@ -278,22 +278,7 @@ func (m Model) renderListItem(svc service.Service, selected bool) string {
 
 func exposureBadge(svc service.Service) string {
 	w := lipgloss.NewStyle().Width(7)
-	var active []string
-	if svc.Enabled {
-		active = append(active, "ts")
-	}
-	if svc.PublicEnabled {
-		active = append(active, "cf")
-	}
-	if svc.HasTor {
-		active = append(active, "tor")
-	}
-	if svc.HasI2P {
-		active = append(active, "i2p")
-	}
-	if svc.HasYgg {
-		active = append(active, "ygg")
-	}
+	active := svc.ActiveLayers()
 	if len(active) == 0 {
 		return w.Foreground(styles.ColMuted).Render("       ")
 	}
@@ -507,7 +492,7 @@ func (m Model) renderStatusBar() string {
 		if svc := m.selectedService(); svc != nil {
 			for _, c := range m.promptChoices(svc) {
 				label := c.layer
-				if c.layer == "ts" {
+				if c.flag == "" {
 					label = "private"
 				}
 				pairs = append(pairs, c.key, label)

@@ -47,9 +47,9 @@ func TestReloadService_Routes_OnlyTouchesActiveLayers(t *testing.T) {
 	writeSvc(t, root, "appflowy", map[string]string{
 		"config.yaml": "ports:\n  - 80\n", configgen.RoutesFileName: routesBody,
 	})
-	privatePath := configgen.GeneratedFilePath(root, "private", "appflowy", "")
-	cfPath := configgen.GeneratedFilePath(root, "cf", "appflowy", "")
-	require.NoError(t, configgen.WriteFile(root, "private", "appflowy", "", "stale\n"))
+	privatePath := configgen.GeneratedFilePath(root, "conf.d", "appflowy", "")
+	cfPath := configgen.GeneratedFilePath(root, "conf.d-cf", "appflowy", "")
+	require.NoError(t, configgen.WriteFile(root, "conf.d", "appflowy", "", "stale\n"))
 
 	require.NoError(t, newForTest(root, noopReload).ReloadService("appflowy"))
 
@@ -62,12 +62,12 @@ func TestReloadService_Routes_OnlyTouchesActiveLayers(t *testing.T) {
 func TestReloadService_Ports_RegeneratesAndKeepsName(t *testing.T) {
 	root := t.TempDir()
 	writeSvc(t, root, "gitea", map[string]string{"config.yaml": "ports:\n  - 3000\n"})
-	priv := configgen.GeneratedFilePath(root, "private", "gitea", "")
-	cf := configgen.GeneratedFilePath(root, "cf", "gitea", "")
+	priv := configgen.GeneratedFilePath(root, "conf.d", "gitea", "")
+	cf := configgen.GeneratedFilePath(root, "conf.d-cf", "gitea", "")
 	// Enabled earlier with --name git on both layers; the upstream port since changed.
-	require.NoError(t, configgen.WriteFile(root, "private", "gitea", "",
+	require.NoError(t, configgen.WriteFile(root, "conf.d", "gitea", "",
 		"git.{$HOME_SUBDOMAIN}.{$DOMAIN} {\n    reverse_proxy gitea:2000\n}\n"))
-	require.NoError(t, configgen.WriteFile(root, "cf", "gitea", "",
+	require.NoError(t, configgen.WriteFile(root, "conf.d-cf", "gitea", "",
 		"http://git.{$DOMAIN} {\n    reverse_proxy gitea:2000\n}\n"))
 
 	reloads := 0
@@ -87,7 +87,7 @@ func TestReloadService_NothingActive(t *testing.T) {
 	err := newForTest(root, noopReload).ReloadService("gitea")
 	assert.ErrorContains(t, err, "no active routes",
 		"reloading a service with no enabled layer should say so, not silently succeed")
-	assert.NoFileExists(t, configgen.GeneratedFilePath(root, "private", "gitea", ""))
+	assert.NoFileExists(t, configgen.GeneratedFilePath(root, "conf.d", "gitea", ""))
 }
 
 // ── Rollback ──────────────────────────────────────────────────────────────────
@@ -97,8 +97,8 @@ func TestReloadService_NothingActive(t *testing.T) {
 func TestReloadService_RollsBackWhenValidationFails(t *testing.T) {
 	root := t.TempDir()
 	writeSvc(t, root, "gitea", map[string]string{"config.yaml": "ports:\n  - 3000\n"})
-	require.NoError(t, configgen.WriteFile(root, "private", "gitea", "", "old\n"))
-	other := filepath.Join(configgen.ConfigDir(root, "private"), "other.conf")
+	require.NoError(t, configgen.WriteFile(root, "conf.d", "gitea", "", "old\n"))
+	other := filepath.Join(configgen.ConfigDir(root, "conf.d"), "other.conf")
 	require.NoError(t, os.WriteFile(other, []byte("# kept\n"), 0o600))
 
 	m := newForTest(root, func() error { return fmt.Errorf("%w: bad", ErrInvalidConfig) })
@@ -106,7 +106,7 @@ func TestReloadService_RollsBackWhenValidationFails(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalidConfig)
 	assert.Contains(t, err.Error(), "rolled back")
 
-	assert.Equal(t, "old\n", read(t, configgen.GeneratedFilePath(root, "private", "gitea", "")))
+	assert.Equal(t, "old\n", read(t, configgen.GeneratedFilePath(root, "conf.d", "gitea", "")))
 	assert.Equal(t, "# kept\n", read(t, other), "unrelated config is untouched")
 }
 
@@ -115,17 +115,17 @@ func TestReloadService_RollsBackWhenValidationFails(t *testing.T) {
 func TestReloadOrRestore_KeepsChangeOnOtherErrors(t *testing.T) {
 	root := t.TempDir()
 	writeSvc(t, root, "gitea", map[string]string{"config.yaml": "ports:\n  - 3000\n"})
-	require.NoError(t, configgen.WriteFile(root, "private", "gitea", "", "old\n"))
+	require.NoError(t, configgen.WriteFile(root, "conf.d", "gitea", "", "old\n"))
 
 	m := newForTest(root, func() error { return errors.New("caddy not running") })
 	require.Error(t, m.ReloadService("gitea"))
-	assert.Contains(t, read(t, configgen.GeneratedFilePath(root, "private", "gitea", "")), "reverse_proxy gitea:3000")
+	assert.Contains(t, read(t, configgen.GeneratedFilePath(root, "conf.d", "gitea", "")), "reverse_proxy gitea:3000")
 }
 
 // Snapshot/Restore is what cmd/enable uses around writes made by other hands.
 func TestSnapshot_RestoreUndoesAddsChangesAndRemovals(t *testing.T) {
 	repo := t.TempDir()
-	dir := configgen.ConfigDir(repo, "cf")
+	dir := configgen.ConfigDir(repo, "conf.d-cf")
 	require.NoError(t, os.MkdirAll(dir, 0o750))
 	changed := filepath.Join(dir, "changed.conf")
 	removed := filepath.Join(dir, "removed.conf")
@@ -137,8 +137,8 @@ func TestSnapshot_RestoreUndoesAddsChangesAndRemovals(t *testing.T) {
 
 	require.NoError(t, os.WriteFile(changed, []byte("new\n"), 0o600))
 	require.NoError(t, os.Remove(removed))
-	require.NoError(t, os.MkdirAll(configgen.ConfigDir(repo, "tor"), 0o750))
-	added := filepath.Join(configgen.ConfigDir(repo, "tor"), "added.conf")
+	require.NoError(t, os.MkdirAll(configgen.ConfigDir(repo, "conf.d-tor"), 0o750))
+	added := filepath.Join(configgen.ConfigDir(repo, "conf.d-tor"), "added.conf")
 	require.NoError(t, os.WriteFile(added, []byte("x\n"), 0o600))
 
 	require.NoError(t, snap.Restore())

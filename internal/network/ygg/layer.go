@@ -39,12 +39,17 @@ func newForTest(repoRoot string, hook func() error) *Layer {
 	return &Layer{repoRoot: repoRoot, runner: run.Default(), reloadHook: hook}
 }
 
-var _ network.NetworkLayer = (*Layer)(nil)
+var (
+	_ network.NetworkLayer = (*Layer)(nil)
+	_ network.Configurer   = (*Layer)(nil)
+)
 
 func (l *Layer) Name() string          { return "ygg" }
 func (l *Layer) Label() string         { return "Yggdrasil mesh node" }
 func (l *Layer) ContainerName() string { return containerName }
 func (l *Layer) Profile() string       { return "yggdrasil" }
+func (l *Layer) Flag() string          { return "ygg" }
+func (l *Layer) ConfDir() string       { return "conf.d-ygg" }
 
 func (l *Layer) Start() error {
 	return l.runner.DockerComposeEnv(
@@ -63,49 +68,48 @@ func (l *Layer) Status() network.Status {
 	return network.Status{ContainerState: state}
 }
 
-// Enable exposes the service on the mesh. Unlike the other layers this one
-// writes its own Caddy config instead of taking configgen's: the mesh has no
-// naming, so clients reach a service at [<node address>]:<port> and Caddy has
-// to route by listening port, not by Host header. The port is only known once
-// it has been allocated here, so the site block is generated here too.
-//
-// Per port: allocate a mesh port, point socat at Caddy (tailscale:<port>),
-// and write the matching `:<port>` site block.
-func (l *Layer) Enable(svcName, displayName string, info network.ServiceInfo, ports []network.PortSelection) error {
-	svcInfo, err := configgen.LoadServiceInfo(l.repoRoot, svcName)
-	if err != nil {
-		return fmt.Errorf("reading service config: %w", err)
-	}
-
+// Configure gives each of the service's ports a mesh port and a socat
+// forwarder pointing at Caddy (tailscale:<port>), then has yggdrasil reconcile
+// its forwarders.
+func (l *Layer) Configure(svcName, _ string, ports []network.PortSelection) error {
 	for _, port := range ports {
-		meshPort, err := l.appendForwarder(svcName, port.Name, port.Port)
-		if err != nil {
+		if _, err := l.appendForwarder(svcName, port.Name); err != nil {
 			return fmt.Errorf("writing socat forwarder: %w", err)
 		}
-		// A routes-driven service splits paths across containers, so its own
-		// route body is the upstream definition; everything else is a single
-		// reverse_proxy.
-		body := svcInfo.Routes
-		if body == "" {
-			body = fmt.Sprintf("reverse_proxy %s:%d\n", svcName, port.Port)
-		}
-		if err := l.writeCaddyBlock(svcName, port.Name, meshPort, body); err != nil {
-			return fmt.Errorf("writing caddy block: %w", err)
-		}
 	}
 	return l.reload()
 }
 
-// Disable removes the socat forwarders and Caddy blocks for the service and
-// has yggdrasil reconcile its forwarders.
-func (l *Layer) Disable(svcName string) error {
+// Teardown removes the service's socat forwarders and has yggdrasil reconcile.
+func (l *Layer) Teardown(svcName string) error {
 	_ = l.removeForwarder(svcName)
-	_ = l.removeCaddyBlocks(svcName)
 	return l.reload()
 }
 
-func (l *Layer) CaddyConfigDir(configRoot string) string {
-	return filepath.Join(configRoot, "caddy", "conf.d-ygg")
+// Sites returns one `:<mesh port>` site per port. The mesh has no naming, so
+// clients reach a service at [<node address>]:<port> and Caddy routes by
+// listening port, not Host header. A port-only site address serves plain HTTP:
+// there is no hostname for automatic HTTPS to get a certificate for — which is
+// what we want, since yggdrasil already encrypts the transport.
+func (l *Layer) Sites(svcName, _ string, ports []network.PortSelection) ([]network.Site, error) {
+	taken, err := l.takenPorts()
+	if err != nil {
+		return nil, err
+	}
+	sites := make([]network.Site, 0, len(ports))
+	for _, p := range ports {
+		meshPort := taken[configgen.PortFileName(svcName, p.Name)]
+		if meshPort == 0 {
+			return nil, fmt.Errorf("%s has no mesh port for %q — configure it first", svcName, p.Name)
+		}
+		sites = append(sites, network.Site{
+			PortName: p.Name,
+			Address:  fmt.Sprintf(":%d", meshPort),
+			Port:     p.Port,
+			Comment:  fmt.Sprintf("# Yggdrasil: %s → reachable at http://[<node address>]:%d\n", svcName, meshPort),
+		})
+	}
+	return sites, nil
 }
 
 // ServiceAddresses pairs the node's mesh address with the port allocated to
@@ -188,7 +192,7 @@ func (l *Layer) socatDir() string {
 // the same). Going straight to the service would bypass Caddy entirely, which
 // is what the generated `<name>.ygg` Caddy blocks used to pretend wasn't
 // happening.
-func (l *Layer) appendForwarder(name, portName string, port int) (int, error) {
+func (l *Layer) appendForwarder(name, portName string) (int, error) {
 	socatDir := l.socatDir()
 	if err := os.MkdirAll(socatDir, 0o750); err != nil {
 		return 0, fmt.Errorf("creating socat.d: %w", err)
@@ -281,27 +285,6 @@ func parsePort(content string) int {
 	return 0
 }
 
-// writeCaddyBlock writes the `:<meshPort>` site block for one forwarder. A
-// port-only site address serves plain HTTP: there is no hostname, so Caddy's
-// automatic HTTPS has nothing to get a certificate for — which is what we
-// want, since yggdrasil already encrypts the transport.
-func (l *Layer) writeCaddyBlock(svcName, portName string, meshPort int, body string) error {
-	dir := l.CaddyConfigDir(l.repoRoot)
-	if err := os.MkdirAll(dir, 0o750); err != nil {
-		return fmt.Errorf("creating caddy config dir: %w", err)
-	}
-	header := fmt.Sprintf("# Yggdrasil: %s → reachable at http://[<node address>]:%d\n", svcName, meshPort)
-	block := configgen.WrapSiteBlock(fmt.Sprintf(":%d", meshPort), body)
-	path := filepath.Join(dir, configgen.PortFileName(svcName, portName)+".conf")
-	return os.WriteFile(path, []byte(header+block), 0o600)
-}
-
-// removeCaddyBlocks removes every generated site block for the service — the
-// default-name one and any per-port ones, mirroring removeForwarder.
-func (l *Layer) removeCaddyBlocks(name string) error {
-	return removeExact(l.CaddyConfigDir(l.repoRoot), l.fileNames(name), ".conf")
-}
-
 // removeForwarder removes every forward file for the service — both the
 // default-name one and any per-port ones — since Disable isn't told which
 // ports were previously enabled.
@@ -309,8 +292,7 @@ func (l *Layer) removeForwarder(name string) error {
 	return removeExact(l.socatDir(), l.fileNames(name), ".forward")
 }
 
-// fileNames lists every basename this service's forwarders and site blocks can
-// have: the default one plus one per declared port (see configgen.PortFileName).
+// fileNames lists every basename this service's forwarders can have: the default one plus one per declared port (see configgen.PortFileName).
 //
 // Exact names, not a `<name>-*` glob: the glob for "foo" also matches the files
 // of a service called "foo-bar", so disabling one tore down the other's mesh

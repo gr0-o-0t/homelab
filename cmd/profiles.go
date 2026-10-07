@@ -50,7 +50,7 @@ func activeExtNotes(cfgDir string) []string {
 	if cfg != nil {
 		for _, ext := range cfg.Extensions {
 			notes = append(notes, fmt.Sprintf("%s enabled — starting %s",
-				config.ExtensionLabel(ext), ext))
+				extLabel(ext), ext))
 		}
 	}
 	return notes

@@ -39,7 +39,13 @@ type TunnelSection struct {
 }
 
 // Layer implements network.NetworkLayer for I2P eepsite tunnels.
+//
+// Sites are http://<host>.<home>.i2p — matched against the Host header i2pd
+// stamps via hostoverride (see configgen.I2PHost). Plain HTTP: the transport is
+// already encrypted, and a bare site address would make Caddy chase an ACME
+// cert for a TLD no CA will ever sign.
 type Layer struct {
+	network.HostTemplate
 	repoRoot   string
 	runner     *run.Commander
 	envFn      network.EnvFunc
@@ -52,16 +58,24 @@ type Layer struct {
 
 // New creates a new I2P layer.
 func New(repoRoot string, runner *run.Commander, envFn network.EnvFunc) *Layer {
-	return &Layer{repoRoot: repoRoot, runner: runner, envFn: envFn}
+	return &Layer{
+		HostTemplate: hostTemplate,
+		repoRoot:     repoRoot, runner: runner, envFn: envFn,
+	}
 }
+
+var hostTemplate = network.HostTemplate{Prefix: "http://", Suffix: "." + configgen.HomeSubdomainVar + ".i2p"}
 
 // newForTest creates an I2P layer with injected reload hook for testing.
 func newForTest(repoRoot string, hook func() error) *Layer {
-	return &Layer{repoRoot: repoRoot, runner: run.Default(), reloadHook: hook}
+	return &Layer{HostTemplate: hostTemplate, repoRoot: repoRoot, runner: run.Default(), reloadHook: hook}
 }
 
 // compile-time check
-var _ network.NetworkLayer = (*Layer)(nil)
+var (
+	_ network.NetworkLayer = (*Layer)(nil)
+	_ network.Configurer   = (*Layer)(nil)
+)
 
 // ── Identity ──────────────────────────────────────────────────────────────────
 
@@ -69,6 +83,8 @@ func (l *Layer) Name() string          { return "i2p" }
 func (l *Layer) Label() string         { return "I2P router + eepsite proxy" }
 func (l *Layer) ContainerName() string { return containerName }
 func (l *Layer) Profile() string       { return "i2p" }
+func (l *Layer) Flag() string          { return "i2p" }
+func (l *Layer) ConfDir() string       { return "conf.d-i2p" }
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
 
@@ -95,10 +111,9 @@ func (l *Layer) Status() network.Status {
 
 // ── Service exposure ─────────────────────────────────────────────────────────
 
-// Enable appends an I2P tunnel section to tunnels.conf for the service, then
-// reloads i2pd. Caddy config (host-override routing to Caddy) is written
-// separately by internal/configgen — see cmd/enable.go.
-func (l *Layer) Enable(svcName, displayName string, info network.ServiceInfo, ports []network.PortSelection) error {
+// Configure appends an I2P tunnel section to tunnels.conf for the service, then
+// reloads i2pd.
+func (l *Layer) Configure(svcName, displayName string, ports []network.PortSelection) error {
 	// The hostoverride has to be the host configgen put in the site block for
 	// this same displayName, not the bare service name: with --name or a
 	// declared subdomain those differ, and the eepsite 404s.
@@ -111,17 +126,10 @@ func (l *Layer) Enable(svcName, displayName string, info network.ServiceInfo, po
 	return l.Reload()
 }
 
-// Disable removes the I2P tunnel config for the service and reloads. Caddy
-// config removal is handled separately by internal/configgen.
-func (l *Layer) Disable(svcName string) error {
+// Teardown removes the I2P tunnel config for the service and reloads.
+func (l *Layer) Teardown(svcName string) error {
 	_ = l.RemoveTunnel(svcName)
 	return l.Reload()
-}
-
-// ── Config ────────────────────────────────────────────────────────────────────
-
-func (l *Layer) CaddyConfigDir(configRoot string) string {
-	return filepath.Join(configRoot, "caddy", "conf.d-i2p")
 }
 
 // ── Addressing ────────────────────────────────────────────────────────────────
@@ -240,29 +248,17 @@ func (l *Layer) cacheFor(svcName string) *network.AddressCache {
 
 // ── I2P-specific helpers ─────────────────────────────────────────────────────
 //
-// Exported so cmd/i2p.go (the standalone `homelab i2p enable/disable/list`
-// commands) can call these directly instead of maintaining its own copy —
-// two copies previously diverged (one was missing the tunnels.conf
-// directory creation on first use, and they disagreed on whether removing a
-// missing tunnel is an error), which broke the very workflow i2pEnableCmd's
-// own help text suggested (enable via `i2p enable`, then via `enable --i2p`).
+// Exported for `homelab i2p list`.
 
 // TunnelsPath returns the path to i2pd's tunnels.conf.
 func (l *Layer) TunnelsPath() string {
 	return filepath.Join(l.repoRoot, "i2p", "tunnels.conf")
 }
 
-// AppendTunnel appends an HTTP tunnel section to tunnels.conf, routing
-// <name>.i2p traffic through tailscale:80 with hostoverride so Caddy can route
-// by Host header. Idempotent: a tunnel with the same name already present
-// is left as-is rather than erroring, since enabling i2p for a service twice
-// (e.g. once via `homelab i2p enable`, once via `homelab enable --i2p`) is a
-// normal, expected sequence, not a conflict.
-func (l *Layer) AppendTunnel(name string, port int) error {
-	return l.appendTunnel(name, l.hostFor(name, ""), port)
-}
-
-// appendTunnel is AppendTunnel with the hostoverride already resolved.
+// appendTunnel appends an HTTP tunnel section to tunnels.conf, routing the
+// eepsite through tailscale:80 with a hostoverride so Caddy can route by Host
+// header. Idempotent: a tunnel with the same name and host is left as-is —
+// re-enabling is normal, not a conflict.
 func (l *Layer) appendTunnel(name, host string, port int) error {
 	tunPath := l.TunnelsPath()
 

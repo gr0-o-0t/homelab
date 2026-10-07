@@ -9,8 +9,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func noopReload() error { return nil }
-
 func TestLayer_Identity(t *testing.T) {
 	l := New("/test/repo", nil, nil)
 	assert.Equal(t, "cf", l.Name())
@@ -23,23 +21,14 @@ func TestLayer_InterfaceImplementation(t *testing.T) {
 	assert.NotNil(t, l)
 }
 
-func TestLayer_CaddyConfigDir(t *testing.T) {
-	l := New("/test/repo", nil, nil)
-	assert.Equal(t, "/home/user/.config/homelab/caddy/conf.d-cf", l.CaddyConfigDir("/home/user/.config/homelab"))
+func TestLayer_ConfDir(t *testing.T) {
+	assert.Equal(t, "conf.d-cf", New("/test/repo", nil, nil).ConfDir())
 }
 
-// Caddy config writing/removal for cf is owned entirely by internal/configgen
-// now (see cmd/enable.go, cmd/disable.go) — Enable/Disable here are no-ops
-// kept for interface conformance and registry/status/logs use.
-func TestLayer_Enable_IsNoop(t *testing.T) {
-	l := newForTest(t.TempDir(), noopReload)
-	assert.NoError(t, l.Enable("gitea", "gitea", network.ServiceInfo{},
-		[]network.PortSelection{{Name: "web", Port: 3000, Protocol: "tcp"}}))
-}
-
-func TestLayer_Disable_IsNoop(t *testing.T) {
-	l := newForTest(t.TempDir(), noopReload)
-	assert.NoError(t, l.Disable("nonexistent"))
+// cf is nothing but Caddy routing: no per-service daemon state.
+func TestLayer_HasNoDaemonSide(t *testing.T) {
+	_, ok := any(New("/test/repo", nil, nil)).(network.Configurer)
+	assert.False(t, ok)
 }
 
 // The advertised hostname is the one in the cf site block, so --name and
@@ -50,7 +39,7 @@ func TestLayer_ServiceAddresses_UsesSiteHost(t *testing.T) {
 	env := map[string]string{"DOMAIN": "example.com"}
 	assert.Equal(t, "https://gitea.example.com", l.ServiceAddresses("gitea", env)[0].URL)
 
-	require.NoError(t, configgen.WriteFile(root, "cf", "gitea", "",
+	require.NoError(t, configgen.WriteFile(root, "conf.d-cf", "gitea", "",
 		"http://git.{$DOMAIN} {\n    reverse_proxy gitea:3000\n}\n"))
 	assert.Equal(t, "https://git.example.com", l.ServiceAddresses("gitea", env)[0].URL)
 }

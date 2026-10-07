@@ -248,7 +248,7 @@ func renderExtensionChecks(cfgFile string, dc *docker.Client, pass *bool) {
 		} else {
 			cState = ""
 		}
-		displayName := config.ExtensionLabel(name)
+		displayName := layer.Label()
 		if cState == containerStateRunning {
 			results = append(results, diagnostics.CheckResult{
 				Name: displayName, Status: diagnostics.StatusPass,

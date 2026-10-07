@@ -22,19 +22,8 @@ func TestLayer_InterfaceImplementation(t *testing.T) {
 	assert.NotNil(t, l)
 }
 
-func TestLayer_CaddyConfigDir(t *testing.T) {
-	l := New("/test/repo", nil, nil)
-	assert.Equal(t, "/home/user/.config/homelab/caddy/conf.d", l.CaddyConfigDir("/home/user/.config/homelab"))
-}
-
-func TestLayer_Enable_Noop(t *testing.T) {
-	l := New("/test/repo", nil, nil)
-	assert.NoError(t, l.Enable("any", "any", network.ServiceInfo{}, nil))
-}
-
-func TestLayer_Disable_Noop(t *testing.T) {
-	l := New("/test/repo", nil, nil)
-	assert.NoError(t, l.Disable("any"))
+func TestLayer_ConfDir(t *testing.T) {
+	assert.Equal(t, "conf.d", New("/test/repo", nil, nil).ConfDir())
 }
 
 // The URL names the host the generated block answers on, not the service.

@@ -11,7 +11,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/groot/homelab/internal/configgen"
 	"github.com/groot/homelab/internal/network"
 	"github.com/groot/homelab/internal/run"
 )
@@ -64,14 +63,16 @@ func New(repoRoot string, runner *run.Commander, envFn network.EnvFunc) *Layer {
 func newForTest(repoRoot string, hook func() error) *Layer {
 	return &Layer{
 		repoRoot: repoRoot, runner: run.Default(), reloadHook: hook,
-		// Tests have no tor container; pretend the address exists so Enable
-		// exercises the Caddy-block path instead of polling for 10s.
+		// Tests have no tor container; pretend the address exists so Sites
+		// does not poll for 10s.
 		onionHook: func(svcName string) string { return svcName + "onionaddressxxxxxxxxxxxx.onion" },
 	}
 }
 
-// compile-time check
-var _ network.NetworkLayer = (*Layer)(nil)
+var (
+	_ network.NetworkLayer = (*Layer)(nil)
+	_ network.Configurer   = (*Layer)(nil)
+)
 
 // ── Identity ──────────────────────────────────────────────────────────────────
 
@@ -79,6 +80,8 @@ func (l *Layer) Name() string          { return "tor" }
 func (l *Layer) Label() string         { return "Tor onion service proxy" }
 func (l *Layer) ContainerName() string { return containerName }
 func (l *Layer) Profile() string       { return "tor" }
+func (l *Layer) Flag() string          { return "tor" }
+func (l *Layer) ConfDir() string       { return "conf.d-tor" }
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
 
@@ -105,39 +108,49 @@ func (l *Layer) Status() network.Status {
 
 // ── Service exposure ─────────────────────────────────────────────────────────
 
-// Enable writes torrc.d config for the service and reloads tor. Caddy config
-// (routing <displayName>.onion → svcName:<port>) is written separately by
-// internal/configgen — see cmd/enable.go.
-func (l *Layer) Enable(svcName, displayName string, info network.ServiceInfo, ports []network.PortSelection) error {
+// Configure writes the service's torrc.d snippet and reloads tor.
+func (l *Layer) Configure(svcName, _ string, ports []network.PortSelection) error {
 	if err := l.writeTorService(svcName, ports); err != nil {
 		return fmt.Errorf("writing torrc config: %w", err)
-	}
-	if err := l.reload(); err != nil {
-		return err
-	}
-	return l.writeCaddyBlock(svcName, ports)
-}
-
-// Disable removes torrc.d config for the service and reloads. Caddy config
-// removal is handled separately by internal/configgen.
-func (l *Layer) Disable(svcName string) error {
-	if err := os.Remove(l.torServicePath(svcName)); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("removing torrc config: %w", err)
-	}
-	// The Caddy block is this layer's too, now that it carries the generated
-	// .onion — leaving it behind would keep a site block for an address no
-	// hidden service answers on.
-	block := filepath.Join(l.CaddyConfigDir(l.repoRoot), svcName+".conf")
-	if err := os.Remove(block); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("removing caddy config: %w", err)
 	}
 	return l.reload()
 }
 
-// ── Config ────────────────────────────────────────────────────────────────────
+// Teardown removes the service's torrc.d snippet and reloads tor. The key
+// directory stays, so a re-enable gets the same .onion.
+func (l *Layer) Teardown(svcName string) error {
+	if err := os.Remove(l.torServicePath(svcName)); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("removing torrc config: %w", err)
+	}
+	return l.reload()
+}
 
-func (l *Layer) CaddyConfigDir(configRoot string) string {
-	return filepath.Join(configRoot, "caddy", "conf.d-tor")
+// Sites returns the one site this service has over Tor: its .onion on Caddy's
+// onion-only listener, proxying to the first HTTP port.
+//
+// The address is a hash of a key tor generates, so it cannot be templated from
+// a service name and is only known after Configure has loaded the config.
+// Nothing rewrites the Host header on the way in — unlike i2pd's hostoverride —
+// so the site address has to be the real .onion.
+func (l *Layer) Sites(svcName, _ string, ports []network.PortSelection) ([]network.Site, error) {
+	onion := l.waitForOnion(svcName)
+	if onion == "" {
+		return nil, fmt.Errorf(
+			"tor has not published an address for %s yet.\n"+
+				"  The hidden service is configured; re-run this command once "+
+				"`homelab tor list` shows its .onion to finish the Caddy route",
+			svcName)
+	}
+	for _, p := range ports {
+		if p.Listen == 0 {
+			return []network.Site{{
+				Address: fmt.Sprintf("http://%s:%d", onion, caddyPort),
+				Port:    p.Port,
+				Comment: "# Tor: " + svcName + "\n",
+			}}, nil
+		}
+	}
+	return nil, fmt.Errorf("%s declares no HTTP port to route over tor", svcName)
 }
 
 // ServiceAddresses returns the service's .onion, read from the hostname file
@@ -258,54 +271,6 @@ func (l *Layer) writeTorService(name string, ports []network.PortSelection) erro
 		httpRouted = true
 	}
 	return os.WriteFile(l.torServicePath(name), []byte(b.String()), 0o600)
-}
-
-// writeCaddyBlock writes the site block for this service's onion address.
-//
-// Like the ygg layer, tor owns its Caddy config: the address is a hash of a
-// key tor generates, so it cannot be templated from a service name and is only
-// known after tor has loaded the config. Nothing rewrites the Host header on
-// the way in — unlike i2pd's hostoverride — so the site address has to be the
-// real .onion.
-func (l *Layer) writeCaddyBlock(svcName string, ports []network.PortSelection) error {
-	onion := l.waitForOnion(svcName)
-	if onion == "" {
-		return fmt.Errorf(
-			"tor has not published an address for %s yet.\n"+
-				"  The hidden service is configured; re-run this command once "+
-				"`homelab tor list` shows its .onion to finish the Caddy route",
-			svcName)
-	}
-
-	body, err := l.routeBody(svcName, ports)
-	if err != nil {
-		return err
-	}
-	dir := l.CaddyConfigDir(l.repoRoot)
-	if err := os.MkdirAll(dir, 0o750); err != nil {
-		return fmt.Errorf("creating caddy config dir: %w", err)
-	}
-	block := "# Tor: " + svcName + "\n" +
-		configgen.WrapSiteBlock(fmt.Sprintf("http://%s:%d", onion, caddyPort), body)
-	return os.WriteFile(filepath.Join(dir, svcName+".conf"), []byte(block), 0o600)
-}
-
-// routeBody is the service's routes file when it has one, else a plain proxy
-// to its HTTP port — the same body every other layer serves.
-func (l *Layer) routeBody(svcName string, ports []network.PortSelection) (string, error) {
-	info, err := configgen.LoadServiceInfo(l.repoRoot, svcName)
-	if err != nil {
-		return "", fmt.Errorf("reading service config: %w", err)
-	}
-	if info.Routes != "" {
-		return info.Routes, nil
-	}
-	for _, p := range ports {
-		if p.Listen == 0 {
-			return fmt.Sprintf("reverse_proxy %s:%d\n", svcName, p.Port), nil
-		}
-	}
-	return "", fmt.Errorf("%s declares no HTTP port to route over tor", svcName)
 }
 
 // waitForOnion polls for the address tor generates when it loads the config.

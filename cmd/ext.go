@@ -5,28 +5,11 @@ import (
 	"strings"
 
 	"github.com/groot/homelab/internal/config"
+	"github.com/groot/homelab/internal/network"
 	"github.com/groot/homelab/internal/run"
 	"github.com/groot/homelab/internal/tui/styles"
 	"github.com/spf13/cobra"
 )
-
-// extContainer maps extension names to their Docker Compose service/container name
-// as defined in the core docker-compose.yml.
-var extContainer = map[string]string{
-	"cf":        "cloudflared",
-	"tor":       torContainer,
-	"i2p":       i2pContainer,
-	"ygg":       yggContainer,
-	"yggdrasil": yggContainer,
-}
-
-// extProfile maps extension names to their Docker Compose profile name.
-var extProfile = map[string]string{
-	"cf":  "tunnel",
-	"tor": "tor",
-	"i2p": "i2p",
-	"ygg": "yggdrasil",
-}
 
 var extCmd = &cobra.Command{
 	Use:   "ext",
@@ -64,12 +47,8 @@ Service-level exposure is managed via the root enable/disable command:
 
 // ── valid extensions ─────────────────────────────────────────────────────────
 
-func validExtNames() []string {
-	return []string{"cf", "tor", "i2p", "ygg", "yggdrasil"}
-}
-
 func completeExtNames(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
-	return validExtNames(), cobra.ShellCompDirectiveNoFileComp
+	return extNames(), cobra.ShellCompDirectiveNoFileComp
 }
 
 // ── list ──────────────────────────────────────────────────────────────────────
@@ -85,10 +64,8 @@ var extListCmd = &cobra.Command{
 
 		fmt.Printf("\n%s\n\n", styles.Header.Render("Network Extensions"))
 
-		all := config.AllExtensions()
-
-		for _, name := range all {
-			label := config.ExtensionLabel(name)
+		for _, l := range extRegistry().All() {
+			name, label := l.Name(), l.Label()
 			if hasResolvedExtension(cfg, name) {
 				fmt.Printf("  %s  %-12s  %s\n",
 					styles.Success.Render("✓"),
@@ -127,19 +104,18 @@ With an extension name, show status for that specific extension.`,
 			return nil
 		}
 		fmt.Println()
-		for _, ext := range targets {
-			state := containerStatus(extContainer[ext])
-			label := config.ExtensionLabel(ext)
+		for _, l := range targets {
+			state := containerStatus(l.ContainerName())
 			if state == containerStateRunning {
 				fmt.Printf("  %s  %s  %s\n",
 					styles.Success.Render("✓"),
-					styles.Bold.Render(ext),
-					label)
+					styles.Bold.Render(l.Name()),
+					l.Label())
 			} else {
 				fmt.Printf("  %s  %s  %s  [%s]\n",
 					styles.Muted.Render("·"),
-					ext,
-					label,
+					l.Name(),
+					l.Label(),
 					styles.Muted.Render(state))
 			}
 		}
@@ -169,11 +145,8 @@ With an extension name, shows logs for that specific extension.`,
 		}
 
 		logArgs := []string{"logs", "-f"}
-		for _, ext := range targets {
-			container := extContainer[ext]
-			if container != "" {
-				logArgs = append(logArgs, container)
-			}
+		for _, l := range targets {
+			logArgs = append(logArgs, l.ContainerName())
 		}
 		return coreCompose(logArgs...)
 	},
@@ -215,21 +188,37 @@ var extStopCmd = &cobra.Command{
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-// resolveExtTargets returns extension names to operate on. With no args,
-// returns all currently enabled extensions from config.
-func resolveExtTargets(args []string) ([]string, error) {
+// resolveExtTargets returns the layers to operate on. With no args, returns
+// every extension enabled in config.yaml.
+func resolveExtTargets(args []string) ([]network.NetworkLayer, error) {
 	if len(args) > 0 {
-		ext := args[0]
-		if _, ok := extContainer[ext]; !ok {
-			return nil, fmt.Errorf("unknown extension %q\n\nAvailable: %s", ext, strings.Join(validExtNames(), ", "))
+		l, err := optionalLayer(args[0])
+		if err != nil {
+			return nil, err
 		}
-		return []string{ext}, nil
+		return []network.NetworkLayer{l}, nil
 	}
 	cfg, err := config.Load(rootConfigFile())
 	if err != nil || cfg == nil {
 		return nil, nil
 	}
-	return cfg.Extensions, nil
+	var out []network.NetworkLayer
+	for _, ext := range cfg.Extensions {
+		if l, err := optionalLayer(ext); err == nil {
+			out = append(out, l)
+		}
+	}
+	return out, nil
+}
+
+// optionalLayer resolves an `ext` argument to a layer an ext command may
+// start and stop — never the private tailnet, which is core.
+func optionalLayer(name string) (network.NetworkLayer, error) {
+	l, err := layerByName(name)
+	if err == nil && l.Flag() == "" {
+		err = fmt.Errorf("unknown extension %q\n\nAvailable: %s", name, strings.Join(extNames(), ", "))
+	}
+	return l, err
 }
 
 // runExtStartStop starts or stops extension containers via docker compose.
@@ -239,48 +228,38 @@ func runExtStartStop(args []string, stop bool, build bool) error {
 	env := buildEnv(dir, "")
 
 	// Determine which extension(s) to act on.
-	extNames, err := resolveExtTargets(args)
+	targets, err := resolveExtTargets(args)
 	if err != nil {
 		return err
 	}
-	if len(extNames) == 0 {
+	if len(targets) == 0 {
 		return fmt.Errorf("no extensions enabled or specified")
-	}
-
-	// Collect unique profiles.
-	seen := make(map[string]bool)
-	var profiles []string
-	for _, ext := range extNames {
-		p := extProfile[ext]
-		if p != "" && !seen[p] {
-			seen[p] = true
-			profiles = append(profiles, "--profile", p)
-		}
 	}
 
 	if stop {
 		fmt.Printf("%s Stopping extension containers…\n", styles.Warning.Render("→"))
-		containers := make([]string, len(extNames))
-		for i, ext := range extNames {
-			containers[i] = extContainer[ext]
+		args := []string{"stop"}
+		for _, l := range targets {
+			args = append(args, l.ContainerName())
 		}
-		return run.Default().DockerComposeEnv(
-			run.CoreComposeFile(dir),
-			env,
-			append([]string{"stop"}, containers...)...,
-		)
+		return run.Default().DockerComposeEnv(run.CoreComposeFile(dir), env, args...)
 	}
 
+	// Collect unique profiles.
+	seen := make(map[string]bool)
+	var upArgs []string
+	for _, l := range targets {
+		if p := l.Profile(); p != "" && !seen[p] {
+			seen[p] = true
+			upArgs = append(upArgs, "--profile", p)
+		}
+	}
 	fmt.Printf("%s Starting extension containers…\n", styles.Primary.Render("→"))
-	upArgs := []string{"up", "-d"}
+	upArgs = append(upArgs, "up", "-d")
 	if build {
 		upArgs = append(upArgs, "--build")
 	}
-	return run.Default().DockerComposeEnv(
-		run.CoreComposeFile(dir),
-		env,
-		append(profiles, upArgs...)...,
-	)
+	return run.Default().DockerComposeEnv(run.CoreComposeFile(dir), env, upArgs...)
 }
 
 // ── enable / disable ─────────────────────────────────────────────────────────
@@ -305,8 +284,8 @@ var extDisableCmd = &cobra.Command{
 // setup` edits — and starts or stops its container to match. Services still
 // need `homelab enable <svc> --<ext>` to be exposed on it.
 func setExtEnabled(ext string, on bool) error {
-	if _, ok := extContainer[ext]; !ok {
-		return fmt.Errorf("unknown extension %q\n\nAvailable: %s", ext, strings.Join(validExtNames(), ", "))
+	if _, err := optionalLayer(ext); err != nil {
+		return err
 	}
 	ext = config.ResolveExtension(ext)
 	cfgFile := rootConfigFile()
@@ -332,7 +311,7 @@ func setExtEnabled(ext string, on bool) error {
 		return err
 	}
 	fmt.Printf("%s %s enabled — expose a service with %s\n", styles.Success.Render("✓"),
-		config.ExtensionLabel(ext), styles.Primary.Render("homelab enable <svc> --"+ext))
+		extLabel(ext), styles.Primary.Render("homelab enable <svc> --"+ext))
 	return nil
 }
 

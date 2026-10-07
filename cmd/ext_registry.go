@@ -2,18 +2,15 @@ package cmd
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 
+	"github.com/groot/homelab/internal/config"
 	"github.com/groot/homelab/internal/network"
+	"github.com/groot/homelab/internal/network/layers"
 	"github.com/groot/homelab/internal/run"
 	"github.com/groot/homelab/internal/tui/styles"
 	"github.com/spf13/cobra"
-
-	"github.com/groot/homelab/internal/network/cf"
-	"github.com/groot/homelab/internal/network/i2p"
-	"github.com/groot/homelab/internal/network/tailscale"
-	"github.com/groot/homelab/internal/network/tor"
-	"github.com/groot/homelab/internal/network/ygg"
 )
 
 var (
@@ -29,36 +26,66 @@ var (
 // flags are parsed), so lazy construction here fixes that.
 func extRegistry() *network.Registry {
 	extRegistryOnce.Do(func() {
-		extRegistryInstance = network.NewRegistry()
 		root := configDir()
-
 		// Evaluated per compose call, not here: buildEnv reads the keyring.
 		env := func() map[string]string { return buildEnv(root, "") }
-
-		// Register layers in display order (default-enabled first)
-		extRegistryInstance.Register(tailscale.New(root, run.Default(), env))
-		extRegistryInstance.Register(cf.New(root, run.Default(), env))
-		extRegistryInstance.Register(tor.New(root, run.Default(), env))
-		extRegistryInstance.Register(i2p.New(root, run.Default(), env))
-		extRegistryInstance.Register(ygg.New(root, run.Default(), env))
+		extRegistryInstance = layers.New(root, run.Default(), env)
 	})
 	return extRegistryInstance
 }
 
-// extLabels are static display labels for extensions whose command tree is
-// built at package-init time (extCommandFor), before flags are parsed and
-// therefore before the registry above may safely be constructed.
-var extLabels = map[string]string{
-	"ts": "Tailscale",
+// layerByName returns a registered layer, accepting config.yaml aliases
+// ("yggdrasil" for ygg).
+func layerByName(name string) (network.NetworkLayer, error) {
+	l, ok := extRegistry().Get(config.ResolveExtension(name))
+	if !ok {
+		return nil, fmt.Errorf("unknown extension %q\n\nAvailable: %s", name, strings.Join(extNames(), ", "))
+	}
+	return l, nil
+}
+
+// extLabel is a layer's display label, or the name itself when unknown.
+func extLabel(name string) string {
+	if l, err := layerByName(name); err == nil {
+		return l.Label()
+	}
+	return name
+}
+
+// optionalLayers are the layers an `ext` command can switch on and off: all
+// but the private tailnet, which is part of the core stack.
+func optionalLayers() []network.NetworkLayer {
+	var out []network.NetworkLayer
+	for _, l := range extRegistry().All() {
+		if l.Flag() != "" {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// extNames lists the optional layers' names.
+func extNames() []string {
+	var names []string
+	for _, l := range optionalLayers() {
+		names = append(names, l.Name())
+	}
+	return names
 }
 
 // extCommandFor creates a root-level cobra command that delegates lifecycle
-// and status operations to the named network layer in the registry. The
-// layer is looked up lazily inside each RunE, never at command-tree
-// construction time, so --config-dir/--config are honored.
+// and status operations to the named network layer in the registry. Only the
+// label is read at construction time (from layers.Static, which needs no
+// config dir); the layer itself is looked up inside each RunE, so
+// --config-dir/--config are honored.
 func extCommandFor(name string) *cobra.Command {
-	label, ok := extLabels[name]
-	if !ok {
+	label := ""
+	for _, l := range layers.Static() {
+		if l.Name() == name {
+			label = l.Label()
+		}
+	}
+	if label == "" {
 		return nil
 	}
 

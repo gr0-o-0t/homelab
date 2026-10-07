@@ -1,9 +1,9 @@
-// Package configgen generates Caddy config blocks from service port declarations
-// and extension flags. Used by `homelab enable <service> --cf --i2p ...`.
+// Package configgen renders every generated Caddy file, for every network
+// layer, from a service's declared ports or its caddy.routes.conf.
 //
-// It is the only way a route is written: every service declares ports in
-// config.yaml, optionally with a caddy.routes.conf for routing that is more
-// than one host → one upstream, and this package generates the Caddy config.
+// A layer says where its sites live (network.NetworkLayer.Sites); Render wraps
+// each in a block whose body is the service's routes file when it ships one,
+// else a reverse_proxy to the site's port. That decision exists here only.
 package configgen
 
 import (
@@ -14,49 +14,22 @@ import (
 	"strings"
 
 	"github.com/groot/homelab/internal/config"
+	"github.com/groot/homelab/internal/network"
 )
 
 // protoTCP and protoUDP are the two protocols a declaration can carry.
 const (
 	protoTCP = "tcp"
 	protoUDP = "udp"
-
-	// extI2P is named because the i2p layer is the one with rules the others
-	// don't share: a home-subdomain-namespaced host, and no explicit ports.
-	extI2P = "i2p"
 )
 
 // PortSelection is one resolved port to expose.
-type PortSelection struct {
-	Name      string // declaration key: "default", a listen port, or a subdomain
-	Port      int    // container port traffic is forwarded to
-	Listen    int    // site port clients connect on; 0 = the layer's default
-	Subdomain string // replaces the service name in the site address; "" = service name
-	Protocol  string // "tcp" or "udp"
-}
+type PortSelection = network.PortSelection
 
-// RoutableByCaddy reports whether this port can be served as a Caddy site.
-// UDP cannot: Caddy speaks HTTP, and nothing in this stack proxies datagrams.
-// Declaring 53/udp is still useful — compose publishes it — it just gets no
-// site block instead of one that silently answers nothing.
-func (p PortSelection) RoutableByCaddy() bool { return p.Protocol != protoUDP }
-
-// CaddyBlock is one generated Caddy config block.
+// CaddyBlock is one generated Caddy file's content.
 type CaddyBlock struct {
-	Extension string // "private", "cf", "i2p", "tor", "ygg"
-	PortName  string // port name ("" for a routes-driven block)
-	Port      int    // upstream container port, for network-layer bookkeeping
-	Listen    int    // declared listen port, 0 when the layer's default applies
-	Content   string // Caddyfile snippet
-}
-
-// Request collects inputs for config generation.
-type Request struct {
-	ServiceName string   // service directory name (e.g., "gitea")
-	DisplayName string   // --name override (defaults to ServiceName)
-	Extensions  []string // selected extensions ("cf", "i2p", "tor", "ygg")
-	PortNames   []string // selected port names --ports flag (empty = all)
-	ConfigDir   string   // root config dir (configDir())
+	PortName string // names the file (see PortFileName); "" for <service>.conf
+	Content  string // Caddyfile snippet
 }
 
 // RoutesFileName is the optional per-service file holding the *body* of a Caddy
@@ -149,59 +122,73 @@ func ResolvePorts(ports config.PortEntries, selected []string) ([]PortSelection,
 	return result, nil
 }
 
-// Generate creates Caddyfile blocks for each (extension × port) pair.
-// It does NOT write files — callers write the blocks to the appropriate conf.d-<ext>/ dirs.
-func Generate(req Request) ([]CaddyBlock, error) {
-	info, err := LoadServiceInfo(req.ConfigDir, req.ServiceName)
+// Exposure is what a service exposes, resolved once and handed to every layer
+// it is enabled on.
+type Exposure struct {
+	Service string
+	Host    string          // site host label: --name, a declared subdomain, or the service name
+	Routes  string          // caddy.routes.conf body; "" for a port-driven service
+	Ports   []PortSelection // resolved ports; a single unnamed one for a routes service
+}
+
+// Resolve reads a service's declaration into an Exposure. displayName is the
+// --name override ("" or the service name for none); portNames restricts which
+// declared ports are exposed (empty means all) and is ignored for a routes
+// service, whose routing happens by path inside one block.
+func Resolve(root, svcName, displayName string, portNames []string) (Exposure, error) {
+	info, err := LoadServiceInfo(root, svcName)
 	if err != nil {
-		return nil, err
+		return Exposure{}, err
 	}
-
-	displayName := req.DisplayName
-	if displayName == "" {
-		displayName = req.ServiceName
-	}
-
-	// A routes snippet replaces the per-port fan-out: routing happens by path
-	// inside the block, so each layer needs exactly one site block. Ports stay
-	// optional here — they only supply the number the network layers record.
 	if info.Routes != "" {
-		// A routes-driven service still declares ports, and a declared
-		// subdomain applies to its single site block the same way it would to a
-		// generated one — that is how vaultwarden serves vault.<home>.<domain>
-		// while keeping its hand-written websocket and rate-limit directives.
-		displayName = SiteHost(info, req.DisplayName)
-		var blocks []CaddyBlock
-		for _, ext := range req.Extensions {
-			content, err := buildRoutesBlock(ext, displayName, info.Routes)
-			if err != nil {
-				return nil, fmt.Errorf("generating block for %s/%s: %w", ext, displayName, err)
-			}
-			blocks = append(blocks, CaddyBlock{
-				Extension: ext,
-				Port:      PrimaryPort(info.Ports),
-				Content:   content,
-			})
-		}
-		return blocks, nil
+		// One site per layer. A declared subdomain still applies to it, the
+		// way vaultwarden serves vault.<home>.<domain> while keeping its
+		// hand-written websocket and rate-limit directives. The port only
+		// supplies the number the mesh layers record.
+		return Exposure{
+			Service: svcName,
+			Host:    SiteHost(info, displayName),
+			Routes:  info.Routes,
+			Ports:   []PortSelection{{Port: PrimaryPort(info.Ports), Protocol: protoTCP}},
+		}, nil
 	}
+	if len(info.Ports) == 0 {
+		return Exposure{}, fmt.Errorf("no ports defined in config.yaml and no %s found for %s",
+			RoutesFileName, svcName)
+	}
+	ports, err := ResolvePorts(info.Ports, portNames)
+	if err != nil {
+		return Exposure{}, err
+	}
+	if displayName == "" {
+		displayName = svcName
+	}
+	return Exposure{Service: svcName, Host: displayName, Ports: ports}, nil
+}
 
-	ports, err := ResolvePorts(info.Ports, req.PortNames)
+// Render produces every Caddy block a layer serves for an exposure. It does
+// not write them; see WriteFile.
+func Render(l network.NetworkLayer, e Exposure) ([]CaddyBlock, error) {
+	sites, err := l.Sites(e.Service, e.Host, e.Ports)
 	if err != nil {
 		return nil, err
 	}
-
-	var blocks []CaddyBlock
-	for _, ext := range req.Extensions {
-		for _, port := range ports {
-			block, err := buildBlock(ext, displayName, req.ServiceName, port)
-			if err != nil {
-				return nil, fmt.Errorf("generating block for %s/%s/%s: %w", ext, displayName, port.Name, err)
-			}
-			blocks = append(blocks, block)
+	blocks := make([]CaddyBlock, 0, len(sites))
+	for _, s := range sites {
+		body := e.Routes
+		if body == "" {
+			body = fmt.Sprintf("reverse_proxy %s:%d\n", e.Service, s.Port)
 		}
+		var b strings.Builder
+		b.WriteString(s.Comment)
+		b.WriteString(s.Address + " {\n")
+		if s.TLS {
+			b.WriteString("\timport wildcard_tls\n")
+		}
+		b.WriteString(indentBody(stripLeadingComments(body)))
+		b.WriteString("}\n")
+		blocks = append(blocks, CaddyBlock{PortName: s.PortName, Content: b.String()})
 	}
-
 	return blocks, nil
 }
 
@@ -282,24 +269,16 @@ func primaryHTTPPort(ports config.PortEntries) (PortSelection, bool) {
 	return *first, true
 }
 
-// CFHost returns the host label a service's Cloudflare site answers on
-// (<label>.<DOMAIN>). The generated conf.d-cf block is the source of truth —
-// it records any --name the service was enabled with — so it is read first;
-// without one, the host is resolved from the declaration as Generate would.
-func CFHost(configRoot, svcName string) string {
-	if host := GeneratedHost(configRoot, "cf", svcName); host != "" {
+// CurrentHost returns the host label a service's site answers on for a
+// Host-routed layer (<label>.<DOMAIN> on Cloudflare, <label>.<home>.<DOMAIN> on
+// the tailnet). The generated block is the source of truth — it records any
+// --name the service was enabled with — so it is read first; without one, the
+// host is resolved from the declaration as Resolve would.
+func CurrentHost(root string, l network.NetworkLayer, svcName string) string {
+	if host := GeneratedHost(root, l, svcName); host != "" {
 		return host
 	}
-	return declaredHost(configRoot, svcName)
-}
-
-// PrivateHost is CFHost for the tailnet layer: the label in front of
-// .<HOME_SUBDOMAIN>.<DOMAIN>.
-func PrivateHost(configRoot, svcName string) string {
-	if host := GeneratedHost(configRoot, "private", svcName); host != "" {
-		return host
-	}
-	return declaredHost(configRoot, svcName)
+	return declaredHost(root, svcName)
 }
 
 // declaredHost resolves a service's host label from its declaration alone, as
@@ -312,24 +291,16 @@ func declaredHost(configRoot, svcName string) string {
 	return SiteHost(info, "")
 }
 
-// hostSuffix is the part of each layer's site address after the host label,
-// as domainForExt and I2PHost write it.
-var hostSuffix = map[string]string{
-	"private": ".{$HOME_SUBDOMAIN}.{$DOMAIN}",
-	"cf":      ".{$DOMAIN}",
-	extI2P:    "." + HomeSubdomainVar + ".i2p",
-}
-
 // GeneratedHost reads the host label back out of a service's generated block
 // for a layer — the one place a --name it was enabled with is recorded. It
-// returns "" when the layer has no block for the service, or the block's
-// address is not one this package wrote.
-func GeneratedHost(configRoot, ext, svcName string) string {
-	suffix, ok := hostSuffix[ext]
+// returns "" when the layer has no block for the service, or is not
+// Host-routed, or the block's address is not one the layer wrote.
+func GeneratedHost(root string, l network.NetworkLayer, svcName string) string {
+	hr, ok := l.(network.HostRouted)
 	if !ok {
 		return ""
 	}
-	data, err := os.ReadFile(GeneratedFilePath(configRoot, ext, svcName, ""))
+	data, err := os.ReadFile(GeneratedFilePath(root, l.ConfDir(), svcName, ""))
 	if err != nil {
 		return ""
 	}
@@ -338,12 +309,7 @@ func GeneratedHost(configRoot, ext, svcName string) string {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		addr := strings.TrimSpace(strings.TrimSuffix(line, "{"))
-		addr = strings.TrimPrefix(strings.TrimPrefix(addr, "http://"), "https://")
-		if i := strings.LastIndex(addr, "}:"); i >= 0 {
-			addr = addr[:i+1] // drop a listen port
-		}
-		if label, ok := strings.CutSuffix(addr, suffix); ok && label != "" {
+		if label, ok := hr.HostFromAddress(strings.TrimSpace(strings.TrimSuffix(line, "{"))); ok {
 			return label
 		}
 		return ""
@@ -373,35 +339,6 @@ func PrimaryPort(ports config.PortEntries) int {
 		return 80
 	}
 	return best
-}
-
-// buildRoutesBlock wraps a layer-agnostic routes body in the site address the
-// given layer needs.
-func buildRoutesBlock(ext, displayName, routes string) (string, error) {
-	var b strings.Builder
-
-	switch ext {
-	case "private":
-		fmt.Fprintf(&b, "%s {\n", domainForExt(displayName, ext))
-		b.WriteString("\timport wildcard_tls\n")
-	case "cf":
-		// TLS terminated at the Cloudflare edge — serve plain HTTP.
-		fmt.Fprintf(&b, "http://%s {\n", domainForExt(displayName, ext))
-	// i2p: plain HTTP, and namespaced under the home subdomain — see I2PHost.
-	// The transport is already encrypted, and a bare site address would make
-	// Caddy chase an ACME cert for a TLD no CA will ever sign.
-	case extI2P:
-		fmt.Fprintf(&b, "http://%s {\n", I2PHost(displayName, HomeSubdomainVar))
-	case "tor", "ygg":
-		// Address-addressed, written by their own layers — see buildBlock.
-		return "", nil
-	default:
-		return "", fmt.Errorf("unknown extension: %s", ext)
-	}
-
-	b.WriteString(indentBody(stripLeadingComments(routes)))
-	b.WriteString("}\n")
-	return b.String(), nil
 }
 
 // stripLeadingComments drops the routes file's own header — the comment block
@@ -443,104 +380,6 @@ func indentBody(body string) string {
 	return b.String()
 }
 
-// buildBlock generates a single Caddy config block for one extension + port + name combo.
-func buildBlock(ext, displayName, svcName string, port PortSelection) (CaddyBlock, error) {
-	var content string
-
-	switch ext {
-	case "private", "cf":
-		// UDP has no site block: Caddy speaks HTTP. The declaration still
-		// matters for compose; it just isn't something Caddy can serve.
-		//
-		// Nor does a port with an explicit listen port (forgejo's 22:22), for
-		// the same reason the i2p layer skips it: such a port is a raw TCP
-		// service published by compose, not HTTP. Wrapping it in a site block
-		// produced an HTTPS reverse_proxy on :22 (private) that no ssh client
-		// can speak, and a plain-HTTP listener on :22 (cf) that cloudflared
-		// never routes to — and either one squats the port in Caddy's netns.
-		if port.RoutableByCaddy() && port.Listen == 0 {
-			content = buildHTTPBlock(displayName, ext, svcName, port)
-		}
-	// i2p: Caddy matches the Host header i2pd stamps via hostoverride, which
-	// is a name we choose, so the block can be generated here.
-	case extI2P:
-		// i2pd has exactly one inbound destination per service and delivers to
-		// Caddy on :80. A port declared with an explicit listen port (22:22)
-		// can never receive traffic there, so it gets no block rather than one
-		// that quietly never fires.
-		if port.RoutableByCaddy() && port.Listen == 0 {
-			content = buildMeshBlock(ext, displayName, svcName, port)
-		}
-	case "tor", "ygg":
-		// Neither address can be templated from a service name, so both
-		// layers write their own Caddy config and this returns nothing:
-		// yggdrasil routes by an allocated listening port, and a .onion is a
-		// hash of a key tor generates. Empty content means "the layer writes
-		// it" — callers skip the write.
-		content = ""
-	default:
-		return CaddyBlock{}, fmt.Errorf("unknown extension: %s", ext)
-	}
-
-	return CaddyBlock{
-		Extension: ext,
-		PortName:  port.Name,
-		Port:      port.Port,
-		Listen:    port.Listen,
-		Content:   content,
-	}, nil
-}
-
-// ── HTTP/TLS block generators ──────────────────────────────────────────────────
-
-func domainForExt(displayName, ext string) string {
-	switch ext {
-	case "private":
-		return fmt.Sprintf("%s.{$HOME_SUBDOMAIN}.{$DOMAIN}", displayName)
-	case "cf":
-		return fmt.Sprintf("%s.{$DOMAIN}", displayName)
-	default:
-		return displayName
-	}
-}
-
-func buildHTTPBlock(displayName, ext, svcName string, port PortSelection) string {
-	domain := siteAddress(displayName, ext, port)
-
-	var b strings.Builder
-	// CF routes: TLS terminated at Cloudflare edge, serve HTTP-only.
-	// Private routes: use wildcard TLS via tailnet.
-	if ext == "cf" {
-		fmt.Fprintf(&b, "http://%s {\n", domain)
-	} else {
-		fmt.Fprintf(&b, "%s {\n", domain)
-	}
-	if ext == "private" {
-		b.WriteString("    import wildcard_tls\n")
-	}
-	fmt.Fprintf(&b, "    reverse_proxy %s:%d\n", svcName, port.Port)
-
-	// WebSocket headers are handled automatically by Caddy v2 reverse_proxy.
-	// No need to forward Connection/Upgrade manually.
-
-	b.WriteString("}\n")
-	return b.String()
-}
-
-// WrapSiteBlock wraps a body of directives in a site block for the given site
-// address, stripping the body's file-level comment header and indenting it.
-//
-// Exported for network layers that have to build their own site address: the
-// ygg layer routes by listening port, so only it knows the address until it
-// has allocated the port.
-func WrapSiteBlock(address, body string) string {
-	return address + " {\n" + indentBody(stripLeadingComments(body)) + "}\n"
-}
-
-// meshTLD maps a Host-addressed mesh extension to its pseudo-TLD. Yggdrasil is
-// absent on purpose — it has no naming, so nothing resolves a ".ygg" host.
-var meshTLD = map[string]string{extI2P: "i2p"}
-
 // HomeSubdomainVar is the Caddyfile placeholder for the home subdomain. Caddy
 // expands it from the container environment; anything that writes a literal
 // config file (i2pd's tunnels.conf) has to pass the resolved value instead.
@@ -566,65 +405,12 @@ func I2PHost(displayName, homeSubdomain string) string {
 	return displayName + "." + homeSubdomain + ".i2p"
 }
 
-// buildMeshBlock generates the site block for one mesh layer + port. Plain
-// HTTP only: the transport is already encrypted, and a bare site address
-// would make Caddy activate automatic HTTPS and chase an ACME cert for a TLD
-// no CA will ever sign.
-func buildMeshBlock(ext, displayName, svcName string, port PortSelection) string {
-	host := displayName
-	if port.Subdomain != "" {
-		host = port.Subdomain
-	}
-	return fmt.Sprintf("http://%s {\n    reverse_proxy %s:%d\n}\n",
-		I2PHost(host, HomeSubdomainVar), svcName, port.Port)
-}
-
-// siteAddress builds the Caddy site address for one declared port.
-//
-// A declared subdomain replaces the service name rather than prefixing it, and
-// a declared listen port is appended to the address. Both come straight from
-// the declaration — see config.PortEntry for the grammar:
-//
-//	8080      → gitea.home.example.com
-//	22:22     → gitea.home.example.com:22
-//	vault:80  → vault.home.example.com
-func siteAddress(displayName, ext string, port PortSelection) string {
-	host := displayName
-	if port.Subdomain != "" {
-		host = port.Subdomain
-	}
-	addr := domainForExt(host, ext)
-	if port.Listen != 0 {
-		addr = fmt.Sprintf("%s:%d", addr, port.Listen)
-	}
-	return addr
-}
-
-// ExtensionLabel returns a human-readable label for an extension.
-func ExtensionLabel(ext string) string {
-	switch ext {
-	case "cf":
-		return "Cloudflare Tunnel"
-	case extI2P:
-		return "I2P eepsite"
-	case "tor":
-		return "Tor onion service"
-	case "ygg":
-		return "Yggdrasil mesh"
-	default:
-		return ext
-	}
-}
-
 // ── File writing ───────────────────────────────────────────────────────────────
 
-// ConfigDir returns the extension-specific Caddy config directory.
-// Private tailnet configs use "conf.d" (no suffix) for Caddyfile import compat.
-func ConfigDir(configRoot, ext string) string {
-	if ext == "private" {
-		return filepath.Join(configRoot, "caddy", "conf.d")
-	}
-	return filepath.Join(configRoot, "caddy", "conf.d-"+ext)
+// ConfigDir returns a layer's Caddy config directory, given its
+// network.NetworkLayer.ConfDir.
+func ConfigDir(root, confDir string) string {
+	return filepath.Join(root, "caddy", confDir)
 }
 
 // PortFileName returns the per-service, per-port basename used for every
@@ -645,23 +431,23 @@ func PortFileName(svcName, portName string) string {
 
 // GeneratedFilePath returns where a generated Caddy config block lands. Pass an
 // empty portName for a routes-driven service, which has one file per layer.
-func GeneratedFilePath(configRoot, ext, svcName, portName string) string {
-	return filepath.Join(ConfigDir(configRoot, ext), PortFileName(svcName, portName)+".conf")
+func GeneratedFilePath(configRoot, confDir, svcName, portName string) string {
+	return filepath.Join(ConfigDir(configRoot, confDir), PortFileName(svcName, portName)+".conf")
 }
 
-// WriteFile writes a generated Caddy config block to the extension-specific conf.d directory.
-func WriteFile(configRoot, ext, svcName, portName, content string) error {
-	dir := ConfigDir(configRoot, ext)
+// WriteFile writes a generated Caddy config block to a layer's conf dir.
+func WriteFile(configRoot, confDir, svcName, portName, content string) error {
+	dir := ConfigDir(configRoot, confDir)
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return fmt.Errorf("creating %s: %w", dir, err)
 	}
 
-	return os.WriteFile(GeneratedFilePath(configRoot, ext, svcName, portName), []byte(content), 0o600)
+	return os.WriteFile(GeneratedFilePath(configRoot, confDir, svcName, portName), []byte(content), 0o600)
 }
 
-// RemoveFile removes a generated Caddy config file for the given service/extension/port.
-func RemoveFile(configRoot, ext, svcName, portName string) error {
-	err := os.Remove(GeneratedFilePath(configRoot, ext, svcName, portName))
+// RemoveFile removes a generated Caddy config file for the given service/layer/port.
+func RemoveFile(configRoot, confDir, svcName, portName string) error {
+	err := os.Remove(GeneratedFilePath(configRoot, confDir, svcName, portName))
 	if os.IsNotExist(err) {
 		return nil // already removed
 	}
@@ -669,29 +455,29 @@ func RemoveFile(configRoot, ext, svcName, portName string) error {
 }
 
 // RemoveAllPortFiles removes the generated Caddy config for every port the
-// service declares under the given extension. Since a multi-port service
+// service declares under the given layer conf dir. Since a multi-port service
 // gets one generated file per port (see PortFileName), removing only the
 // default-named file (portName "") would orphan the rest. Falls back to a
 // single default-name removal for services with no declared ports — that's
 // the only file that could exist for them (and the name a symlink from the
 // retired static-caddy.conf scheme would have, so disable still clears one).
-func RemoveAllPortFiles(configRoot, ext, svcName string) error {
+func RemoveAllPortFiles(configRoot, confDir, svcName string) error {
 	info, err := LoadServiceInfo(configRoot, svcName)
 	// A routes-driven service has exactly one file per layer regardless of how
 	// many ports it declares, so per-port removal would miss it.
 	if err == nil && info.Routes != "" {
-		return RemoveFile(configRoot, ext, svcName, "")
+		return RemoveFile(configRoot, confDir, svcName, "")
 	}
 	if err != nil || len(info.Ports) == 0 {
-		return RemoveFile(configRoot, ext, svcName, "")
+		return RemoveFile(configRoot, confDir, svcName, "")
 	}
 	ports, err := ResolvePorts(info.Ports, nil)
 	if err != nil {
-		return RemoveFile(configRoot, ext, svcName, "")
+		return RemoveFile(configRoot, confDir, svcName, "")
 	}
 	var firstErr error
 	for _, p := range ports {
-		if err := RemoveFile(configRoot, ext, svcName, p.Name); err != nil && firstErr == nil {
+		if err := RemoveFile(configRoot, confDir, svcName, p.Name); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}

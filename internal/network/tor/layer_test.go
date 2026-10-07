@@ -24,21 +24,19 @@ func TestLayer_InterfaceImplementation(t *testing.T) {
 	assert.NotNil(t, l)
 }
 
-func TestLayer_CaddyConfigDir(t *testing.T) {
-	l := New("/test/repo", nil, nil)
-	dir := l.CaddyConfigDir("/home/user/.config/homelab")
-	assert.Equal(t, "/home/user/.config/homelab/caddy/conf.d-tor", dir)
+func TestLayer_ConfDir(t *testing.T) {
+	assert.Equal(t, "conf.d-tor", New("/test/repo", nil, nil).ConfDir())
 }
 
-// Caddy config writing/removal for tor is owned entirely by
-// internal/configgen now (see cmd/enable.go, cmd/disable.go). Enable/Disable
-// here only manage torrc.d, the hidden-service directory, and the reload.
+// Caddy config for tor is rendered by internal/configgen from Sites and
+// written by internal/routing. Configure/Teardown here only manage torrc.d,
+// the hidden-service directory, and the reload.
 
-func TestLayer_Enable_WritesTorrcConfig(t *testing.T) {
+func TestLayer_Configure_WritesTorrcConfig(t *testing.T) {
 	root := t.TempDir()
 	l := newForTest(root, noopReload)
 
-	err := l.Enable("gitea", "gitea", network.ServiceInfo{},
+	err := l.Configure("gitea", "gitea",
 		[]network.PortSelection{{Name: "web", Port: 3000, Protocol: "tcp"}})
 	require.NoError(t, err)
 
@@ -67,31 +65,31 @@ func TestLayer_Enable_WritesTorrcConfig(t *testing.T) {
 	assert.True(t, fi.IsDir())
 }
 
-func TestLayer_Disable_RemovesConfigs(t *testing.T) {
+func TestLayer_Teardown_RemovesConfigs(t *testing.T) {
 	root := t.TempDir()
 	l := newForTest(root, noopReload)
 
-	require.NoError(t, l.Enable("gitea", "gitea", network.ServiceInfo{},
+	require.NoError(t, l.Configure("gitea", "gitea",
 		[]network.PortSelection{{Name: "web", Port: 3000, Protocol: "tcp"}}))
 
-	require.NoError(t, l.Disable("gitea"))
+	require.NoError(t, l.Teardown("gitea"))
 
 	torrcPath := filepath.Join(root, "tor", "torrc.d", "gitea.conf")
 	_, err := os.Stat(torrcPath)
 	assert.True(t, os.IsNotExist(err), "Torrc config should be removed")
 }
 
-func TestLayer_Disable_Idempotent(t *testing.T) {
+func TestLayer_Teardown_Idempotent(t *testing.T) {
 	root := t.TempDir()
 	l := newForTest(root, noopReload)
 
-	err := l.Disable("nonexistent")
-	assert.NoError(t, err, "Disable should be idempotent")
+	err := l.Teardown("nonexistent")
+	assert.NoError(t, err, "Teardown should be idempotent")
 }
 
 // A root-owned bind mount is the one failure this reliably hits, and "mkdir:
 // permission denied" from inside enable told nobody what to do about it.
-func TestLayer_Enable_UnwritableKeyDirExplainsTheFix(t *testing.T) {
+func TestLayer_Configure_UnwritableKeyDirExplainsTheFix(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root can write anywhere")
 	}
@@ -101,40 +99,41 @@ func TestLayer_Enable_UnwritableKeyDirExplainsTheFix(t *testing.T) {
 	// present, but not writable by us.
 	require.NoError(t, os.Mkdir(filepath.Join(root, "tor", "hidden_service"), 0o500))
 
-	err := newForTest(root, noopReload).Enable("gitea", "gitea", network.ServiceInfo{},
+	err := newForTest(root, noopReload).Configure("gitea", "gitea",
 		[]network.PortSelection{{Name: "web", Port: 3000, Protocol: "tcp"}})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "sudo chown")
 }
 
-// Tor owns its Caddy config for the same reason ygg does: the address is a
-// hash of a key tor generates, so it cannot be templated from a service name.
-// Nothing rewrites the Host header on the way in — unlike i2pd's hostoverride
-// — so the site address has to be the real .onion.
-func TestLayer_Enable_WritesCaddyBlockForTheRealOnion(t *testing.T) {
-	root := t.TempDir()
-	l := newForTest(root, noopReload)
-
-	require.NoError(t, l.Enable("gitea", "gitea", network.ServiceInfo{},
-		[]network.PortSelection{{Name: "default", Port: 3000, Protocol: "tcp"}}))
-
-	block, err := os.ReadFile(filepath.Join(root, "caddy", "conf.d-tor", "gitea.conf"))
+// The site address is the real .onion: it is a hash of a key tor generates,
+// so it cannot be templated from a service name, and nothing rewrites the Host
+// header on the way in — unlike i2pd's hostoverride.
+func TestLayer_Sites_UseTheRealOnion(t *testing.T) {
+	l := newForTest(t.TempDir(), noopReload)
+	sites, err := l.Sites("gitea", "gitea", []network.PortSelection{
+		{Name: "22", Port: 22, Listen: 22, Protocol: "tcp"},
+		{Name: "default", Port: 3000, Protocol: "tcp"},
+	})
 	require.NoError(t, err)
+	require.Len(t, sites, 1, "one onion, one site")
 	// On the onion-only listener, not :80 — which also serves the cf and i2p
 	// vhosts, reachable by a Tor client that sends their Host header.
-	assert.Contains(t, string(block), "http://giteaonionaddressxxxxxxxxxxxx.onion:8081 {")
-	assert.Contains(t, string(block), "reverse_proxy gitea:3000")
-	assert.NotContains(t, string(block), "gitea.onion", "the templated name is not an address")
+	assert.Equal(t, "http://giteaonionaddressxxxxxxxxxxxx.onion:8081", sites[0].Address)
+	assert.Equal(t, 3000, sites[0].Port, "the first HTTP port")
+	assert.Equal(t, "", sites[0].PortName, "one file per service")
+
+	_, err = l.Sites("ssh", "ssh", []network.PortSelection{{Name: "22", Port: 22, Listen: 22}})
+	assert.ErrorContains(t, err, "no HTTP port")
 }
 
 // A port with its own listen port is not HTTP — an ssh port declared 22:22
 // must reach the container directly, because putting Caddy in that path would
 // break it.
-func TestLayer_Enable_ExplicitListenPortsBypassCaddy(t *testing.T) {
+func TestLayer_Configure_ExplicitListenPortsBypassCaddy(t *testing.T) {
 	root := t.TempDir()
 	l := newForTest(root, noopReload)
 
-	require.NoError(t, l.Enable("forgejo", "forgejo", network.ServiceInfo{},
+	require.NoError(t, l.Configure("forgejo", "forgejo",
 		[]network.PortSelection{
 			{Name: "default", Port: 3000, Protocol: "tcp"},
 			{Name: "22", Port: 22, Listen: 22, Protocol: "tcp"},
@@ -144,15 +143,4 @@ func TestLayer_Enable_ExplicitListenPortsBypassCaddy(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(data), "HiddenServicePort 80 tailscale:8081", "HTTP via Caddy")
 	assert.Contains(t, string(data), "HiddenServicePort 22 forgejo:22", "ssh direct")
-}
-
-func TestLayer_Disable_RemovesCaddyBlock(t *testing.T) {
-	root := t.TempDir()
-	l := newForTest(root, noopReload)
-	require.NoError(t, l.Enable("gitea", "gitea", network.ServiceInfo{},
-		[]network.PortSelection{{Name: "default", Port: 3000, Protocol: "tcp"}}))
-
-	require.NoError(t, l.Disable("gitea"))
-	_, err := os.Stat(filepath.Join(root, "caddy", "conf.d-tor", "gitea.conf"))
-	assert.True(t, os.IsNotExist(err), "a block for an address nothing answers on")
 }

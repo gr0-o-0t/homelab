@@ -20,7 +20,11 @@ import (
 const containerName = "tailscale"
 
 // Layer implements network.NetworkLayer for the Tailscale mesh VPN node.
+//
+// Its sites are <host>.<home>.<domain>, served with the wildcard cert. It has
+// no per-service daemon state, so it implements no network.Configurer.
 type Layer struct {
+	network.HostTemplate
 	repoRoot string
 	runner   *run.Commander
 	envFn    network.EnvFunc
@@ -28,7 +32,10 @@ type Layer struct {
 
 // New creates a new Tailscale layer.
 func New(repoRoot string, runner *run.Commander, envFn network.EnvFunc) *Layer {
-	return &Layer{repoRoot: repoRoot, runner: runner, envFn: envFn}
+	return &Layer{
+		HostTemplate: network.HostTemplate{Suffix: ".{$HOME_SUBDOMAIN}.{$DOMAIN}", TLS: true},
+		repoRoot:     repoRoot, runner: runner, envFn: envFn,
+	}
 }
 
 // compile-time check
@@ -38,6 +45,7 @@ func (l *Layer) Name() string          { return "ts" }
 func (l *Layer) Label() string         { return "Tailscale mesh VPN" }
 func (l *Layer) ContainerName() string { return containerName }
 func (l *Layer) Profile() string       { return "" }
+func (l *Layer) Flag() string          { return "" } // the default: bare `homelab enable`
 
 // Start brings the tailscale container up via its compose file.
 func (l *Layer) Start() error {
@@ -61,26 +69,9 @@ func (l *Layer) Status() network.Status {
 	return network.Status{ContainerState: state}
 }
 
-// Enable is a no-op for tailscale — tailnet connectivity is the default
-// exposure layer for all services. Per-service routing is handled by Caddy
-// config (conf.d/) which is written by the main enable command, not by this
-// layer. The Enable signature is implemented for interface compliance but
-// tailscale does not manage per-service tunnel configs.
-func (l *Layer) Enable(_, _ string, _ network.ServiceInfo, _ []network.PortSelection) error {
-	return nil
-}
-
-// Disable is a no-op for tailscale — removing tailnet connectivity is handled
-// by stopping the tailscale container, not by per-service disable.
-func (l *Layer) Disable(_ string) error {
-	return nil
-}
-
-// CaddyConfigDir returns the standard conf.d/ directory — tailscale is the
-// default exposure layer, so its Caddy configs go in the main conf.d/ dir.
-func (l *Layer) CaddyConfigDir(configRoot string) string {
-	return configRoot + "/caddy/conf.d"
-}
+// ConfDir is the main conf.d/: the tailnet is the default exposure layer, and
+// the Caddyfile imported this directory before there were other layers.
+func (l *Layer) ConfDir() string { return "conf.d" }
 
 // ServiceAddresses returns the tailnet hostname. Templated, not looked up:
 // the wildcard cert and DNS record cover every *.<home>.<domain> name. The
@@ -91,7 +82,7 @@ func (l *Layer) ServiceAddresses(svcName string, env map[string]string) []networ
 	if sub == "" || dom == "" {
 		return []network.ServiceAddress{{Note: "HOME_SUBDOMAIN/DOMAIN not set — run homelab setup"}}
 	}
-	return []network.ServiceAddress{{URL: fmt.Sprintf("https://%s.%s.%s", configgen.PrivateHost(l.repoRoot, svcName), sub, dom)}}
+	return []network.ServiceAddress{{URL: fmt.Sprintf("https://%s.%s.%s", configgen.CurrentHost(l.repoRoot, l, svcName), sub, dom)}}
 }
 
 func (l *Layer) env() map[string]string {

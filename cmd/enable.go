@@ -3,13 +3,12 @@ package cmd
 import (
 	"bytes"
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/groot/homelab/internal/caddy"
-	"github.com/groot/homelab/internal/config"
 	"github.com/groot/homelab/internal/configgen"
 	"github.com/groot/homelab/internal/network"
+	"github.com/groot/homelab/internal/network/layers"
 	"github.com/groot/homelab/internal/routing"
 	"github.com/groot/homelab/internal/run"
 	"github.com/groot/homelab/internal/service"
@@ -47,21 +46,19 @@ Examples:
 }
 
 var (
-	enableCf      bool
-	enableI2P     bool
-	enableTor     bool
-	enableYgg     bool
-	enableAllExts bool
+	enableLayerFlags = map[string]*bool{} // layer name → its --<flag>
+	enableAllExts    bool
 
 	enableName  string
 	enablePorts []string
 )
 
 func init() {
-	enableCmd.Flags().BoolVar(&enableCf, "cf", false, "Expose via Cloudflare Tunnel")
-	enableCmd.Flags().BoolVar(&enableI2P, "i2p", false, "Expose as I2P eepsite")
-	enableCmd.Flags().BoolVar(&enableTor, "tor", false, "Expose as Tor onion service")
-	enableCmd.Flags().BoolVar(&enableYgg, "ygg", false, "Expose on Yggdrasil mesh")
+	for _, l := range layers.Static() {
+		if l.Flag() != "" {
+			enableLayerFlags[l.Name()] = enableCmd.Flags().Bool(l.Flag(), false, "Expose via "+l.Label())
+		}
+	}
 	enableCmd.Flags().BoolVar(&enableAllExts, "all", false, "Enable all available extensions")
 	enableCmd.Flags().StringVar(&enableName, "name", "", "Custom display name (subdomain)")
 	enableCmd.Flags().StringSliceVar(&enablePorts, "ports", nil, "Specific named ports to expose (comma-separated)")
@@ -80,9 +77,6 @@ func runEnable(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("--name: %w", err)
 		}
 	}
-
-	exts := buildExtensionList()
-	hasExts := len(exts) > 0
 
 	fmt.Printf("\n%s\n\n", styles.Header.Render(fmt.Sprintf("Enable: %s", svcName)))
 
@@ -110,66 +104,43 @@ func runEnable(cmd *cobra.Command, args []string) error {
 	// next unrelated Caddy reload — a failed `--all` could make a service
 	// public through the tunnel without anyone noticing.
 	before := activeLayerSet(root, svcName)
-	mgr, quiet, explain := quietCaddy(root)
+	mgr, _, explain := quietCaddy(root)
 	snap, err := mgr.Snapshot() // Caddy's dirs, restored if this run fails
 	if err != nil {
 		return err
 	}
-	var added []string
+	var added []network.NetworkLayer
 	rollback := func(cause error) error {
 		_ = snap.Restore()
+		var names []string
 		for _, l := range added {
-			if l == "ts" {
-				_ = routing.DisablePrivate(root, svcName, quiet)
-				continue
-			}
-			_ = configgen.RemoveAllPortFiles(root, l, svcName)
-			if layer, ok := extRegistry().Get(l); ok {
-				_ = layer.Disable(svcName)
-			}
+			_ = routing.Disable(root, l, svcName)
+			names = append(names, l.Name())
 		}
 		if len(added) > 0 {
-			fmt.Printf("  %s  rolled back: %s\n", styles.Warning.Render("!"), strings.Join(added, ", "))
+			fmt.Printf("  %s  rolled back: %s\n", styles.Warning.Render("!"), strings.Join(names, ", "))
 		}
 		return cause
 	}
 
-	// ── Private tailnet (always enabled) ───────────────────────────────
-	if err := routing.EnablePrivate(root, svcName, enableName, enablePorts, quiet); err != nil {
-		return err
-	}
-	if !before["ts"] {
-		added = append(added, "ts")
-	}
-	fmt.Printf("  %s  Private: %s.%s.%s\n",
-		styles.Success.Render("✓"),
-		displayName,
-		"{$HOME_SUBDOMAIN}", "{$DOMAIN}",
-	)
-
-	// ── Extension layers ───────────────────────────────────────────────
-	if !hasExts {
-		fmt.Println()
-		if err := explain(mgr.ReloadOrRestore(snap)); err != nil {
-			return rollback(err)
+	// The private tailnet layer is always enabled; the flags add the rest.
+	for _, l := range selectedEnableLayers() {
+		err := routing.Enable(root, l, svcName, enableName, enablePorts)
+		if !before[l.Name()] {
+			added = append(added, l) // on failure it may be half-written
 		}
-		return nil
-	}
-
-	for _, ext := range exts {
-		if err := enableExtension(root, svcName, displayName, ext); err != nil {
-			if !before[ext] {
-				added = append(added, ext) // may be half-written
+		if err != nil {
+			if l.Flag() == "" {
+				return err // nothing written yet worth rolling back
 			}
-			return rollback(fmt.Errorf("%s: %w", ext, err))
+			return rollback(fmt.Errorf("%s: %w", l.Name(), err))
 		}
-		if !before[ext] {
-			added = append(added, ext)
+		if l.Flag() == "" {
+			fmt.Printf("  %s  Private: %s.%s.%s\n",
+				styles.Success.Render("✓"), displayName, "{$HOME_SUBDOMAIN}", "{$DOMAIN}")
+		} else {
+			fmt.Printf("  %s  %s: enabled\n", styles.Success.Render("✓"), l.Label())
 		}
-		fmt.Printf("  %s  %s: enabled\n",
-			styles.Success.Render("✓"),
-			configgen.ExtensionLabel(ext),
-		)
 	}
 
 	fmt.Println()
@@ -179,6 +150,18 @@ func runEnable(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// selectedEnableLayers is the private layer plus every layer whose flag was
+// given (or all of them with --all), in registry order.
+func selectedEnableLayers() []network.NetworkLayer {
+	var out []network.NetworkLayer
+	for _, l := range extRegistry().All() {
+		if l.Flag() == "" || enableAllExts || *enableLayerFlags[l.Name()] {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
 // activeLayerSet is the set of layers a service is currently exposed on.
 func activeLayerSet(root, name string) map[string]bool {
 	set := map[string]bool{}
@@ -186,95 +169,11 @@ func activeLayerSet(root, name string) map[string]bool {
 	for _, s := range svcs {
 		if s.Name == name {
 			for _, l := range s.ActiveLayers() {
-				set[string(l)] = true
+				set[l] = true
 			}
 		}
 	}
 	return set
-}
-
-// enableExtension configures one layer for a service: the layer's own config
-// (tunnel, hidden service, forwarder) first, then the Caddy blocks.
-//
-// That order is deliberate. The layer is the half that can fail on
-// environment — a root-owned tor key directory, a stopped daemon — and doing
-// it second used to leave a Caddy block behind for a layer that was never
-// configured, which `homelab status` then reported as an active exposure.
-func enableExtension(root, svcName, displayName, ext string) error {
-	blocks, err := configgen.Generate(configgen.Request{
-		ServiceName: svcName,
-		DisplayName: displayName,
-		Extensions:  []string{ext},
-		PortNames:   enablePorts,
-		ConfigDir:   root,
-	})
-	if err != nil {
-		return err
-	}
-
-	if layer, ok := extRegistry().Get(config.ResolveExtension(ext)); ok {
-		if err := layer.Enable(svcName, displayName, layerServiceInfo(root, svcName), layerPorts(blocks)); err != nil {
-			return err
-		}
-	}
-
-	for _, b := range blocks {
-		// Empty content means the network layer writes its own Caddy config
-		// (ygg: the site address depends on a port only the layer knows), or
-		// the port is not routable there (udp, or an explicit listen port on a
-		// mesh layer).
-		if b.Content == "" {
-			continue
-		}
-		if err := configgen.WriteFile(root, b.Extension, svcName, b.PortName, b.Content); err != nil {
-			return fmt.Errorf("writing %s config: %w", ext, err)
-		}
-	}
-	return nil
-}
-
-// layerPorts converts generated blocks into the port list a layer records.
-func layerPorts(blocks []configgen.CaddyBlock) []network.PortSelection {
-	ports := make([]network.PortSelection, len(blocks))
-	for i, b := range blocks {
-		ports[i] = network.PortSelection{Name: b.PortName, Port: b.Port, Listen: b.Listen, Protocol: "tcp"}
-	}
-	return ports
-}
-
-// layerServiceInfo is the service's declared ports in the shape layers expect.
-func layerServiceInfo(root, svcName string) network.ServiceInfo {
-	cfgInfo, _ := configgen.LoadServiceInfo(root, svcName)
-	info := network.ServiceInfo{
-		Name:    svcName,
-		Ports:   make(map[string]int, len(cfgInfo.Ports)),
-		HasVars: cfgInfo.HasVars,
-	}
-	for k, v := range cfgInfo.Ports {
-		info.Ports[k] = v.Port
-	}
-	return info
-}
-
-func buildExtensionList() []string {
-	if enableAllExts {
-		return []string{"cf", "i2p", "tor", "ygg"}
-	}
-	var exts []string
-	if enableCf {
-		exts = append(exts, "cf")
-	}
-	if enableI2P {
-		exts = append(exts, "i2p")
-	}
-	if enableTor {
-		exts = append(exts, "tor")
-	}
-	if enableYgg {
-		exts = append(exts, "ygg")
-	}
-	sort.Strings(exts)
-	return exts
 }
 
 func caddyReload() error {
@@ -302,5 +201,3 @@ func quietCaddy(root string) (*caddy.Manager, *run.Commander, func(error) error)
 	}
 	return caddy.NewWithRunner(root, r), r, explain
 }
-
-// ── Extension-specific enable helpers ───────────────────────────────────────

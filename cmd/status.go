@@ -197,7 +197,7 @@ func runStatus(_ *cobra.Command, args []string) error {
 		for _, ext := range inactiveExts {
 			hints = append(hints, fmt.Sprintf("Run %s to add %s",
 				styles.Primary.Render("homelab ext enable "+ext),
-				config.ExtensionLabel(ext)))
+				extLabel(ext)))
 		}
 	}
 
@@ -224,28 +224,18 @@ func runStatus(_ *cobra.Command, args []string) error {
 		return nil
 	}
 
-	privateCount, publicCount, runningCount := 0, 0, 0
-	var torCount, i2pCount, yggCount int
+	runningCount := 0
+	layerCount := map[string]int{}
 	for _, s := range svcs {
-		if s.Enabled {
-			privateCount++
-		}
-		if s.PublicEnabled {
-			publicCount++
-		}
-		if s.HasTor {
-			torCount++
-		}
-		if s.HasI2P {
-			i2pCount++
-		}
-		if s.HasYgg {
-			yggCount++
+		for _, l := range s.ActiveLayers() {
+			layerCount[l]++
 		}
 		if s.Running > 0 {
 			runningCount++
 		}
 	}
+	privateCount, publicCount := layerCount["ts"], layerCount["cf"]
+	torCount, i2pCount, yggCount := layerCount["tor"], layerCount["i2p"], layerCount["ygg"]
 
 	summaryLine := fmt.Sprintf("%d installed / %d running", len(svcs), runningCount)
 	if torCount > 0 || i2pCount > 0 || yggCount > 0 {

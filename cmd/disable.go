@@ -3,7 +3,7 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/groot/homelab/internal/configgen"
+	"github.com/groot/homelab/internal/network/layers"
 	"github.com/groot/homelab/internal/routing"
 	"github.com/groot/homelab/internal/run"
 	"github.com/groot/homelab/internal/tui/styles"
@@ -38,19 +38,17 @@ Examples:
 }
 
 var (
-	disableCf   bool
-	disableI2P  bool
-	disableTor  bool
-	disableYgg  bool
-	disableAll  bool // -a: every layer, private included
-	disableStop bool // --stop: additionally take the service down
+	disableLayerFlags = map[string]*bool{} // layer name → its --<flag>
+	disableAll        bool                 // -a: every layer, private included
+	disableStop       bool                 // --stop: additionally take the service down
 )
 
 func init() {
-	disableCmd.Flags().BoolVar(&disableCf, "cf", false, "Remove Cloudflare Tunnel config")
-	disableCmd.Flags().BoolVar(&disableI2P, "i2p", false, "Remove I2P eepsite config")
-	disableCmd.Flags().BoolVar(&disableTor, "tor", false, "Remove Tor onion service config")
-	disableCmd.Flags().BoolVar(&disableYgg, "ygg", false, "Remove Yggdrasil mesh config")
+	for _, l := range layers.Static() {
+		if l.Flag() != "" {
+			disableLayerFlags[l.Name()] = disableCmd.Flags().Bool(l.Flag(), false, "Remove "+l.Label()+" config")
+		}
+	}
 	disableCmd.Flags().BoolVarP(&disableAll, "all", "a", false, "Remove every layer, private included")
 	disableCmd.Flags().BoolVar(&disableStop, "stop", false, "Also stop and remove the service containers")
 	rootCmd.AddCommand(disableCmd)
@@ -65,36 +63,32 @@ func runDisable(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	selected := map[string]bool{
-		"cf": disableCf || disableAll, "i2p": disableI2P || disableAll,
-		"tor": disableTor || disableAll, "ygg": disableYgg || disableAll,
+	hasSpecific := false
+	for _, on := range disableLayerFlags {
+		hasSpecific = hasSpecific || *on
 	}
-	mgr, quiet, explain := quietCaddy(root)
-	hasSpecific := disableCf || disableI2P || disableTor || disableYgg
+	mgr, _, explain := quietCaddy(root)
 
 	fmt.Printf("\n%s\n\n", styles.Header.Render(fmt.Sprintf("Disable: %s", svcName)))
 
-	// Private tailnet: the default target, and part of --all.
-	if !hasSpecific || disableAll {
-		if err := routing.DisablePrivate(root, svcName, quiet); err != nil && !disableAll {
-			return err
-		}
-		fmt.Printf("  %s  Private: removed\n", styles.Warning.Render("→"))
-	}
-
-	// Extension layers: drop the Caddy blocks, then the layer's own config
-	// (tunnel ingress, hidden service, forwarder).
-	for _, ext := range []string{"cf", "i2p", "tor", "ygg"} {
-		if !selected[ext] {
+	// Without flags only the private tailnet route goes; -a takes every layer.
+	// Each layer loses its Caddy blocks, then its own config (tunnel ingress,
+	// hidden service, forwarder).
+	for _, l := range extRegistry().All() {
+		private := l.Flag() == ""
+		switch {
+		case disableAll:
+		case private && hasSpecific, !private && !*disableLayerFlags[l.Name()]:
 			continue
 		}
-		if err := configgen.RemoveAllPortFiles(root, ext, svcName); err != nil {
-			return fmt.Errorf("%s: %w", ext, err)
+		if err := routing.Disable(root, l, svcName); err != nil && !(private && disableAll) {
+			return fmt.Errorf("%s: %w", l.Name(), err)
 		}
-		if layer, ok := extRegistry().Get(ext); ok {
-			_ = layer.Disable(svcName)
+		if private {
+			fmt.Printf("  %s  Private: removed\n", styles.Warning.Render("→"))
+		} else {
+			fmt.Printf("  %s  %s: removed\n", styles.Warning.Render("→"), l.Label())
 		}
-		fmt.Printf("  %s  %s: removed\n", styles.Warning.Render("→"), configgen.ExtensionLabel(ext))
 	}
 
 	if err := explain(mgr.Reload()); err != nil {

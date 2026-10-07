@@ -341,7 +341,6 @@ type Config struct {
 var extensionAliases = map[string]string{
 	"yggdrasil": "ygg",
 	"i2pd":      "i2p",
-	"ts":        "ts",
 }
 
 // ResolveExtension resolves a config.yaml extension name to the canonical
@@ -352,41 +351,6 @@ func ResolveExtension(name string) string {
 		return resolved
 	}
 	return name
-}
-
-// AllExtensions returns all valid extension identifiers (canonical names).
-func AllExtensions() []string {
-	return []string{"ts", "cf", "tor", "i2p", "ygg"}
-}
-
-// ExtensionProfile returns the Docker Compose profile name for an extension.
-func ExtensionProfile(ext string) string {
-	switch ext {
-	case "cf":
-		return "tunnel"
-	default:
-		return ext
-	}
-}
-
-// ExtensionLabel returns a human-readable label for an extension. Takes the
-// canonical name (see AllExtensions/ResolveExtension) — "ygg", not the
-// legacy config.yaml alias "yggdrasil".
-func ExtensionLabel(ext string) string {
-	switch ext {
-	case "ts":
-		return "Tailscale"
-	case "cf":
-		return "Cloudflare Tunnel"
-	case "tor":
-		return "Tor onion service proxy"
-	case "i2p":
-		return "I2P router + eepsite proxy"
-	case "ygg":
-		return "Yggdrasil mesh node"
-	default:
-		return ext
-	}
 }
 
 // HasExtension reports whether an extension is enabled.

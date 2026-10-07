@@ -120,9 +120,9 @@ func runSetup(_ *cobra.Command, _ []string) error {
 		Label string
 	}{
 		{"cf", "Cloudflare Tunnel (public internet via cloudflared)"},
-		{torContainer, "Tor onion service proxy (.onion addresses)"},
-		{i2pContainer, "I2P router + eepsite proxy (.i2p addresses)"},
-		{yggContainer, "Yggdrasil IPv6 mesh node (socat port forwarding)"},
+		{"tor", "Tor onion service proxy (.onion addresses)"},
+		{"i2p", "I2P router + eepsite proxy (.i2p addresses)"},
+		{"yggdrasil", "Yggdrasil IPv6 mesh node (socat port forwarding)"},
 	}
 	for _, ext := range extNames {
 		added := cfg.HasExtension(ext.Name)

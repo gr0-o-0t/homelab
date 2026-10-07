@@ -34,15 +34,16 @@ func runServiceStatus(dir, name string, env map[string]string) error {
 	}
 
 	running := svc.Running > 0
-	dot := styles.Dot(running, svc.Enabled || svc.PublicEnabled)
+	priv, pub := svc.On("ts"), svc.On("cf")
+	dot := styles.Dot(running, priv || pub)
 
 	var access string
 	switch {
-	case svc.Enabled && svc.PublicEnabled:
+	case priv && pub:
 		access = styles.Success.Render("priv+pub")
-	case svc.Enabled:
+	case priv:
 		access = styles.Primary.Render("private")
-	case svc.PublicEnabled:
+	case pub:
 		access = styles.Warning.Render("public")
 	default:
 		access = styles.Muted.Render("hidden")
@@ -58,9 +59,10 @@ func runServiceStatus(dir, name string, env map[string]string) error {
 		containerStatus = styles.Warning.Render(fmt.Sprintf("%d/%d running", svc.Running, svc.Total))
 	}
 
+	ts, _ := extRegistry().Get("ts")
 	var url string
-	if svc.Enabled && env["HOME_SUBDOMAIN"] != "" && env["DOMAIN"] != "" {
-		url = fmt.Sprintf("https://%s.%s.%s", configgen.PrivateHost(dir, name), env["HOME_SUBDOMAIN"], env["DOMAIN"])
+	if priv && env["HOME_SUBDOMAIN"] != "" && env["DOMAIN"] != "" {
+		url = fmt.Sprintf("https://%s.%s.%s", configgen.CurrentHost(dir, ts, name), env["HOME_SUBDOMAIN"], env["DOMAIN"])
 	}
 
 	fmt.Printf("\n%s\n\n", styles.Header.Render(fmt.Sprintf("Status: %s", name)))
@@ -70,39 +72,26 @@ func runServiceStatus(dir, name string, env map[string]string) error {
 	if url != "" {
 		fmt.Printf("  %s  URL:     %s\n", styles.Muted.Render("↳"), styles.Primary.Render(url))
 	}
-	if svc.Enabled {
+	if priv {
 		fmt.Printf("  %s  Config:  %s\n", styles.Muted.Render("↳"),
-			styles.Muted.Render(configgen.GeneratedFilePath(dir, "private", name, "")))
+			styles.Muted.Render(configgen.GeneratedFilePath(dir, ts.ConfDir(), name, "")))
 	}
 
 	// ── Network Exposure section ──────────────────────────────────────────
 	fmt.Printf("\n  %s\n", styles.PaneTitle.Render("Network Exposure"))
 
-	layerEntries := []struct {
-		key     string // configgen layer key
-		label   string
-		enabled bool
-	}{
-		{"ts", "Tailnet", svc.Enabled},
-		{"cf", "Cloudflare", svc.PublicEnabled},
-		{"tor", "Tor", svc.HasTor}, // URL resolved below — use torOnionAddress when running
-		{"i2p", "I2P", svc.HasI2P},
-		{"ygg", "Yggdrasil", svc.HasYgg},
-	}
-
-	for _, entry := range layerEntries {
+	for _, layer := range extRegistry().All() {
+		enabled := svc.On(layer.Name())
 		icon := styles.Muted.Render("✗")
-		if entry.enabled {
+		if enabled {
 			icon = styles.Success.Render("✓")
 		}
-		label := styles.Width(14).Render(styles.Bold.Render(entry.label))
+		label := styles.Width(28).Render(styles.Bold.Render(layer.Label()))
 
 		var url string
-		if entry.enabled {
-			if layer, ok := extRegistry().Get(entry.key); ok {
-				if addrs := layer.ServiceAddresses(name, env); len(addrs) > 0 {
-					url = addressText(addrs[0])
-				}
+		if enabled {
+			if addrs := layer.ServiceAddresses(name, env); len(addrs) > 0 {
+				url = addressText(addrs[0])
 			}
 		}
 

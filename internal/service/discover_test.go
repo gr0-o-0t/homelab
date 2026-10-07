@@ -117,8 +117,8 @@ func TestDiscover_BasicService(t *testing.T) {
 	svc := svcs[0]
 	assert.Equal(t, "myapp", svc.Name)
 	assert.Equal(t, filepath.Join(repo, "services", "myapp"), svc.Dir)
-	assert.False(t, svc.Enabled)
-	assert.False(t, svc.PublicEnabled)
+	assert.False(t, svc.On("ts"))
+	assert.False(t, svc.On("cf"))
 }
 
 func TestDiscover_PrivateEnabled(t *testing.T) {
@@ -129,8 +129,8 @@ func TestDiscover_PrivateEnabled(t *testing.T) {
 	svcs, err := service.Discover(repo)
 	require.NoError(t, err)
 	require.Len(t, svcs, 1)
-	assert.True(t, svcs[0].Enabled, "regular file in conf.d → Enabled=true")
-	assert.False(t, svcs[0].PublicEnabled)
+	assert.True(t, svcs[0].On("ts"), "regular file in conf.d → Enabled=true")
+	assert.False(t, svcs[0].On("cf"))
 }
 
 func TestDiscover_PublicEnabled(t *testing.T) {
@@ -141,8 +141,8 @@ func TestDiscover_PublicEnabled(t *testing.T) {
 	svcs, err := service.Discover(repo)
 	require.NoError(t, err)
 	require.Len(t, svcs, 1)
-	assert.False(t, svcs[0].Enabled)
-	assert.True(t, svcs[0].PublicEnabled, "regular file in conf.d-cf → PublicEnabled=true")
+	assert.False(t, svcs[0].On("ts"))
+	assert.True(t, svcs[0].On("cf"), "regular file in conf.d-cf → PublicEnabled=true")
 }
 
 func TestDiscover_BothEnabled(t *testing.T) {
@@ -154,8 +154,8 @@ func TestDiscover_BothEnabled(t *testing.T) {
 	svcs, err := service.Discover(repo)
 	require.NoError(t, err)
 	require.Len(t, svcs, 1)
-	assert.True(t, svcs[0].Enabled)
-	assert.True(t, svcs[0].PublicEnabled)
+	assert.True(t, svcs[0].On("ts"))
+	assert.True(t, svcs[0].On("cf"))
 }
 
 func TestDiscover_MultipleServices_SortedAlphabetically(t *testing.T) {
@@ -197,7 +197,7 @@ func TestDiscover_BrokenSymlinkNotCountedAsEnabled(t *testing.T) {
 	svcs, err := service.Discover(repo)
 	require.NoError(t, err)
 	require.Len(t, svcs, 1)
-	assert.False(t, svcs[0].Enabled,
+	assert.False(t, svcs[0].On("ts"),
 		"broken symlink target not resolvable → Enabled=false")
 }
 
@@ -211,9 +211,9 @@ func TestDiscover_TorLayer(t *testing.T) {
 	svcs, err := service.Discover(repo)
 	require.NoError(t, err)
 	require.Len(t, svcs, 1)
-	assert.True(t, svcs[0].HasTor, "generated file in conf.d-tor → HasTor=true")
-	assert.False(t, svcs[0].HasI2P)
-	assert.False(t, svcs[0].HasYgg)
+	assert.True(t, svcs[0].On("tor"), "generated file in conf.d-tor → HasTor=true")
+	assert.False(t, svcs[0].On("i2p"))
+	assert.False(t, svcs[0].On("ygg"))
 }
 
 func TestDiscover_I2PLayer(t *testing.T) {
@@ -224,9 +224,9 @@ func TestDiscover_I2PLayer(t *testing.T) {
 	svcs, err := service.Discover(repo)
 	require.NoError(t, err)
 	require.Len(t, svcs, 1)
-	assert.True(t, svcs[0].HasI2P, "generated file in conf.d-i2p → HasI2P=true")
-	assert.False(t, svcs[0].HasTor)
-	assert.False(t, svcs[0].HasYgg)
+	assert.True(t, svcs[0].On("i2p"), "generated file in conf.d-i2p → HasI2P=true")
+	assert.False(t, svcs[0].On("tor"))
+	assert.False(t, svcs[0].On("ygg"))
 }
 
 func TestDiscover_YggLayer(t *testing.T) {
@@ -237,9 +237,9 @@ func TestDiscover_YggLayer(t *testing.T) {
 	svcs, err := service.Discover(repo)
 	require.NoError(t, err)
 	require.Len(t, svcs, 1)
-	assert.True(t, svcs[0].HasYgg, "generated file in conf.d-ygg → HasYgg=true")
-	assert.False(t, svcs[0].HasTor)
-	assert.False(t, svcs[0].HasI2P)
+	assert.True(t, svcs[0].On("ygg"), "generated file in conf.d-ygg → HasYgg=true")
+	assert.False(t, svcs[0].On("tor"))
+	assert.False(t, svcs[0].On("i2p"))
 }
 
 func TestDiscover_AllExtensionLayers(t *testing.T) {
@@ -252,9 +252,9 @@ func TestDiscover_AllExtensionLayers(t *testing.T) {
 	svcs, err := service.Discover(repo)
 	require.NoError(t, err)
 	require.Len(t, svcs, 1)
-	assert.True(t, svcs[0].HasTor)
-	assert.True(t, svcs[0].HasI2P)
-	assert.True(t, svcs[0].HasYgg)
+	assert.True(t, svcs[0].On("tor"))
+	assert.True(t, svcs[0].On("i2p"))
+	assert.True(t, svcs[0].On("ygg"))
 }
 
 func TestDiscover_ExtensionLayerWithoutService(t *testing.T) {
@@ -283,6 +283,6 @@ func TestDiscover_NamedPortCountsAsExposed(t *testing.T) {
 	for _, s := range svcs {
 		byName[s.Name] = s
 	}
-	assert.True(t, byName["vaultwarden"].Enabled, "<svc>-<port>.conf is a private route")
-	assert.False(t, byName["vault"].Enabled)
+	assert.True(t, byName["vaultwarden"].On("ts"), "<svc>-<port>.conf is a private route")
+	assert.False(t, byName["vault"].On("ts"))
 }

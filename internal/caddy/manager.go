@@ -12,6 +12,9 @@ import (
 	"os"
 
 	"github.com/groot/homelab/internal/configgen"
+	"github.com/groot/homelab/internal/network"
+	"github.com/groot/homelab/internal/network/layers"
+	"github.com/groot/homelab/internal/routing"
 	"github.com/groot/homelab/internal/run"
 )
 
@@ -50,16 +53,14 @@ func newForTest(repoRoot string, reloadFn func() error) *Manager {
 
 // ── Per-service config reload ─────────────────────────────────────────────────
 
-// reloadableExts are the layers whose Caddy blocks configgen writes. tor and ygg
-// are absent: their site addresses (an onion, an allocated mesh port) are known
-// only to their own layers, which write those blocks themselves.
-var reloadableExts = []string{"private", "cf", "i2p"}
-
 // ReloadService regenerates a service's Caddy config for every layer it is
 // currently on and reloads Caddy once — picking up edits to its config.yaml
 // ports or caddy.routes.conf. A layer that is off stays off, the --name it was
 // enabled with is kept (it is read back from the generated block), and so is a
 // --ports selection (only the ports that already have a block are rewritten).
+//
+// Only Host-routed layers are refreshed: a tor or ygg address (an onion, an
+// allocated mesh port) belongs to the layer's daemon, which this does not ask.
 func (m *Manager) ReloadService(name string) error {
 	info, err := configgen.LoadServiceInfo(m.RepoRoot, name)
 	if err != nil {
@@ -71,28 +72,20 @@ func (m *Manager) ReloadService(name string) error {
 	}
 
 	reloaded := false
-	for _, ext := range reloadableExts {
-		portNames, active := activePorts(m.RepoRoot, ext, info)
+	for _, l := range layers.New(m.RepoRoot, nil, nil).All() {
+		if _, ok := l.(network.HostRouted); !ok {
+			continue
+		}
+		portNames, active := activePorts(m.RepoRoot, l.ConfDir(), info)
 		if !active {
 			continue
 		}
-		blocks, err := configgen.Generate(configgen.Request{
-			ServiceName: name,
-			DisplayName: configgen.GeneratedHost(m.RepoRoot, ext, name),
-			Extensions:  []string{ext},
-			PortNames:   portNames,
-			ConfigDir:   m.RepoRoot,
-		})
-		if err != nil {
-			return fmt.Errorf("%s: %w", ext, err)
+		e, err := configgen.Resolve(m.RepoRoot, name, configgen.GeneratedHost(m.RepoRoot, l, name), portNames)
+		if err == nil {
+			err = routing.Refresh(m.RepoRoot, l, e)
 		}
-		for _, b := range blocks {
-			if b.Content == "" {
-				continue
-			}
-			if err := configgen.WriteFile(m.RepoRoot, ext, name, b.PortName, b.Content); err != nil {
-				return fmt.Errorf("writing %s config: %w", ext, err)
-			}
+		if err != nil {
+			return fmt.Errorf("%s: %w", l.Name(), err)
 		}
 		reloaded = true
 	}
@@ -105,9 +98,9 @@ func (m *Manager) ReloadService(name string) error {
 // activePorts reports whether a layer has any generated block for the service
 // and, for a port-driven service, which declared ports have one. A
 // routes-driven service has a single block per layer and no port selection.
-func activePorts(root, ext string, info configgen.ServiceInfo) ([]string, bool) {
+func activePorts(root, confDir string, info configgen.ServiceInfo) ([]string, bool) {
 	if info.Routes != "" || len(info.Ports) == 0 {
-		return nil, exists(configgen.GeneratedFilePath(root, ext, info.Name, ""))
+		return nil, exists(configgen.GeneratedFilePath(root, confDir, info.Name, ""))
 	}
 	ports, err := configgen.ResolvePorts(info.Ports, nil)
 	if err != nil {
@@ -115,7 +108,7 @@ func activePorts(root, ext string, info configgen.ServiceInfo) ([]string, bool) 
 	}
 	var names []string
 	for _, p := range ports {
-		if exists(configgen.GeneratedFilePath(root, ext, info.Name, p.Name)) {
+		if exists(configgen.GeneratedFilePath(root, confDir, info.Name, p.Name)) {
 			names = append(names, p.Name)
 		}
 	}

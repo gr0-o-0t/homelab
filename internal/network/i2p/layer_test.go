@@ -27,22 +27,20 @@ func TestLayer_InterfaceImplementation(t *testing.T) {
 	assert.NotNil(t, l)
 }
 
-func TestLayer_CaddyConfigDir(t *testing.T) {
-	l := New("/test/repo", nil, nil)
-	dir := l.CaddyConfigDir("/home/user/.config/homelab")
-	assert.Equal(t, "/home/user/.config/homelab/caddy/conf.d-i2p", dir)
+func TestLayer_ConfDir(t *testing.T) {
+	assert.Equal(t, "conf.d-i2p", New("/test/repo", nil, nil).ConfDir())
 }
 
-// Caddy config writing/removal for i2p is owned entirely by
-// internal/configgen now (see cmd/enable.go, cmd/disable.go). Enable/Disable
-// here only manage tunnels.conf and the reload.
+// Caddy config for i2p is rendered by internal/configgen and written by
+// internal/routing; Configure/Teardown here only manage tunnels.conf and the
+// reload.
 
-func TestLayer_Enable_WritesTunnelConfig(t *testing.T) {
+func TestLayer_Configure_WritesTunnelConfig(t *testing.T) {
 	root := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "i2p"), 0o750))
 	l := newForTest(root, noopReload)
 
-	err := l.Enable("gitea", "gitea", network.ServiceInfo{},
+	err := l.Configure("gitea", "gitea",
 		[]network.PortSelection{{Name: "web", Port: 3000, Protocol: "tcp"}})
 	require.NoError(t, err)
 
@@ -62,19 +60,17 @@ func TestLayer_Enable_WritesTunnelConfig(t *testing.T) {
 		"no HOME_SUBDOMAIN in the test env, so it falls back to the bare name")
 }
 
-// Enabling the same tunnel twice must succeed, not error — this is exactly
-// the sequence `homelab i2p enable <svc>` followed by its own suggested next
-// step `homelab enable <svc> --i2p` produces, and previously crashed because
-// the two commands maintained separately-diverged copies of this logic.
-func TestLayer_Enable_DuplicateTunnel_IsIdempotent(t *testing.T) {
+// Enabling the same tunnel twice must succeed, not error: re-running
+// `homelab enable <svc> --i2p` is normal.
+func TestLayer_Configure_DuplicateTunnel_IsIdempotent(t *testing.T) {
 	root := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "i2p"), 0o750))
 	l := newForTest(root, noopReload)
 
-	require.NoError(t, l.Enable("gitea", "gitea", network.ServiceInfo{},
+	require.NoError(t, l.Configure("gitea", "gitea",
 		[]network.PortSelection{{Name: "web", Port: 3000, Protocol: "tcp"}}))
 
-	err := l.Enable("gitea", "gitea", network.ServiceInfo{},
+	err := l.Configure("gitea", "gitea",
 		[]network.PortSelection{{Name: "web", Port: 3000, Protocol: "tcp"}})
 	assert.NoError(t, err)
 
@@ -83,15 +79,15 @@ func TestLayer_Enable_DuplicateTunnel_IsIdempotent(t *testing.T) {
 	assert.Len(t, tunnels, 1, "the tunnel section should not be duplicated")
 }
 
-func TestLayer_Disable_RemovesConfigs(t *testing.T) {
+func TestLayer_Teardown_RemovesConfigs(t *testing.T) {
 	root := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "i2p"), 0o750))
 	l := newForTest(root, noopReload)
 
-	require.NoError(t, l.Enable("gitea", "gitea", network.ServiceInfo{},
+	require.NoError(t, l.Configure("gitea", "gitea",
 		[]network.PortSelection{{Name: "web", Port: 3000, Protocol: "tcp"}}))
 
-	require.NoError(t, l.Disable("gitea"))
+	require.NoError(t, l.Teardown("gitea"))
 
 	tunPath := filepath.Join(root, "i2p", "tunnels.conf")
 	data, err := os.ReadFile(tunPath)
@@ -99,10 +95,10 @@ func TestLayer_Disable_RemovesConfigs(t *testing.T) {
 	assert.NotContains(t, string(data), "[gitea]")
 }
 
-func TestLayer_Disable_Idempotent(t *testing.T) {
+func TestLayer_Teardown_Idempotent(t *testing.T) {
 	root := t.TempDir()
 	l := newForTest(root, noopReload)
-	err := l.Disable("nonexistent")
+	err := l.Teardown("nonexistent")
 	assert.NoError(t, err)
 }
 
@@ -195,13 +191,13 @@ func TestServiceAddresses_I2PNameIsAnAliasNotTheAddress(t *testing.T) {
 // The tunnel host and the Caddy site address are produced by one function, so
 // a configured home subdomain has to show up in tunnels.conf as a literal —
 // i2pd does no environment expansion.
-func TestLayer_AppendTunnel_NamespacesUnderHomeSubdomain(t *testing.T) {
+func TestLayer_Configure_NamespacesUnderHomeSubdomain(t *testing.T) {
 	root := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "i2p"), 0o750))
 	l := &Layer{repoRoot: root, reloadHook: noopReload,
 		envFn: func() map[string]string { return map[string]string{"HOME_SUBDOMAIN": "leno"} }}
 
-	require.NoError(t, l.AppendTunnel("searxng", 8080))
+	require.NoError(t, l.Configure("searxng", "searxng", []network.PortSelection{{Name: "default", Port: 8080}}))
 
 	data, err := os.ReadFile(filepath.Join(root, "i2p", "tunnels.conf"))
 	require.NoError(t, err)
@@ -212,15 +208,15 @@ func TestLayer_AppendTunnel_NamespacesUnderHomeSubdomain(t *testing.T) {
 // A tunnel whose host no longer matches what Caddy serves must be rewritten,
 // not skipped as "already configured" — that leaves i2pd stamping a Host
 // header no site block matches, which looks configured and 404s.
-func TestLayer_AppendTunnel_RewritesStaleHost(t *testing.T) {
+func TestLayer_Configure_RewritesStaleHost(t *testing.T) {
 	root := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "i2p"), 0o750))
 	bare := &Layer{repoRoot: root, reloadHook: noopReload}
-	require.NoError(t, bare.AppendTunnel("searxng", 8080))
+	require.NoError(t, bare.Configure("searxng", "searxng", []network.PortSelection{{Name: "default", Port: 8080}}))
 
 	moved := &Layer{repoRoot: root, reloadHook: noopReload,
 		envFn: func() map[string]string { return map[string]string{"HOME_SUBDOMAIN": "leno"} }}
-	require.NoError(t, moved.AppendTunnel("searxng", 8080))
+	require.NoError(t, moved.Configure("searxng", "searxng", []network.PortSelection{{Name: "default", Port: 8080}}))
 
 	data, err := os.ReadFile(filepath.Join(root, "i2p", "tunnels.conf"))
 	require.NoError(t, err)
@@ -234,7 +230,7 @@ func TestLayer_AppendTunnel_RewritesStaleHost(t *testing.T) {
 
 // The hostoverride must be the host configgen builds the site block from: a
 // --name or a declared subdomain changes both, or the eepsite 404s.
-func TestLayer_Enable_HostMatchesCaddyBlock(t *testing.T) {
+func TestLayer_Configure_HostMatchesCaddyBlock(t *testing.T) {
 	root := t.TempDir()
 	svcDir := filepath.Join(root, "services", "vaultwarden")
 	require.NoError(t, os.MkdirAll(svcDir, 0o750))
@@ -246,10 +242,11 @@ func TestLayer_Enable_HostMatchesCaddyBlock(t *testing.T) {
 		{"vaultwarden", "vault.i2p"}, // declared subdomain
 		{"pw", "vault.i2p"},          // a port's subdomain outranks --name, as in configgen
 	} {
-		require.NoError(t, l.Enable("vaultwarden", tc.display, network.ServiceInfo{},
+		require.NoError(t, l.Configure("vaultwarden", tc.display,
 			[]network.PortSelection{{Name: "vault", Port: 80, Protocol: "tcp"}}))
-		blocks, err := configgen.Generate(configgen.Request{ServiceName: "vaultwarden",
-			DisplayName: tc.display, Extensions: []string{"i2p"}, ConfigDir: root})
+		e, err := configgen.Resolve(root, "vaultwarden", tc.display, nil)
+		require.NoError(t, err)
+		blocks, err := configgen.Render(l, e)
 		require.NoError(t, err)
 
 		tunnels, err := l.ParseTunnels()

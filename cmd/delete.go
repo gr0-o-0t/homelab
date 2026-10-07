@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/groot/homelab/internal/configgen"
 	"github.com/groot/homelab/internal/routing"
 	"github.com/groot/homelab/internal/tui/styles"
 	"github.com/spf13/cobra"
@@ -80,12 +79,12 @@ func deleteOne(root, svcName string) error {
 	// exposed. The onion key goes too: disable keeps it so a re-enable gets
 	// the same address, but after delete it is just private key material.
 	fmt.Printf("  %s  Removing network config…\n", styles.Muted.Render("→"))
-	mgr, quiet, explain := quietCaddy(root)
-	_ = routing.DisablePrivate(root, svcName, quiet)
-	for _, ext := range []string{"cf", "i2p", "tor", "ygg"} {
-		_ = configgen.RemoveAllPortFiles(root, ext, svcName)
-		if layer, ok := extRegistry().Get(ext); ok && active[ext] {
-			_ = layer.Disable(svcName)
+	mgr, _, explain := quietCaddy(root)
+	for _, l := range extRegistry().All() {
+		if active[l.Name()] {
+			_ = routing.Disable(root, l, svcName)
+		} else {
+			_ = routing.RemoveRoutes(root, l, svcName)
 		}
 	}
 	_ = os.RemoveAll(filepath.Join(root, "tor", "hidden_service", svcName))

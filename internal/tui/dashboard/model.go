@@ -51,13 +51,10 @@ const (
 // private layer has no flag — it is what the bare command does.
 type layerChoice struct{ key, layer, flag string }
 
-var layerChoices = []layerChoice{
-	{"p", "ts", ""},
-	{"c", "cf", "--cf"},
-	{"t", "tor", "--tor"},
-	{"i", "i2p", "--i2p"},
-	{"y", "ygg", "--ygg"},
-}
+// layerKeys are the prompt keys. Only the keys live here; which layers exist
+// and their flags come from the configured layers. A layer without a key
+// gets its first letter.
+var layerKeys = map[string]string{"ts": "p", "cf": "c", "tor": "t", "i2p": "i", "ygg": "y"}
 
 // ── messages ──────────────────────────────────────────────────────────────────
 
@@ -499,12 +496,17 @@ func (m Model) promptChoices(svc *service.Service) []layerChoice {
 		active[string(n)] = true
 	}
 	var out []layerChoice
-	for _, c := range layerChoices {
-		if _, ok := m.layerByName(c.layer); !ok {
+	for _, l := range m.layers {
+		if m.state == stateDisablePrompt && !active[l.Name()] {
 			continue
 		}
-		if m.state == stateDisablePrompt && !active[c.layer] {
-			continue
+		key := layerKeys[l.Name()]
+		if key == "" {
+			key = l.Name()[:1]
+		}
+		c := layerChoice{key: key, layer: l.Name()}
+		if l.Flag() != "" {
+			c.flag = "--" + l.Flag()
 		}
 		out = append(out, c)
 	}

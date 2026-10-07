@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/groot/homelab/internal/configgen"
 	"github.com/groot/homelab/internal/network"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -24,9 +25,8 @@ func TestLayer_InterfaceImplementation(t *testing.T) {
 	assert.NotNil(t, l)
 }
 
-func TestLayer_CaddyConfigDir(t *testing.T) {
-	l := New("/test/repo", nil, nil)
-	assert.Equal(t, "/home/user/.config/homelab/caddy/conf.d-ygg", l.CaddyConfigDir("/home/user/.config/homelab"))
+func TestLayer_ConfDir(t *testing.T) {
+	assert.Equal(t, "conf.d-ygg", New("/test/repo", nil, nil).ConfDir())
 }
 
 // Every layer used to hardcode an empty env, so their compose calls ran with no
@@ -43,13 +43,37 @@ func TestLayer_Env_ComesFromInjectedFunc(t *testing.T) {
 	assert.Empty(t, New("/test/repo", nil, nil).env())
 }
 
-// Unlike the other layers, ygg owns its Caddy config: the mesh has no naming,
-// so Caddy routes by listening port and only this layer knows the port.
+// enable does what internal/routing does for `homelab enable --ygg`: the
+// daemon side, then the Caddy blocks rendered from Sites. The mesh has no
+// naming, so Caddy routes by listening port and only this layer knows it.
+func enable(l *Layer, svc string, ports []network.PortSelection) error {
+	if err := l.Configure(svc, svc, ports); err != nil {
+		return err
+	}
+	blocks, err := configgen.Render(l, configgen.Exposure{Service: svc, Host: svc, Ports: ports})
+	if err != nil {
+		return err
+	}
+	for _, b := range blocks {
+		if err := configgen.WriteFile(l.repoRoot, l.ConfDir(), svc, b.PortName, b.Content); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// disable mirrors routing.Disable.
+func disable(l *Layer, svc string) error {
+	if err := configgen.RemoveAllPortFiles(l.repoRoot, l.ConfDir(), svc); err != nil {
+		return err
+	}
+	return l.Teardown(svc)
+}
 
 func TestLayer_Enable_WritesForwarderAndCaddyBlock(t *testing.T) {
 	root := t.TempDir()
 	l := newForTest(root, noopRestart)
-	err := l.Enable("gitea", "gitea", network.ServiceInfo{},
+	err := enable(l, "gitea",
 		[]network.PortSelection{{Name: "web", Port: 3000, Protocol: "tcp"}})
 	require.NoError(t, err)
 
@@ -61,7 +85,7 @@ func TestLayer_Enable_WritesForwarderAndCaddyBlock(t *testing.T) {
 	assert.NotContains(t, string(data), "TARGET=gitea:3000")
 
 	block, err := os.ReadFile(filepath.Join(root, "caddy", "conf.d-ygg", "gitea.conf"))
-	require.NoError(t, err, "ygg layer must write its own Caddy site block")
+	require.NoError(t, err, "a :<mesh port> site block")
 	assert.Contains(t, string(block), ":9000 {")
 	assert.Contains(t, string(block), "reverse_proxy gitea:3000")
 }
@@ -72,7 +96,7 @@ func TestLayer_Enable_WritesForwarderAndCaddyBlock(t *testing.T) {
 func TestLayer_Enable_NeverAllocatesCaddysOwnPorts(t *testing.T) {
 	root := t.TempDir()
 	l := newForTest(root, noopRestart)
-	require.NoError(t, l.Enable("nginxish", "nginxish", network.ServiceInfo{},
+	require.NoError(t, enable(l, "nginxish",
 		[]network.PortSelection{{Name: "web", Port: 80, Protocol: "tcp"}}))
 
 	block, _ := os.ReadFile(filepath.Join(root, "caddy", "conf.d-ygg", "nginxish.conf"))
@@ -84,7 +108,7 @@ func TestLayer_Enable_NeverAllocatesCaddysOwnPorts(t *testing.T) {
 func TestLayer_Enable_MultiplePorts_SeparateForwarderFiles(t *testing.T) {
 	root := t.TempDir()
 	l := newForTest(root, noopRestart)
-	err := l.Enable("gitea", "gitea", network.ServiceInfo{},
+	err := enable(l, "gitea",
 		[]network.PortSelection{
 			{Name: "web", Port: 3000, Protocol: "tcp"},
 			{Name: "ssh", Port: 2222, Protocol: "tcp"},
@@ -107,8 +131,8 @@ func TestLayer_Enable_PortCollision_AllocatesNextFree(t *testing.T) {
 	l := newForTest(root, noopRestart)
 	ports := []network.PortSelection{{Name: "web", Port: 8080, Protocol: "tcp"}}
 
-	require.NoError(t, l.Enable("first", "first", network.ServiceInfo{}, ports))
-	require.NoError(t, l.Enable("second", "second", network.ServiceInfo{}, ports))
+	require.NoError(t, enable(l, "first", ports))
+	require.NoError(t, enable(l, "second", ports))
 
 	first, _ := os.ReadFile(filepath.Join(root, "yggdrasil", "socat.d", "first.forward"))
 	second, _ := os.ReadFile(filepath.Join(root, "yggdrasil", "socat.d", "second.forward"))
@@ -128,10 +152,10 @@ func TestLayer_Enable_Reenable_KeepsAllocatedPort(t *testing.T) {
 	root := t.TempDir()
 	l := newForTest(root, noopRestart)
 	taken := []network.PortSelection{{Name: "web", Port: 8080, Protocol: "tcp"}}
-	require.NoError(t, l.Enable("first", "first", network.ServiceInfo{}, taken))
-	require.NoError(t, l.Enable("second", "second", network.ServiceInfo{}, taken))
+	require.NoError(t, enable(l, "first", taken))
+	require.NoError(t, enable(l, "second", taken))
 
-	require.NoError(t, l.Enable("second", "second", network.ServiceInfo{}, taken))
+	require.NoError(t, enable(l, "second", taken))
 	data, _ := os.ReadFile(filepath.Join(root, "yggdrasil", "socat.d", "second.forward"))
 	assert.Contains(t, string(data), "PORT=9001")
 }
@@ -140,12 +164,12 @@ func TestLayer_Disable_RemovesCaddyBlocks(t *testing.T) {
 	root := t.TempDir()
 	l := newForTest(root, noopRestart)
 	writeGiteaPorts(t, root)
-	require.NoError(t, l.Enable("gitea", "gitea", network.ServiceInfo{},
+	require.NoError(t, enable(l, "gitea",
 		[]network.PortSelection{
 			{Name: "web", Port: 3000, Protocol: "tcp"},
 			{Name: "ssh", Port: 2222, Protocol: "tcp"},
 		}))
-	require.NoError(t, l.Disable("gitea"))
+	require.NoError(t, disable(l, "gitea"))
 
 	for _, f := range []string{"gitea.conf", "gitea-ssh.conf"} {
 		_, err := os.Stat(filepath.Join(root, "caddy", "conf.d-ygg", f))
@@ -157,12 +181,12 @@ func TestLayer_Disable_RemovesConfigs(t *testing.T) {
 	root := t.TempDir()
 	l := newForTest(root, noopRestart)
 	writeGiteaPorts(t, root)
-	require.NoError(t, l.Enable("gitea", "gitea", network.ServiceInfo{},
+	require.NoError(t, enable(l, "gitea",
 		[]network.PortSelection{
 			{Name: "web", Port: 3000, Protocol: "tcp"},
 			{Name: "ssh", Port: 2222, Protocol: "tcp"},
 		}))
-	require.NoError(t, l.Disable("gitea"))
+	require.NoError(t, disable(l, "gitea"))
 	_, err := os.Stat(filepath.Join(root, "yggdrasil", "socat.d", "gitea.forward"))
 	assert.True(t, os.IsNotExist(err), "default forward file should be removed")
 	_, err = os.Stat(filepath.Join(root, "yggdrasil", "socat.d", "gitea-ssh.forward"))
@@ -171,7 +195,7 @@ func TestLayer_Disable_RemovesConfigs(t *testing.T) {
 
 func TestLayer_Disable_Idempotent(t *testing.T) {
 	l := newForTest(t.TempDir(), noopRestart)
-	assert.NoError(t, l.Disable("nonexistent"))
+	assert.NoError(t, disable(l, "nonexistent"))
 }
 
 // writeGiteaPorts declares the ports the multi-port tests enable, since Disable
@@ -190,10 +214,10 @@ func TestLayer_Disable_LeavesPrefixSiblingAlone(t *testing.T) {
 	root := t.TempDir()
 	l := newForTest(root, noopRestart)
 	ports := []network.PortSelection{{Name: "default", Port: 8080, Protocol: "tcp"}}
-	require.NoError(t, l.Enable("foo", "foo", network.ServiceInfo{}, ports))
-	require.NoError(t, l.Enable("foo-bar", "foo-bar", network.ServiceInfo{}, ports))
+	require.NoError(t, enable(l, "foo", ports))
+	require.NoError(t, enable(l, "foo-bar", ports))
 
-	require.NoError(t, l.Disable("foo"))
+	require.NoError(t, disable(l, "foo"))
 
 	for _, f := range []string{
 		filepath.Join(root, "yggdrasil", "socat.d", "foo-bar.forward"),
