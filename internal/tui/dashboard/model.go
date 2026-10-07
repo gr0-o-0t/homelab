@@ -1,70 +1,85 @@
 // Package dashboard implements the full-screen homelab dashboard TUI.
-// Layout: header bar | left service list | right detail pane | status bar.
+//
+// Layout: header bar (core and layer status pills) | view tabs | body (a list
+// and a detail pane, or a modal: palette, form, confirmation, output, help,
+// setup) | footer (context hints, progress, results).
+//
+// The dashboard keeps no list of its own of what can be done: every action is
+// an entry in internal/actions, offered for whatever is selected through
+// actions.For, and run as the CLI command it describes. The only hand-written
+// table is keys.go's map from a few single keys to action IDs.
 package dashboard
 
 import (
-	"fmt"
+	"maps"
+	"slices"
+	"sort"
 	"strings"
+	"sync"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/groot/homelab/internal/actions"
+	"github.com/groot/homelab/internal/backup"
 	"github.com/groot/homelab/internal/docker"
 	"github.com/groot/homelab/internal/network"
 	"github.com/groot/homelab/internal/service"
+	"github.com/groot/homelab/internal/tui/logs"
 	"github.com/groot/homelab/internal/tui/styles"
 )
 
 // ── constants ─────────────────────────────────────────────────────────────────
 
 const (
-	leftPaneWidth     = 40 // full left column width (including separator)
-	listInnerWidth    = 38 // usable characters inside the left pane
-	headerLines       = 1
+	headerLines       = 2 // status bar + tabs
 	statusbarLines    = 1
 	logTailLines      = 10
 	coreRefreshSec    = 5
 	logRefreshSec     = 4
 	inspectRefreshSec = 5
-
-	// Name column widths inside the list. Derived from listInnerWidth.
-	//   installed item: cursor(2) + dot(1) + space(1) + name + space(1) + badge(7) = 12 + name
-	//   catalog  item:  cursor(2) + plus(1) + space(1) + name                       = 4 + name
-	installedNameW = listInnerWidth - 12 // 26
-	catalogNameW   = listInnerWidth - 4  // 34
 )
 
-// ── state machine ─────────────────────────────────────────────────────────────
+// ── views and modes ───────────────────────────────────────────────────────────
 
-type dashState int
+type view int
 
 const (
-	stateNormal dashState = iota
-	stateBusy
-	stateEnablePrompt
-	stateDisablePrompt
-	stateFilterInput
+	viewServices view = iota
+	viewCatalog
+	viewNetwork
+	viewBackups
+	viewHealth
+	numViews
 )
 
-// layerChoice is one entry in the enable/disable prompt: the key pressed, the
-// layer it selects, and the `homelab enable|disable` flag that does it. The
-// private layer has no flag — it is what the bare command does.
-type layerChoice struct{ key, layer, flag string }
+var viewNames = [numViews]string{"Services", "Catalog", "Network", "Backups", "Health"}
+var viewIcons = [numViews]string{"services", "catalog", "network", "backups", "health"}
 
-// layerKeys are the prompt keys. Only the keys live here; which layers exist
-// and their flags come from the configured layers. A layer without a key
-// gets its first letter.
-var layerKeys = map[string]string{"ts": "p", "cf": "c", "tor": "t", "i2p": "i", "ygg": "y"}
+// mode is what has the keyboard: the list, or one modal over it.
+type mode int
+
+const (
+	modeNormal  mode = iota
+	modeFilter       // typing a list filter
+	modePalette      // command palette
+	modeForm         // an action's inputs
+	modeConfirm      // yes/no before a Confirm action
+	modeTyped        // type the token before a TypeName action
+	modeOutput       // a command's captured output
+	modeHelp         // the keymap
+	modeSetup        // vars and secrets of a service (or the root config)
+	modeLogs         // the embedded log viewer
+)
 
 // ── messages ──────────────────────────────────────────────────────────────────
 
 type (
-	refreshedMsg struct{ services []service.Service }
-	opDoneMsg    struct{ msg string }
-	opErrMsg     struct {
-		err    error
-		output string
+	refreshedMsg struct {
+		services []service.Service
+		enabled  map[string]bool // nil: unchanged
 	}
+	refreshErrMsg struct{ err error }
 	// coreStatusMsg maps a core container name to its state.
 	coreStatusMsg map[string]string
 	logTailMsg    struct {
@@ -78,90 +93,254 @@ type (
 		svcName string
 		details []docker.ContainerDetail
 	}
+	backupsMsg struct {
+		list []backup.Listing
+		err  error
+	}
+	// actionDoneMsg reports a captured (non-interactive, non-stream) run.
+	actionDoneMsg struct {
+		p   pending
+		res result
+	}
+	// execDoneMsg reports the end of an interactive command the TUI was
+	// suspended for.
+	execDoneMsg struct {
+		label string
+		err   error
+	}
+	choicesMsg struct {
+		key     string
+		choices []string
+		err     error
+	}
 )
 
 // EnvBuilderFn returns the docker compose environment map for a service name.
 type EnvBuilderFn func(svcName string) map[string]string
 
+// Options is what the dashboard needs from its host (cmd).
+type Options struct {
+	Root     string
+	Docker   *docker.Client // nil: no live container state
+	Services []service.Service
+	Catalog  []string
+	// Layers is every registered network layer, the private one first.
+	Layers []network.NetworkLayer
+	// Enabled reports which extensions config.yaml enables. Called from a
+	// tea.Cmd on every refresh, since enabling one changes it; nil means only
+	// the private layer.
+	Enabled  func() map[string]bool
+	BuildEnv EnvBuilderFn
+	// CLI is the argv prefix every action runs through: this binary plus its
+	// global flags.
+	CLI []string
+}
+
+// pending is an action on its way to running: inputs collected so far and the
+// view whose pane should show the result.
+type pending struct {
+	action actions.Action
+	target actions.Target
+	inputs actions.Inputs
+	origin view
+}
+
+// result is the captured outcome of a command.
+type result struct {
+	title string
+	argv  []string
+	out   string
+	err   error
+}
+
+// streams tracks running log streams so they can be stopped from outside the
+// Update loop (signals). Shared by every copy of the Model.
+type streams struct {
+	mu   sync.Mutex
+	stop []func()
+}
+
+func (s *streams) add(f func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.stop = append(s.stop, f)
+}
+
+func (s *streams) stopAll() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, f := range s.stop {
+		f()
+	}
+	s.stop = nil
+}
+
 // ── model ─────────────────────────────────────────────────────────────────────
 
 // Model is the Bubble Tea model for the full-screen dashboard.
 type Model struct {
-	// layout
+	opt Options
+
 	width, height int
-	help          bool
+	view          view
+	mode          mode
 
-	// state machine
-	state   dashState
-	spin    spinner.Model
-	busyMsg string
-	lastMsg string
-	lastErr string
+	cursor [numViews]int
+	filter [numViews]string
+	marked map[string]bool // multi-selection in the Services view
 
-	// service list
-	repoRoot     string
-	dc           *docker.Client
-	services     []service.Service
-	catalogNames []string
-	layers       []network.NetworkLayer
-	cursor       int
-	filter       string
-	buildEnv     EnvBuilderFn
-	cli          []string // argv prefix that runs the homelab CLI
+	services []service.Service
+	enabled  map[string]bool
+	core     map[string]string // container name → state
+	backups  []backup.Listing
+	backErr  string
 
-	// core health header, keyed by container name
-	core map[string]string
+	// Health view: the last result of each check, by action ID.
+	health       map[string]result
+	healthScroll int
 
-	// detail pane log tail
+	// detail pane of the selected service
 	logLines         []string
 	logSvcName       string
 	containerDetails []docker.ContainerDetail
 
-	// key sequence tracking
-	lastKey string // for detecting multi-key sequences (gg)
+	lastKey string // multi-key sequences (gg)
 
-	// exit signals
-	SelectedCoreLogs   bool
-	SelectedForLogs    string
-	SelectedForNew     bool
-	SelectedForInstall string // catalog service name chosen for installation
+	// progress and results
+	running  int
+	spin     spinner.Model
+	busyMsg  string
+	toast    string
+	toastErr bool
+	lastOut  *result
+
+	// modals
+	pal     palette
+	frm     form
+	confirm confirmState
+	out     outputState
+	setup   setupForm
+	logv    logs.Model
+	helpTop int
+
+	streams *streams
 }
 
 // New constructs the dashboard Model.
-// catalogNames lists all names from the embedded service catalog; services not
-// yet installed appear in the list as available-to-install stubs.
-// layers lists the configured network layers. cli is the argv prefix every
-// action is run through (the homelab binary plus its global flags).
-func New(repoRoot string, dc *docker.Client, services []service.Service, catalogNames []string, layers []network.NetworkLayer, buildEnv EnvBuilderFn, cli []string) Model {
+func New(opt Options) Model {
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
 	sp.Style = styles.Primary
-
 	return Model{
-		repoRoot:     repoRoot,
-		dc:           dc,
-		services:     services,
-		catalogNames: catalogNames,
-		layers:       layers,
-		buildEnv:     buildEnv,
-		cli:          cli,
-		spin:         sp,
+		opt:      opt,
+		services: opt.Services,
+		enabled:  map[string]bool{},
+		core:     map[string]string{},
+		marked:   map[string]bool{},
+		health:   map[string]result{},
+		spin:     sp,
+		streams:  &streams{},
 	}
 }
 
-// coreDir marks the pinned core row. Its actions run the CLI's no-service
-// forms — `homelab up`, `restart`, `update`, `logs` — which act on the core
-// stack. Dir is empty for catalog stubs and absolute for real services, so the
-// marker cannot collide with either.
+// StopStreams kills every log stream the dashboard started. Safe to call from
+// another goroutine (a signal handler) while the program runs.
+func (m Model) StopStreams() { m.streams.stopAll() }
+
+func (m Model) Init() tea.Cmd {
+	return tea.Batch(
+		m.refreshCmd(),
+		m.coreRefreshCmd(),
+		m.backupsCmd(),
+		coreTickCmd(),
+		logTickCmd(),
+		m.fetchInspectCmd(),
+		inspectTickCmd(),
+	)
+}
+
+// ── network layers ────────────────────────────────────────────────────────────
+
+// offered is the private layer plus every enabled extension: the layers a
+// service can be exposed on (actions.Target.Layers).
+func (m Model) offered() []string {
+	var out []string
+	for _, l := range m.opt.Layers {
+		if l.Flag() == "" || m.enabled[l.Name()] {
+			out = append(out, l.Name())
+		}
+	}
+	return out
+}
+
+// offeredLayers is offered as layer values, in registry order.
+func (m Model) offeredLayers() []network.NetworkLayer {
+	var out []network.NetworkLayer
+	for _, l := range m.opt.Layers {
+		if l.Flag() == "" || m.enabled[l.Name()] {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// extensions are the optional layers: the Layer-scope rows of the Network view.
+func (m Model) extensions() []network.NetworkLayer {
+	var out []network.NetworkLayer
+	for _, l := range m.opt.Layers {
+		if l.Flag() != "" {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// coreContainers is caddy plus every layer's container.
+func (m Model) coreContainers() []string {
+	names := []string{"caddy"}
+	for _, l := range m.opt.Layers {
+		names = append(names, l.ContainerName())
+	}
+	return names
+}
+
+// coreHeaderContainers is caddy plus the offered layers' containers: what the
+// core stack runs right now.
+func (m Model) coreHeaderContainers() []string {
+	names := []string{"caddy"}
+	for _, l := range m.offeredLayers() {
+		names = append(names, l.ContainerName())
+	}
+	return names
+}
+
+func (m Model) layerRunning(l network.NetworkLayer) bool {
+	return m.core[l.ContainerName()] == "running"
+}
+
+// layerIcon is the icon the registry gives exposing a service on the layer.
+func layerIcon(name string) string {
+	id := "service.enable." + name
+	if name == "ts" {
+		id = "service.enable"
+	}
+	if a, ok := actions.ByID(id); ok {
+		return a.Icon
+	}
+	return "link"
+}
+
+// ── rows of each view ─────────────────────────────────────────────────────────
+
+// coreDir marks the pinned core row of the Services view.
 const coreDir = "@core"
 
 func isCore(svc *service.Service) bool { return svc != nil && svc.Dir == coreDir }
 
-// coreService is the core stack as a list row, counted from the header's
-// container states.
+// coreService is the core stack as a list row, counted from container states.
 func (m Model) coreService() service.Service {
 	s := service.Service{Name: "core", Installed: true, Dir: coreDir}
-	for _, c := range m.coreContainers() {
+	for _, c := range m.coreHeaderContainers() {
 		s.Total++
 		if m.core[c] == "running" {
 			s.Running++
@@ -170,427 +349,261 @@ func (m Model) coreService() service.Service {
 	return s
 }
 
-// coreContainers is caddy plus each configured layer's container.
-func (m Model) coreContainers() []string {
-	names := []string{"caddy"}
-	for _, l := range m.layers {
-		names = append(names, l.ContainerName())
-	}
-	return names
+func matches(name, filter string) bool {
+	return filter == "" || strings.Contains(strings.ToLower(name), strings.ToLower(filter))
 }
 
-func (m Model) Init() tea.Cmd {
-	return tea.Batch(
-		refreshCmd(m.repoRoot, m.dc, m.catalogNames),
-		coreRefreshCmd(m.dc, m.coreContainers()),
-		m.spin.Tick,
-		coreTickCmd(),
-		logTickCmd(),
-		inspectCmd(m.repoRoot, m.dc, m.selectedName()),
-		inspectTickCmd(),
-	)
-}
-
-// ── Update ────────────────────────────────────────────────────────────────────
-
-func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var cmds []tea.Cmd
-
-	switch msg := msg.(type) {
-
-	case tea.WindowSizeMsg:
-		m.width, m.height = msg.Width, msg.Height
-
-	case tea.KeyMsg:
-		m, cmds = m.handleKey(msg, cmds)
-
-	case refreshedMsg:
-		m.services = msg.services
-		// Clamp cursor if the list shrank.
-		if visible := m.visibleServices(); m.cursor >= len(visible) && len(visible) > 0 {
-			m.cursor = len(visible) - 1
-		}
-		cmds = append(cmds, m.fetchLogsCmd())
-
-	case opDoneMsg:
-		m.state, m.busyMsg = stateNormal, ""
-		m.lastMsg, m.lastErr = msg.msg, ""
-		cmds = append(cmds, refreshCmd(m.repoRoot, m.dc, m.catalogNames))
-
-	case opErrMsg:
-		m.state, m.busyMsg = stateNormal, ""
-		m.lastMsg = ""
-		if msg.output != "" {
-			m.lastErr = clip(msg.output, 160)
-		} else {
-			m.lastErr = msg.err.Error()
-		}
-		// A failed op can still have changed something (a route written
-		// before the reload failed), so show the real state.
-		cmds = append(cmds, refreshCmd(m.repoRoot, m.dc, m.catalogNames))
-
-	case coreStatusMsg:
-		m.core = msg
-
-	case logTailMsg:
-		if msg.svcName == m.selectedName() {
-			m.logLines = msg.lines
-			m.logSvcName = msg.svcName
-		}
-
-	case containerDetailMsg:
-		if msg.svcName == m.selectedName() {
-			m.containerDetails = msg.details
-		}
-
-	case coreTickMsg:
-		// The service list refreshes on the same tick: containers change
-		// state behind the dashboard's back (crashes, other terminals).
-		cmds = append(cmds,
-			coreRefreshCmd(m.dc, m.coreContainers()),
-			refreshCmd(m.repoRoot, m.dc, m.catalogNames),
-			coreTickCmd())
-
-	case logTickMsg:
-		cmds = append(cmds, m.fetchLogsCmd(), logTickCmd())
-
-	case inspectTickMsg:
-		cmds = append(cmds, m.fetchInspectCmd(), inspectTickCmd())
-
-	case spinner.TickMsg:
-		if m.state == stateBusy {
-			var sCmd tea.Cmd
-			m.spin, sCmd = m.spin.Update(msg)
-			cmds = append(cmds, sCmd)
-		}
-	}
-
-	return m, tea.Batch(cmds...)
-}
-
-func (m Model) handleKey(msg tea.KeyMsg, cmds []tea.Cmd) (Model, []tea.Cmd) {
-	k := msg.String()
-	if k == "ctrl+c" {
-		return m, append(cmds, tea.Quit)
-	}
-
-	switch m.state {
-
-	// ── filter input ──────────────────────────────────────────────────────────
-	case stateFilterInput:
-		switch k {
-		case "enter":
-			m.state = stateNormal
-		case "esc":
-			m.state = stateNormal
-			m.filter = ""
-		case "backspace":
-			if len(m.filter) > 0 {
-				m.filter = m.filter[:len(m.filter)-1]
-			}
-		default:
-			if len(msg.Runes) == 1 {
-				m.filter += string(msg.Runes)
-			}
-		}
-		m.cursor = 0
-		cmds = append(cmds, m.fetchLogsCmd())
-
-	// ── layer selection prompts ───────────────────────────────────────────────
-	case stateEnablePrompt, stateDisablePrompt:
-		svc := m.selectedService()
-		if k == "esc" || svc == nil {
-			m.state = stateNormal
-			break
-		}
-		verb := "enable"
-		if m.state == stateDisablePrompt {
-			verb = "disable"
-		}
-		choices := m.promptChoices(svc)
-		var flags []string
-		switch {
-		case k == "a" && verb == "enable":
-			for _, c := range choices {
-				if c.flag != "" {
-					flags = append(flags, c.flag)
-				}
-			}
-		case k == "a":
-			flags = []string{"--all"} // every layer, private included
-		default:
-			found := false
-			for _, c := range choices {
-				if c.key == k {
-					found = true
-					if c.flag != "" {
-						flags = []string{c.flag}
-					}
-				}
-			}
-			if !found {
-				return m, cmds // not an offered choice; keep the prompt open
-			}
-		}
-		args := append([]string{verb, svc.Name}, flags...)
-		m.busyOp(fmt.Sprintf("homelab %s…", strings.Join(args, " ")))
-		cmds = append(cmds, m.cliCmd(fmt.Sprintf("%s: %sd %s", svc.Name, verb, layerList(verb, flags)), args...), m.spin.Tick)
-
-	// ── normal mode ───────────────────────────────────────────────────────────
-	case stateNormal:
-		// Any key acknowledges the last result.
-		m.lastMsg, m.lastErr = "", ""
-		if k != "g" {
-			m.lastKey = ""
-		}
-		svc := m.selectedService()
-		installed := svc != nil && svc.Installed
-		core := isCore(svc)
-
-		switch k {
-		case "q":
-			return m, append(cmds, tea.Quit)
-
-		case "?":
-			m.help = !m.help
-
-		case "esc":
-			m.help = false
-			m.filter = ""
-
-		case "up", "k":
-			if m.cursor > 0 {
-				m.cursor--
-				cmds = append(cmds, m.fetchLogsCmd())
-			}
-
-		case "down", "j":
-			if visible := m.visibleServices(); m.cursor < len(visible)-1 {
-				m.cursor++
-				cmds = append(cmds, m.fetchLogsCmd())
-			}
-
-		case "g":
-			// gg → jump to top
-			if m.lastKey == "g" {
-				m.cursor = 0
-				cmds = append(cmds, m.fetchLogsCmd())
-				m.lastKey = ""
-			} else {
-				m.lastKey = "g"
-			}
-
-		case "G", "end":
-			if visible := m.visibleServices(); len(visible) > 0 {
-				m.cursor = len(visible) - 1
-				cmds = append(cmds, m.fetchLogsCmd())
-			}
-
-		case "home":
-			m.cursor = 0
-			cmds = append(cmds, m.fetchLogsCmd())
-
-		case "ctrl+u", "pgup":
-			m.cursor -= m.halfPage()
-			if m.cursor < 0 {
-				m.cursor = 0
-			}
-			cmds = append(cmds, m.fetchLogsCmd())
-
-		case "ctrl+d", "pgdown":
-			if visible := m.visibleServices(); m.cursor+m.halfPage() >= len(visible) {
-				m.cursor = max(len(visible)-1, 0)
-			} else {
-				m.cursor += m.halfPage()
-			}
-			cmds = append(cmds, m.fetchLogsCmd())
-
-		case "/":
-			m.state = stateFilterInput
-			m.filter = ""
-			m.cursor = 0
-
-		case "R":
-			cmds = append(cmds, refreshCmd(m.repoRoot, m.dc, m.catalogNames))
-
-		case "n":
-			m.SelectedForNew = true
-			return m, append(cmds, tea.Quit)
-
-		// Actions on the selected service. Each runs the CLI command it is
-		// named after — the hint text and the command are the same word.
-		case "enter":
-			switch {
-			case core:
-				m.SelectedCoreLogs = true
-				return m, append(cmds, tea.Quit)
-			case installed:
-				m.SelectedForLogs = svc.Name
-				return m, append(cmds, tea.Quit)
-			case svc != nil:
-				m.SelectedForInstall = svc.Name
-				return m, append(cmds, tea.Quit)
-			}
-
-		case "i":
-			if svc != nil && !installed {
-				m.SelectedForInstall = svc.Name
-				return m, append(cmds, tea.Quit)
-			}
-
-		case "l":
-			if core {
-				m.SelectedCoreLogs = true
-				return m, append(cmds, tea.Quit)
-			}
-			if installed {
-				m.SelectedForLogs = svc.Name
-				return m, append(cmds, tea.Quit)
-			}
-
-		case "u", "s", "r", "x", "U":
-			if !installed {
-				break
-			}
-			verb := map[string]string{"u": "up", "s": "stop", "r": "restart", "x": "down", "U": "update"}[k]
-			done := map[string]string{"up": "started", "stop": "stopped", "restart": "restarted",
-				"down": "taken down", "update": "updated"}[verb]
-			args := []string{verb, svc.Name}
-			if core {
-				// Stopping the core takes down every route, including the
-				// ones this dashboard's services are reached by: keep that a
-				// deliberate shell command.
-				if verb == "stop" || verb == "down" {
-					m.lastErr = "run `homelab " + verb + "` in a shell to " + verb + " the core stack"
-					break
-				}
-				args = []string{verb}
-			}
-			m.busyOp("homelab " + strings.Join(args, " ") + "…")
-			cmds = append(cmds, m.cliCmd(svc.Name+" "+done, args...), m.spin.Tick)
-
-		case "e", "d":
-			if !installed || core {
-				break
-			}
-			m.state = stateEnablePrompt
-			if k == "d" {
-				m.state = stateDisablePrompt
-			}
-			if len(m.promptChoices(svc)) == 0 {
-				m.state = stateNormal
-				m.lastErr = "no network layers to " + map[string]string{"e": "enable", "d": "disable"}[k] + " for " + svc.Name
-			}
-		}
-	}
-
-	return m, cmds
-}
-
-// promptChoices lists the layers the current prompt can act on: every
-// configured layer when enabling, only the service's active ones when
-// disabling.
-func (m Model) promptChoices(svc *service.Service) []layerChoice {
-	active := map[string]bool{}
-	for _, n := range svc.ActiveLayers() {
-		active[string(n)] = true
-	}
-	var out []layerChoice
-	for _, l := range m.layers {
-		if m.state == stateDisablePrompt && !active[l.Name()] {
-			continue
-		}
-		key := layerKeys[l.Name()]
-		if key == "" {
-			key = l.Name()[:1]
-		}
-		c := layerChoice{key: key, layer: l.Name()}
-		if l.Flag() != "" {
-			c.flag = "--" + l.Flag()
-		}
-		out = append(out, c)
-	}
-	return out
-}
-
-// layerList names the layers a CLI call touches, for the status message.
-// `enable` always includes the private route; `disable` with flags does not.
-func layerList(verb string, flags []string) string {
-	switch {
-	case len(flags) == 0:
-		return "private route"
-	case flags[0] == "--all":
-		return "all layers"
-	}
-	names := strings.ReplaceAll(strings.Join(flags, " + "), "--", "")
-	if verb == "enable" {
-		return "private + " + names
-	}
-	return names
-}
-
-func (m Model) halfPage() int {
-	return max((m.height-headerLines-statusbarLines)/2, 1)
-}
-
-// ── selection helpers ─────────────────────────────────────────────────────────
-
-// layerByName finds a configured layer by its short name.
-func (m Model) layerByName(name string) (network.NetworkLayer, bool) {
-	for _, l := range m.layers {
-		if l.Name() == name {
-			return l, true
-		}
-	}
-	return nil, false
-}
-
+// visibleServices is the Services view: the core row, then installed services.
 func (m Model) visibleServices() []service.Service {
-	f := strings.ToLower(m.filter)
+	f := m.filter[viewServices]
 	out := make([]service.Service, 0, len(m.services)+1)
-	if strings.Contains("core", f) {
+	if matches("core", f) {
 		out = append(out, m.coreService())
 	}
-	if f == "" {
-		return append(out, m.services...)
-	}
 	for _, s := range m.services {
-		if strings.Contains(strings.ToLower(s.Name), f) {
+		if s.Installed && matches(s.Name, f) {
 			out = append(out, s)
 		}
 	}
 	return out
 }
 
+// visibleCatalog is the Catalog view: services not installed yet.
+func (m Model) visibleCatalog() []service.Service {
+	var out []service.Service
+	for _, s := range m.services {
+		if !s.Installed && matches(s.Name, m.filter[viewCatalog]) {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// healthRow is one check of the Health view.
+type healthRow struct {
+	a actions.Action
+	t actions.Target
+}
+
+// healthRows are the stack-wide and core inspections that print a report:
+// derived from the registry, not listed here.
+func (m Model) healthRows() []healthRow {
+	var out []healthRow
+	for _, t := range []actions.Target{m.globalTarget(), m.coreTarget()} {
+		for _, a := range actions.For(t) {
+			if a.Group == actions.GroupInspect && !a.Stream && !a.Interactive {
+				out = append(out, healthRow{a, t})
+			}
+		}
+	}
+	return out
+}
+
+func (m Model) rowCount(v view) int {
+	switch v {
+	case viewServices:
+		return len(m.visibleServices())
+	case viewCatalog:
+		return len(m.visibleCatalog())
+	case viewNetwork:
+		return 1 + len(m.extensions())
+	case viewBackups:
+		return len(m.backups)
+	case viewHealth:
+		return len(m.healthRows())
+	}
+	return 0
+}
+
 func (m Model) selectedService() *service.Service {
-	visible := m.visibleServices()
-	if len(visible) == 0 || m.cursor >= len(visible) {
+	var list []service.Service
+	switch m.view {
+	case viewServices:
+		list = m.visibleServices()
+	case viewCatalog:
+		list = m.visibleCatalog()
+	default:
 		return nil
 	}
-	svc := visible[m.cursor]
+	c := m.cursor[m.view]
+	if c < 0 || c >= len(list) {
+		return nil
+	}
+	svc := list[c]
 	return &svc
 }
 
 func (m Model) selectedName() string {
-	svc := m.selectedService()
-	if svc == nil {
-		return ""
+	if svc := m.selectedService(); svc != nil {
+		return svc.Name
 	}
-	return svc.Name
+	return ""
+}
+
+// selectedLayer is the Network view's extension row, nil on the core row.
+func (m Model) selectedLayer() network.NetworkLayer {
+	if m.view != viewNetwork || m.cursor[viewNetwork] == 0 {
+		return nil
+	}
+	ext := m.extensions()
+	if i := m.cursor[viewNetwork] - 1; i < len(ext) {
+		return ext[i]
+	}
+	return nil
+}
+
+func (m Model) selectedBackup() *backup.Listing {
+	if m.view != viewBackups {
+		return nil
+	}
+	if c := m.cursor[viewBackups]; c >= 0 && c < len(m.backups) {
+		return &m.backups[c]
+	}
+	return nil
+}
+
+func (m Model) selectedHealth() *healthRow {
+	if m.view != viewHealth {
+		return nil
+	}
+	rows := m.healthRows()
+	if c := m.cursor[viewHealth]; c >= 0 && c < len(rows) {
+		return &rows[c]
+	}
+	return nil
+}
+
+// ── targets ───────────────────────────────────────────────────────────────────
+
+func (m Model) globalTarget() actions.Target { return actions.GlobalTarget(m.offered()) }
+
+func (m Model) coreTarget() actions.Target {
+	t := actions.CoreTarget(m.offered())
+	c := m.coreService()
+	t.Running, t.Total = c.Running, c.Total
+	return t
+}
+
+func (m Model) layerTarget(l network.NetworkLayer) actions.Target {
+	return actions.LayerTarget(l.Name(), m.enabled[l.Name()], m.layerRunning(l))
+}
+
+// markedNames are the multi-selected services, in list order.
+func (m Model) markedNames() []string {
+	var out []string
+	for _, s := range m.services {
+		if s.Installed && m.marked[s.Name] {
+			out = append(out, s.Name)
+		}
+	}
+	return out
+}
+
+// multiTarget is the multi-selection as one Service target: Names lists the
+// services, counts are summed, and only layers every one is exposed on count.
+func (m Model) multiTarget() actions.Target {
+	names := m.markedNames()
+	t := actions.Target{Scope: actions.Service, Names: names, Layers: m.offered()}
+	first := true
+	for _, s := range m.services {
+		if !s.Installed || !m.marked[s.Name] {
+			continue
+		}
+		t.Running += s.Running
+		t.Total += s.Total
+		if first {
+			t.Exposed = slices.Clone(s.Layers)
+			first = false
+			continue
+		}
+		t.Exposed = slices.DeleteFunc(t.Exposed, func(l string) bool { return !slices.Contains(s.Layers, l) })
+	}
+	if len(names) == 1 {
+		t.Name = names[0]
+	}
+	return t
+}
+
+// target is what the selection in the current view acts on; false when
+// nothing is selected. Views without their own targets act on the stack.
+func (m Model) target() (actions.Target, bool) {
+	switch m.view {
+	case viewServices:
+		if len(m.markedNames()) > 0 {
+			return m.multiTarget(), true
+		}
+		svc := m.selectedService()
+		if svc == nil {
+			return actions.Target{}, false
+		}
+		if isCore(svc) {
+			return m.coreTarget(), true
+		}
+		return actions.ServiceTarget(*svc, m.offered()), true
+	case viewCatalog:
+		svc := m.selectedService()
+		if svc == nil {
+			return actions.Target{}, false
+		}
+		return actions.ServiceTarget(*svc, m.offered()), true
+	case viewNetwork:
+		if l := m.selectedLayer(); l != nil {
+			return m.layerTarget(l), true
+		}
+		return m.coreTarget(), true
+	}
+	return m.globalTarget(), true
+}
+
+// prefill are input values the selection implies: the selected backup.
+func (m Model) prefill() actions.Inputs {
+	if b := m.selectedBackup(); b != nil {
+		return actions.Inputs{"backup": b.Dir}
+	}
+	return nil
+}
+
+// targetTitle names a target for headings and confirmations.
+func targetTitle(t actions.Target) string {
+	switch {
+	case len(t.Names) > 1:
+		return strings.Join(t.Names, ", ")
+	case t.Scope == actions.Global:
+		return "stack"
+	case t.Scope == actions.Core:
+		return "core"
+	case t.Name != "":
+		return t.Name
+	case len(t.Names) == 1:
+		return t.Names[0]
+	}
+	return t.Scope.String()
+}
+
+// ── small helpers ─────────────────────────────────────────────────────────────
+
+func (m Model) bodyHeight() int { return max(m.height-headerLines-statusbarLines, 1) }
+
+func (m Model) halfPage() int { return max(m.bodyHeight()/2, 1) }
+
+func (m Model) clampCursors() Model {
+	for v := view(0); v < numViews; v++ {
+		n := m.rowCount(v)
+		if m.cursor[v] >= n {
+			m.cursor[v] = max(n-1, 0)
+		}
+		if m.cursor[v] < 0 {
+			m.cursor[v] = 0
+		}
+	}
+	return m
 }
 
 func (m Model) rootEnv() map[string]string {
-	if m.buildEnv == nil {
+	if m.opt.BuildEnv == nil {
 		return map[string]string{}
 	}
-	return m.buildEnv("")
-}
-
-func (m *Model) busyOp(msg string) {
-	m.state = stateBusy
-	m.busyMsg = msg
-	m.lastMsg = ""
-	m.lastErr = ""
+	return m.opt.BuildEnv("")
 }
 
 func resolveEnv(fn EnvBuilderFn, name string) map[string]string {
@@ -598,4 +611,28 @@ func resolveEnv(fn EnvBuilderFn, name string) map[string]string {
 		return nil
 	}
 	return fn(name)
+}
+
+// withMark returns a copy of the marks with name toggled; Models are values,
+// so the map is never mutated in place.
+func (m Model) withMark(name string) map[string]bool {
+	out := maps.Clone(m.marked)
+	if out == nil {
+		out = map[string]bool{}
+	}
+	if out[name] {
+		delete(out, name)
+	} else {
+		out[name] = true
+	}
+	return out
+}
+
+func sortedKeys(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }

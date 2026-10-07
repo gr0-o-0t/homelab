@@ -123,3 +123,71 @@ func Pill(label string, col lipgloss.Color) string {
 		Padding(0, 1).
 		Render(label)
 }
+
+// ── Extended Tokyo Night palette and semantic state colours ─────────────────
+
+var (
+	ColBg        = lipgloss.Color("#1A1B26") // editor background
+	ColBar       = lipgloss.Color("#1E2030") // header / footer bars
+	ColHighlight = lipgloss.Color("#292E42") // selected row
+	ColBlue      = lipgloss.Color("#7AA2F7")
+	ColOrange    = lipgloss.Color("#FF9E64")
+	ColTeal      = lipgloss.Color("#73DACA")
+	ColSubtle    = lipgloss.Color("#A9B1D6") // secondary text
+
+	// Semantic state colours: what a colour means is decided once, here.
+	ColRunning = ColSuccess // every container up
+	ColPartial = ColWarning // some containers up
+	ColStopped = ColMuted   // nothing running
+	ColExposed = ColTeal    // reachable on a network layer
+	ColDanger  = ColError   // destructive actions, failures
+)
+
+var (
+	Subtle  = lipgloss.NewStyle().Foreground(ColSubtle)
+	Exposed = lipgloss.NewStyle().Foreground(ColExposed)
+	Danger  = lipgloss.NewStyle().Foreground(ColDanger)
+	Blue    = lipgloss.NewStyle().Foreground(ColBlue)
+
+	// Bar is the header and footer background.
+	Bar = lipgloss.NewStyle().Background(ColBar).Foreground(ColText)
+	// TabActive and Tab are the view tabs.
+	TabActive = lipgloss.NewStyle().Bold(true).Foreground(ColBg).Background(ColBlue).Padding(0, 1)
+	Tab       = lipgloss.NewStyle().Foreground(ColSubtle).Padding(0, 1)
+	// SelectedRow highlights the cursor row.
+	SelectedRow = lipgloss.NewStyle().Background(ColHighlight).Bold(true).Foreground(ColText)
+	// GroupTitle heads a group of actions.
+	GroupTitle = lipgloss.NewStyle().Bold(true).Foreground(ColAccent)
+	// Modal is the frame of a dialog; ModalDanger of a destructive one.
+	Modal       = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(ColBlue).Padding(0, 1)
+	ModalDanger = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(ColDanger).Padding(0, 1)
+)
+
+// StateColor is the colour for a container count: all, some or none running.
+func StateColor(running, total int) lipgloss.Color {
+	switch {
+	case total > 0 && running == total:
+		return ColRunning
+	case running > 0:
+		return ColPartial
+	default:
+		return ColStopped
+	}
+}
+
+// StateGlyph is the coloured state icon for a container count.
+func StateGlyph(running, total int) string {
+	name := "stopped"
+	switch {
+	case total > 0 && running == total:
+		name = "running"
+	case running > 0:
+		name = "partial"
+	}
+	return lipgloss.NewStyle().Foreground(StateColor(running, total)).Render(Icon(name))
+}
+
+// Key renders a key cap: [k].
+func Key(k string) string {
+	return Muted.Render("[") + Primary.Render(k) + Muted.Render("]")
+}

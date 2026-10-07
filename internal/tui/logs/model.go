@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -19,8 +20,19 @@ const maxLines = 2000 // keep the last N lines to bound memory
 
 // ── messages ──────────────────────────────────────────────────────────────────
 
-type logLineMsg struct{ line string }
-type logEndMsg struct{}
+// Each stream has an id so lines from a stream that was closed (its last
+// waitForLine still in flight) never land in a newer viewer.
+type logLineMsg struct {
+	id   int64
+	line string
+}
+type logEndMsg struct{ id int64 }
+
+// ClosedMsg is sent by an embedded viewer when the user leaves it (q/esc):
+// the host model drops the viewer and shows itself again.
+type ClosedMsg struct{}
+
+var streamIDs atomic.Int64
 
 // ── model ─────────────────────────────────────────────────────────────────────
 
@@ -36,6 +48,9 @@ type Model struct {
 	following   bool // auto-scroll to newest line
 	width       int
 	height      int
+	id          int64
+	embedded    bool // q/esc sends ClosedMsg instead of quitting the program
+	ended       bool // the process exited
 }
 
 // New creates a Model titled title and starts streaming the output of argv —
@@ -48,7 +63,17 @@ func New(title string, argv []string) Model {
 		logCh:       ch,
 		stopFn:      stop,
 		following:   true,
+		id:          streamIDs.Add(1),
 	}
+}
+
+// NewEmbedded is New for a viewer hosted inside another model (the
+// dashboard): leaving it stops the stream and sends ClosedMsg rather than
+// quitting the program. The host forwards every message to it while open.
+func NewEmbedded(title string, argv []string) Model {
+	m := New(title, argv)
+	m.embedded = true
+	return m
 }
 
 // Stop terminates the underlying log-stream process. Safe to call more than
@@ -65,7 +90,7 @@ func (m Model) Stop() {
 }
 
 func (m Model) Init() tea.Cmd {
-	return waitForLine(m.logCh)
+	return waitForLine(m.id, m.logCh)
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -89,7 +114,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "q", "esc", "ctrl+c":
-			m.stopFn()
+			m.Stop()
+			if m.embedded && msg.String() != "ctrl+c" {
+				return m, func() tea.Msg { return ClosedMsg{} }
+			}
 			return m, tea.Quit
 
 		case "G", "end":
@@ -114,6 +142,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case logLineMsg:
+		if msg.id != m.id {
+			break // a line from an earlier, closed stream
+		}
 		m.lines = append(m.lines, msg.line)
 		if len(m.lines) > maxLines {
 			m.lines = m.lines[len(m.lines)-maxLines:]
@@ -125,10 +156,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		// Chain: wait for the next line.
-		cmds = append(cmds, waitForLine(m.logCh))
+		cmds = append(cmds, waitForLine(m.id, m.logCh))
 
 	case logEndMsg:
 		// Stream ended (process exited or was killed) — nothing more to do.
+		if msg.id == m.id {
+			m.ended = true
+		}
 
 	default:
 		var vpCmd tea.Cmd
@@ -149,10 +183,13 @@ func (m Model) View() string {
 	// ── header ────────────────────────────────────────────────────────────────
 	followStr := styles.Muted.Render("scroll")
 	if m.following {
-		followStr = styles.Success.Render("following")
+		followStr = styles.Success.Render(styles.Icon("running") + " following")
+	}
+	if m.ended {
+		followStr = styles.Muted.Render(styles.Icon("stopped") + " ended")
 	}
 	header := fmt.Sprintf("\n  %s  %s  %s  %s\n\n",
-		styles.Header.Render("Logs:"),
+		styles.Header.Render(styles.Icon("logs")+" Logs:"),
 		styles.Bold.Render(m.serviceName),
 		styles.Muted.Render(fmt.Sprintf("%d lines", len(m.lines))),
 		followStr,
@@ -250,12 +287,12 @@ func startLogStream(argv []string) (<-chan string, func()) {
 
 // waitForLine returns a tea.Cmd that blocks until a line arrives on ch.
 // It chains itself so the Update loop keeps receiving lines.
-func waitForLine(ch <-chan string) tea.Cmd {
+func waitForLine(id int64, ch <-chan string) tea.Cmd {
 	return func() tea.Msg {
 		line, ok := <-ch
 		if !ok {
-			return logEndMsg{}
+			return logEndMsg{id: id}
 		}
-		return logLineMsg{line: line}
+		return logLineMsg{id: id, line: line}
 	}
 }

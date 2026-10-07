@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
@@ -26,60 +25,58 @@ func isTTY() bool {
 	return isatty.IsTerminal(os.Stdout.Fd()) && !noColor()
 }
 
-// runDashboardTUI launches the fullscreen dashboard. It loops so that logs,
-// install and the new-service wizard run in the terminal and return to it.
+// runDashboardTUI launches the fullscreen dashboard. Everything — logs,
+// installs, the setup and new-service wizards — runs inside it: streams in its
+// embedded log viewer, interactive commands by suspending it.
 func runDashboardTUI(root string) error {
 	dc, _ := docker.New()
 	if dc != nil {
 		defer func() { _ = dc.Close() }()
 	}
 	catalog := catalogNames()
-	layers := uiLayers(root)
-	cli := selfCLI(root)
-
-	for {
-		svcs, err := discoverAll(root, dc, catalog)
-		if err != nil {
-			return err
-		}
-
-		model := tuiDashboard.New(root, dc, svcs, catalog, layers, func(name string) map[string]string {
-			return buildEnv(root, name)
-		}, cli)
-		p := tea.NewProgram(model, tea.WithAltScreen())
-		fm, err := p.Run()
-		if err != nil {
-			return err
-		}
-
-		final, ok := fm.(tuiDashboard.Model)
-		if !ok {
-			break
-		}
-
-		switch {
-		case final.SelectedForInstall != "":
-			// Install the selected catalog service, then re-enter the dashboard.
-			if err := runServiceAdd(nil, []string{final.SelectedForInstall}); err != nil {
-				fmt.Fprintf(os.Stderr, "install failed: %v\n", err)
-			}
-		case final.SelectedCoreLogs:
-			if err := runLogTUI(root, ""); err != nil {
-				return err
-			}
-		case final.SelectedForLogs != "":
-			if err := runLogTUI(root, final.SelectedForLogs); err != nil {
-				return err
-			}
-		case final.SelectedForNew:
-			if err := runWizardTUI(root, ""); err != nil {
-				return err
-			}
-		default:
-			return nil
-		}
+	svcs, err := discoverAll(root, dc, catalog)
+	if err != nil {
+		return err
 	}
-	return nil
+	model := tuiDashboard.New(tuiDashboard.Options{
+		Root:     root,
+		Docker:   dc,
+		Services: svcs,
+		Catalog:  catalog,
+		Layers:   extRegistry().All(),
+		Enabled:  func() map[string]bool { return enabledExtensions(root) },
+		BuildEnv: func(name string) map[string]string { return buildEnv(root, name) },
+		CLI:      selfCLI(root),
+	})
+	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
+
+	// A SIGTERM or a dropped session bypasses the in-app quit keys; still
+	// kill any log stream the dashboard started before exiting.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
+	go func() {
+		if _, ok := <-sigCh; ok {
+			model.StopStreams()
+			p.Quit()
+		}
+	}()
+
+	final, err := p.Run()
+	if fm, ok := final.(tuiDashboard.Model); ok {
+		fm.StopStreams()
+	}
+	return err
+}
+
+// enabledExtensions reports which extensions config.yaml enables.
+func enabledExtensions(root string) map[string]bool {
+	cfg, _ := config.Load(config.RootConfigFile(root, rootFlags.configFile))
+	out := map[string]bool{}
+	for _, name := range extRegistry().Names() {
+		out[name] = cfg != nil && hasResolvedExtension(cfg, name)
+	}
+	return out
 }
 
 // runLogTUI launches the fullscreen log viewer for a single service.

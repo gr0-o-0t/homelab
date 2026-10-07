@@ -6,67 +6,76 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/groot/homelab/internal/actions"
 	"github.com/groot/homelab/internal/service"
 	"github.com/groot/homelab/internal/tui/styles"
 )
 
 // View layer: every function here turns Model state into a string and touches
 // nothing else — no Docker, no filesystem, no config.
-//
-// Split out of model.go, which held the state machine, the side-effecting
-// commands and all of this in 1,337 lines. Rendering is the part that changes
-// most often and the part that needs to stay obviously side-effect free.
 
 func (m Model) View() string {
 	if m.width == 0 {
 		return ""
 	}
-	return lipgloss.JoinVertical(lipgloss.Left,
+	if m.mode == modeLogs {
+		return clampFrame(m.logv.View(), m.width, m.height)
+	}
+	return clampFrame(lipgloss.JoinVertical(lipgloss.Left,
 		m.renderHeader(),
+		m.renderTabs(),
 		m.renderBody(),
 		m.renderStatusBar(),
-	)
+	), m.width, m.height)
+}
+
+// clampFrame makes s exactly h lines of at most w cells: the frame must
+// never grow past the terminal, or the header scrolls off the top.
+func clampFrame(s string, w, h int) string {
+	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+	if len(lines) > h {
+		lines = lines[:h]
+	}
+	for len(lines) < h {
+		lines = append(lines, "")
+	}
+	for i, l := range lines {
+		lines[i] = clipWidth(l, w)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // ── Header ────────────────────────────────────────────────────────────────────
 
 func (m Model) renderHeader() string {
-	// One pill per core container, named with the same short tags the list
-	// badges and `homelab status` use.
-	pills := []string{m.corePill("caddy", m.core["caddy"])}
-	for _, l := range m.layers {
-		pills = append(pills, m.corePill(l.Name(), m.core[l.ContainerName()]))
+	pills := []string{m.corePill(styles.Icon("box"), "caddy", m.core["caddy"])}
+	for _, l := range m.offeredLayers() {
+		pills = append(pills, m.corePill(styles.Icon(layerIcon(l.Name())), l.Name(), m.core[l.ContainerName()]))
 	}
-	right := strings.Join(pills, "  ")
+	right := strings.Join(pills, " ")
 
-	summary := m.serviceCountSummary()
-	left := styles.Header.Render("homelab")
-	if summary != "" {
-		left = left + "  " + summary
+	left := styles.Header.Render(styles.Icon("home") + " homelab")
+	if s := m.serviceCountSummary(); s != "" {
+		left += "  " + s
 	}
-
-	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right) - 2
-	if gap < 1 {
-		gap = 1
+	if lipgloss.Width(left)+lipgloss.Width(right)+3 > m.width {
+		right = "" // narrow: the counts matter more; Network shows the pills
 	}
-	bar := left + strings.Repeat(" ", gap) + right
-
-	return lipgloss.NewStyle().
-		Width(m.width).
-		Background(lipgloss.Color("#1E2030")).
-		Padding(0, 1).
-		Render(bar)
+	gap := max(m.width-lipgloss.Width(left)-lipgloss.Width(right)-2, 1)
+	return styles.Bar.Width(m.width).Padding(0, 1).Render(clipWidth(left+strings.Repeat(" ", gap)+right, m.width-2))
 }
 
-func (m Model) corePill(name, state string) string {
+// corePill is one core container: its icon and name in its state's colour.
+func (m Model) corePill(icon, name, state string) string {
+	col := styles.ColStopped
 	switch state {
 	case "running":
-		return styles.Success.Render("●") + " " + styles.Muted.Render(name)
+		col = styles.ColRunning
 	case "":
-		return styles.Muted.Render("○") + " " + styles.Muted.Render(name)
 	default:
-		return styles.Warning.Render("●") + " " + styles.Muted.Render(name)
+		col = styles.ColPartial
 	}
+	return lipgloss.NewStyle().Foreground(col).Render(icon + " " + name)
 }
 
 func (m Model) serviceCountSummary() string {
@@ -86,522 +95,577 @@ func (m Model) serviceCountSummary() string {
 		parts = append(parts, styles.Success.Render(fmt.Sprintf("%d running", running)))
 	}
 	if installed > 0 {
-		parts = append(parts, styles.Muted.Render(fmt.Sprintf("%d installed", installed)))
+		parts = append(parts, styles.Subtle.Render(fmt.Sprintf("%d installed", installed)))
 	}
 	if available > 0 {
 		parts = append(parts, styles.Muted.Render(fmt.Sprintf("%d available", available)))
 	}
-	if len(parts) == 0 {
-		return ""
-	}
 	return strings.Join(parts, styles.Muted.Render(" · "))
+}
+
+// ── Tabs ──────────────────────────────────────────────────────────────────────
+
+func (m Model) tabLabel(v view) string {
+	label := fmt.Sprintf("%d %s %s", v+1, styles.Icon(viewIcons[v]), viewNames[v])
+	if m.width < 70 {
+		label = fmt.Sprintf("%d %s", v+1, styles.Icon(viewIcons[v]))
+		if v == m.view {
+			label += " " + viewNames[v]
+		}
+	}
+	if v == m.view {
+		return styles.TabActive.Render(label)
+	}
+	return styles.Tab.Render(label)
+}
+
+func (m Model) renderTabs() string {
+	var parts []string
+	for v := view(0); v < numViews; v++ {
+		parts = append(parts, m.tabLabel(v))
+	}
+	return " " + strings.Join(parts, "")
+}
+
+// tabRanges are the [start, end) columns of each tab, for mouse clicks.
+func (m Model) tabRanges() [][2]int {
+	var out [][2]int
+	x := 1
+	for v := view(0); v < numViews; v++ {
+		w := lipgloss.Width(m.tabLabel(v))
+		out = append(out, [2]int{x, x + w})
+		x += w
+	}
+	return out
 }
 
 // ── Body ──────────────────────────────────────────────────────────────────────
 
+// listWidth is the left column; narrow terminals show the list alone.
+func (m Model) listWidth() int {
+	if m.width < 70 {
+		return m.width
+	}
+	return min(42, m.width*2/5)
+}
+
 func (m Model) renderBody() string {
-	bodyHeight := m.height - headerLines - statusbarLines
-	if bodyHeight < 1 {
-		bodyHeight = 1
+	h := m.bodyHeight()
+	if m.mode != modeNormal && m.mode != modeFilter {
+		return m.renderModal(h)
 	}
-
-	rightWidth := m.width - leftPaneWidth
-	if rightWidth < 10 {
-		rightWidth = 10
+	lw := m.listWidth()
+	list := fitBlock(m.renderList(h, lw), lw, h)
+	if lw >= m.width {
+		return list
 	}
+	rw := m.width - lw - 1
+	sep := styles.PaneBorder.Render(strings.TrimRight(strings.Repeat("│\n", h), "\n"))
+	return lipgloss.JoinHorizontal(lipgloss.Top, list, sep, fitBlock(m.renderDetail(h, rw), rw, h))
+}
 
-	left := m.renderListPane(bodyHeight)
-	right := m.renderDetailPane(bodyHeight, rightWidth)
-	if m.help {
-		right = renderHelp(bodyHeight, rightWidth)
+// fitBlock clamps s to exactly h lines of exactly w cells.
+func fitBlock(s string, w, h int) string {
+	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+	if len(lines) > h {
+		lines = lines[:h]
 	}
-
-	sep := styles.PaneBorder.Render(strings.TrimRight(strings.Repeat("│\n", bodyHeight), "\n"))
-
-	// Panes end in a newline and can run long; clamp each to exactly
-	// bodyHeight or the frame grows past the terminal and the header scrolls
-	// off the top.
-	fit := func(s string, w int) string {
-		lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
-		if len(lines) > bodyHeight {
-			lines = lines[:bodyHeight]
-		}
-		return lipgloss.NewStyle().Width(w).MaxWidth(w).Height(bodyHeight).Render(strings.Join(lines, "\n"))
-	}
-	return lipgloss.JoinHorizontal(lipgloss.Top, fit(left, listInnerWidth), sep, fit(right, rightWidth))
+	return lipgloss.NewStyle().Width(w).MaxWidth(w).Height(h).Render(strings.Join(lines, "\n"))
 }
 
 // ── List pane ─────────────────────────────────────────────────────────────────
 
-func (m Model) renderListPane(height int) string {
-	visible := m.visibleServices()
-
-	// Count installed vs catalog in the visible slice.
-	installedCount, catalogCount := 0, 0
-	for _, s := range visible {
-		if isCore(&s) {
-			continue
-		}
-		if s.Installed {
-			installedCount++
-		} else {
-			catalogCount++
-		}
+// listOffset is the first row shown, keeping the cursor visible.
+func (m Model) listOffset() int {
+	rows := max(m.bodyHeight()-1, 1)
+	c, n := m.cursor[m.view], m.rowCount(m.view)
+	if c < rows {
+		return 0
 	}
+	return max(min(c-rows/3, n-rows), 0)
+}
 
-	// Available rows for service items = height - 1 (title)
-	// - potential 1 for catalog separator.
-	hasSeparator := m.filter == "" && catalogCount > 0
-	itemRows := height - 1
-	if hasSeparator {
-		itemRows--
-	}
-	if itemRows < 1 {
-		itemRows = 1
-	}
-
-	// Compute scroll offset so the selected item stays visible.
-	// Keep cursor at ~1/3 from the top when scrolled past the window.
-	scrollOffset := 0
-	if m.cursor >= itemRows {
-		targetRow := itemRows / 3
-		scrollOffset = m.cursor - targetRow
-		// Clamp so we don't scroll past the last item.
-		if maxStart := len(visible) - itemRows; scrollOffset > maxStart {
-			scrollOffset = maxStart
-		}
-	}
-
+func (m Model) renderList(h, w int) string {
 	var b strings.Builder
-
-	// Title line.
-	title := m.renderListTitle(installedCount, catalogCount)
-	b.WriteString(lipgloss.NewStyle().Width(listInnerWidth).Render(title) + "\n")
-	linesUsed := 1
-
-	// Service rows, starting from scrollOffset. Only render up to itemRows items.
-	// The separator is purely visual — it does not affect cursor indexing.
-	separatorInserted := false
-	rendered := 0
-	for i := scrollOffset; i < len(visible) && rendered < itemRows; i++ {
-		svc := visible[i]
-		// Insert separator before first catalog entry (only when not filtering).
-		if !svc.Installed && !separatorInserted && m.filter == "" {
-			if linesUsed < height {
-				b.WriteString(renderCatalogSeparator() + "\n")
-				linesUsed++
-				separatorInserted = true
-			}
-		}
-		if linesUsed >= height {
-			break
-		}
-		b.WriteString(m.renderListItem(svc, i == m.cursor) + "\n")
-		linesUsed++
-		rendered++
+	b.WriteString(m.renderListTitle() + "\n")
+	rows := max(h-1, 1)
+	off, n := m.listOffset(), m.rowCount(m.view)
+	if n == 0 {
+		b.WriteString(" " + styles.Muted.Render(m.emptyText()) + "\n")
 	}
-
-	for linesUsed < height {
-		b.WriteString("\n")
-		linesUsed++
+	for i := off; i < n && i < off+rows; i++ {
+		b.WriteString(clipWidth(m.renderRow(i, i == m.cursor[m.view], w), w) + "\n")
 	}
 	return b.String()
 }
 
-func (m Model) renderListTitle(installedCount, catalogCount int) string {
-	if m.state == stateFilterInput {
-		return styles.Warning.Render("/ ") + styles.Text.Render(m.filter) + styles.Muted.Render("_")
+func (m Model) emptyText() string {
+	switch m.view {
+	case viewBackups:
+		if m.backErr != "" {
+			return m.backErr
+		}
+		return "No backups yet — press b to make one"
+	case viewCatalog:
+		return "Nothing matches"
 	}
-	if m.filter != "" {
-		visible := m.visibleServices()
-		return styles.Muted.Render(fmt.Sprintf("/ %s  ", m.filter)) +
-			styles.Muted.Render(fmt.Sprintf("%d/%d", len(visible), len(m.services)))
-	}
-	detail := fmt.Sprintf("%d installed", installedCount)
-	if catalogCount > 0 {
-		detail += fmt.Sprintf(" · %d available", catalogCount)
-	}
-	return styles.PaneTitle.Render("Services") + "  " + styles.Muted.Render(detail)
+	return "Nothing here"
 }
 
-func renderCatalogSeparator() string {
-	const label = " catalog "
-	const indent = 2
-	const dashLeft = 2
-	dashRight := listInnerWidth - indent - dashLeft - len(label)
-	if dashRight < 1 {
-		dashRight = 1
+func (m Model) renderListTitle() string {
+	if m.mode == modeFilter {
+		return " " + styles.Warning.Render(styles.Icon("search")+" ") + styles.Text.Render(m.filter[m.view]) + styles.Primary.Render("▏")
 	}
-	line := strings.Repeat(" ", indent) +
-		strings.Repeat("─", dashLeft) +
-		label +
-		strings.Repeat("─", dashRight)
-	return styles.Muted.Render(line)
+	title := " " + styles.PaneTitle.Render(viewNames[m.view])
+	detail := fmt.Sprintf("%d", m.rowCount(m.view))
+	if f := m.filter[m.view]; f != "" {
+		detail = styles.Icon("search") + " " + f + " · " + detail
+	}
+	if marks := m.markedNames(); len(marks) > 0 && m.view == viewServices {
+		detail += " · " + styles.Accent.Render(fmt.Sprintf("%d marked", len(marks)))
+	}
+	return title + "  " + styles.Muted.Render(detail)
 }
 
-func (m Model) renderListItem(svc service.Service, selected bool) string {
-	cursor := "  "
+func cursorMark(selected bool) string {
 	if selected {
-		cursor = styles.Primary.Render("▶ ")
+		return styles.Primary.Render(styles.Icon("cursor") + " ")
 	}
+	return "  "
+}
 
+func nameStyle(selected bool) lipgloss.Style {
+	if selected {
+		return lipgloss.NewStyle().Bold(true).Foreground(styles.ColText)
+	}
+	return styles.Subtle
+}
+
+func (m Model) renderRow(i int, sel bool, w int) string {
+	switch m.view {
+	case viewServices:
+		return m.renderServiceRow(m.visibleServices()[i], sel, w)
+	case viewCatalog:
+		s := m.visibleCatalog()[i]
+		return cursorMark(sel) + styles.Muted.Render(styles.Icon("catalog")) + " " + nameStyle(sel).Render(clip(s.Name, w-4))
+	case viewNetwork:
+		if i == 0 {
+			c := m.coreService()
+			return cursorMark(sel) + styles.StateGlyph(c.Running, c.Total) + " " +
+				nameStyle(sel).Width(max(w-12, 4)).Render("core stack") + styles.Muted.Render(fmt.Sprintf("%d/%d", c.Running, c.Total))
+		}
+		l := m.extensions()[i-1]
+		state := styles.Muted.Render("off")
+		running := 0
+		if m.layerRunning(l) {
+			running = 1
+		}
+		if m.enabled[l.Name()] {
+			state = lipgloss.NewStyle().Foreground(styles.StateColor(running, 1)).Render(map[bool]string{true: "running", false: "stopped"}[running == 1])
+		}
+		return cursorMark(sel) + lipgloss.NewStyle().Foreground(styles.StateColor(running, 1)).Render(styles.Icon(layerIcon(l.Name()))) + " " +
+			nameStyle(sel).Width(max(w-14, 4)).Render(clip(l.Name(), max(w-14, 4))) + state
+	case viewBackups:
+		bk := m.backups[i]
+		live := ""
+		if bk.Live {
+			live = styles.Warning.Render(" live")
+		}
+		return cursorMark(sel) + styles.Blue.Render(styles.Icon("backup")) + " " +
+			nameStyle(sel).Render(bk.Created.Local().Format("2006-01-02 15:04")) + " " +
+			styles.Muted.Render(fmt.Sprintf("%d svc", len(bk.Services))) + live
+	case viewHealth:
+		r := m.healthRows()[i]
+		mark := " "
+		if res, ok := m.health[r.a.ID]; ok {
+			mark = styles.Success.Render(styles.Icon("ok"))
+			if res.err != nil {
+				mark = styles.Danger.Render(styles.Icon("error"))
+			}
+		}
+		scope := styles.Muted.Render(" " + r.t.Scope.String())
+		return cursorMark(sel) + mark + " " + styles.Primary.Render(styles.Icon(r.a.Icon)) + " " +
+			nameStyle(sel).Render(clip(r.a.Label, max(w-16, 4))) + scope
+	}
+	return ""
+}
+
+func (m Model) renderServiceRow(svc service.Service, sel bool, w int) string {
 	if isCore(&svc) {
-		dot := styles.Dot(svc.Running == svc.Total && svc.Total > 0, true)
-		ns := lipgloss.NewStyle().Width(installedNameW).Bold(true).Foreground(styles.ColText)
-		return cursor + dot + " " + ns.Render("core") + " " +
+		return cursorMark(sel) + "  " + styles.StateGlyph(svc.Running, svc.Total) + " " +
+			lipgloss.NewStyle().Bold(true).Foreground(styles.ColAccent).Width(max(w-14, 4)).Render(styles.Icon("core")+" core") +
 			styles.Muted.Render(fmt.Sprintf("%d/%d", svc.Running, svc.Total))
 	}
-	if !svc.Installed {
-		plus := styles.Muted.Render("+")
-		ns := lipgloss.NewStyle().Width(catalogNameW).Foreground(styles.ColMuted)
-		if selected {
-			ns = ns.Foreground(styles.ColText)
-		}
-		return cursor + plus + " " + ns.Render(clip(svc.Name, catalogNameW))
+	mark := "  "
+	if m.marked[svc.Name] {
+		mark = styles.Accent.Render(styles.Icon("marked")) + " "
 	}
-
-	running := svc.Running > 0
-	exposed := svc.On("ts") || svc.On("cf")
-	dot := styles.Dot(running, exposed)
-
-	ns := lipgloss.NewStyle().Width(installedNameW)
-	if selected {
-		ns = ns.Bold(true).Foreground(styles.ColText)
-	} else {
-		ns = ns.Foreground(styles.ColMuted)
-	}
-	name := ns.Render(clip(svc.Name, installedNameW))
-	badge := exposureBadge(svc)
-
-	return fmt.Sprintf("%s%s %s %s", cursor, dot, name, badge)
+	badges := m.layerBadges(svc)
+	nameW := max(w-6-lipgloss.Width(badges)-2, 4)
+	return cursorMark(sel) + mark + styles.StateGlyph(svc.Running, svc.Total) + " " +
+		nameStyle(sel).Width(nameW).Render(clip(svc.Name, nameW)) + " " + badges
 }
 
-func exposureBadge(svc service.Service) string {
-	w := lipgloss.NewStyle().Width(7)
-	active := svc.ActiveLayers()
-	if len(active) == 0 {
-		return w.Foreground(styles.ColMuted).Render("       ")
+// layerBadges is one icon per layer the service is exposed on.
+func (m Model) layerBadges(svc service.Service) string {
+	var b strings.Builder
+	for _, l := range m.opt.Layers {
+		if svc.On(l.Name()) {
+			b.WriteString(styles.Exposed.Render(styles.Icon(layerIcon(l.Name()))))
+		}
 	}
-	if len(active) <= 2 {
-		return w.Foreground(styles.ColSuccess).Render(strings.Join(active, "+"))
-	}
-	return w.Foreground(styles.ColSuccess).Render(fmt.Sprintf("%dlyrs", len(active)))
+	return b.String()
 }
 
 // ── Detail pane ───────────────────────────────────────────────────────────────
 
-func (m Model) renderDetailPane(height, width int) string {
-	svc := m.selectedService()
-	if svc == nil {
-		return lipgloss.NewStyle().Width(width).Height(height).
-			Foreground(styles.ColMuted).
-			Render("  No service selected")
-	}
-
-	if isCore(svc) {
-		return m.renderCoreDetail(svc, height, width)
-	}
-	if !svc.Installed {
-		return m.renderCatalogDetail(svc, height, width)
-	}
-	return m.renderInstalledDetail(svc, height, width)
-}
-
-// renderCoreDetail shows each core container and what the core keys run.
-func (m Model) renderCoreDetail(svc *service.Service, height, width int) string {
-	var b strings.Builder
-	w := width - 2
-	tag := styles.Success.Render(fmt.Sprintf("● %d/%d running", svc.Running, svc.Total))
-	if svc.Running < svc.Total {
-		tag = styles.Warning.Render(fmt.Sprintf("● %d/%d running", svc.Running, svc.Total))
-	}
-	b.WriteString(" " + lipgloss.NewStyle().Width(w).Render(styles.Bold.Render("core stack")+"  "+tag) + "\n")
-	b.WriteString(" " + styles.PaneBorder.Render(strings.Repeat("─", max(w, 1))) + "\n")
-
-	b.WriteString("\n " + styles.PaneTitle.Render("Containers") + "\n")
-	for _, c := range m.coreContainers() {
-		state := m.core[c]
-		st := styles.Muted.Render("not running")
-		switch state {
-		case "running":
-			st = styles.Success.Render(state)
-		case "":
+func (m Model) renderDetail(h, w int) string {
+	var lines []string
+	switch m.view {
+	case viewServices, viewCatalog:
+		svc := m.selectedService()
+		switch {
+		case len(m.markedNames()) > 0 && m.view == viewServices:
+			lines = m.multiDetail(w)
+		case svc == nil:
+			lines = []string{styles.Muted.Render("No service selected")}
+		case isCore(svc):
+			lines = m.coreDetail(w)
+		case !svc.Installed:
+			lines = m.catalogDetail(svc, w)
 		default:
-			st = styles.Warning.Render(state)
+			lines = m.serviceDetail(svc, w)
 		}
-		fmt.Fprintf(&b, "  %s %s\n", lipgloss.NewStyle().Width(14).Render(c), st)
+	case viewNetwork:
+		if l := m.selectedLayer(); l != nil {
+			lines = m.layerDetail(w)
+		} else {
+			lines = m.coreDetail(w)
+		}
+	case viewBackups:
+		lines = m.backupDetail(w)
+	case viewHealth:
+		return m.healthDetail(h, w)
 	}
-
-	b.WriteString("\n " + styles.PaneTitle.Render("Actions") + "\n")
-	for _, a := range [][2]string{
-		{"u", "homelab up        create/start the core"},
-		{"r", "homelab restart"},
-		{"U", "homelab update    refresh files, pull, rebuild"},
-		{"enter", "homelab logs -f   core logs"},
-	} {
-		fmt.Fprintf(&b, "  %s %s\n", lipgloss.NewStyle().Width(8).Render(key(a[0])), styles.Muted.Render(a[1]))
+	if t, ok := m.target(); ok && m.view != viewBackups {
+		lines = append(lines, m.actionLines(t, h-len(lines), w)...)
 	}
-	b.WriteString("  " + styles.Muted.Render("stop/down the core from a shell — it serves every route") + "\n")
-
-	content := b.String()
-	for strings.Count(content, "\n") < height {
-		content += "\n"
+	if m.view == viewServices && len(m.markedNames()) == 0 {
+		lines = append(lines, m.logTail(m.selectedService(), w)...)
 	}
-	return lipgloss.NewStyle().Width(width).Render(content)
+	return indent(lines, h, w)
 }
 
-func (m Model) renderCatalogDetail(svc *service.Service, height, width int) string {
-	var b strings.Builder
-	w := width - 2
-
-	titleLine := styles.Bold.Render(svc.Name) + "  " + styles.Muted.Render("○ not installed")
-	b.WriteString(" " + lipgloss.NewStyle().Width(w).Render(titleLine) + "\n")
-	b.WriteString(" " + styles.PaneBorder.Render(strings.Repeat("─", w)) + "\n")
-
-	b.WriteString("\n " + styles.Muted.Render("Bundled service — not yet installed.") + "\n\n")
-
-	b.WriteString(" " + styles.PaneTitle.Render("Install") + "\n\n")
-	fmt.Fprintf(&b, "  Press %s to install this service.\n", key("enter"))
-	fmt.Fprintf(&b, "  Or run: %s\n\n", styles.Primary.Render("homelab add "+svc.Name))
-
-	b.WriteString(" " + styles.Muted.Render("After installing:") + "\n")
-	b.WriteString("  " + styles.Muted.Render(fmt.Sprintf("homelab setup %s", svc.Name)) + "\n")
-	b.WriteString("  " + styles.Muted.Render(fmt.Sprintf("homelab up %s", svc.Name)) + "\n")
-	b.WriteString("  " + styles.Muted.Render(fmt.Sprintf("homelab enable %s", svc.Name)) + "\n")
-
-	content := b.String()
-	for strings.Count(content, "\n") < height {
-		content += "\n"
+// indent pads lines into a w-wide, h-high block with a one-cell margin.
+func indent(lines []string, h, w int) string {
+	if len(lines) > h {
+		lines = lines[:h]
 	}
-	return lipgloss.NewStyle().Width(width).Render(content)
+	for i, l := range lines {
+		lines[i] = " " + clipWidth(l, w-1)
+	}
+	return strings.Join(lines, "\n")
 }
 
-func (m Model) renderInstalledDetail(svc *service.Service, height, width int) string {
-	var b strings.Builder
-	w := width - 2
-
-	// Title row
-	var stateTag string
-	switch {
-	case svc.Running == svc.Total && svc.Total > 0:
-		stateTag = styles.Success.Render(fmt.Sprintf("● %d/%d running", svc.Running, svc.Total))
-	case svc.Total > 0:
-		stateTag = styles.Warning.Render(fmt.Sprintf("● %d/%d running", svc.Running, svc.Total))
-	default:
-		stateTag = styles.Muted.Render("○ stopped")
+func titleLine(icon, name, tag string, w int) []string {
+	return []string{
+		styles.Bold.Render(icon+" "+name) + "  " + tag,
+		styles.PaneBorder.Render(strings.Repeat("─", max(w-2, 1))),
 	}
-	titleLine := styles.Bold.Render(svc.Name) + "  " + stateTag
-	b.WriteString(" " + lipgloss.NewStyle().Width(w).Render(titleLine) + "\n")
-	b.WriteString(" " + styles.PaneBorder.Render(strings.Repeat("─", w)) + "\n")
+}
+
+func stateTag(running, total int) string {
+	st := lipgloss.NewStyle().Foreground(styles.StateColor(running, total))
+	if total == 0 {
+		return st.Render(styles.Icon("stopped") + " stopped")
+	}
+	return st.Render(fmt.Sprintf("%s %d/%d running", styles.Icon(map[bool]string{true: "running", false: "partial"}[running == total]), running, total))
+}
+
+func section(title string) string { return styles.GroupTitle.Render(title) }
+
+func (m Model) serviceDetail(svc *service.Service, w int) []string {
+	lines := titleLine(styles.Icon("box"), svc.Name, stateTag(svc.Running, svc.Total), w)
 
 	env := m.rootEnv()
-
-	// Access: one row per configured layer, each address resolved by the
-	// layer that owns that network — the same source `homelab status` reads.
-	b.WriteString("\n " + styles.PaneTitle.Render("Access") + "\n")
-	active := map[string]bool{}
-	for _, n := range svc.ActiveLayers() {
-		active[string(n)] = true
-	}
-	for _, l := range m.layers {
+	lines = append(lines, "", section("Access"))
+	for _, l := range m.offeredLayers() {
+		icon := styles.Icon(layerIcon(l.Name()))
 		tag := fmt.Sprintf("%-4s", l.Name())
-		if !active[l.Name()] {
-			fmt.Fprintf(&b, "  %s %s %s\n",
-				styles.Muted.Render("○"), styles.Muted.Render(tag), styles.Muted.Render("off"))
+		if !svc.On(l.Name()) {
+			lines = append(lines, styles.Muted.Render(icon+" "+tag+" off"))
 			continue
 		}
 		for _, addr := range l.ServiceAddresses(svc.Name, env) {
 			text := styles.Primary.Render(addr.URL)
 			if addr.Note != "" {
-				text = strings.TrimSpace(text + " " + styles.Muted.Render("("+addr.Note+")"))
+				text += " " + styles.Muted.Render("("+addr.Note+")")
 			}
-			fmt.Fprintf(&b, "  %s %s %s\n", styles.Success.Render("●"), tag, text)
+			lines = append(lines, styles.Exposed.Render(icon)+" "+tag+" "+text)
 		}
 	}
-	if len(m.layers) > 0 {
-		b.WriteString("  " + key("e") + styles.Muted.Render(" enable  ") +
-			key("d") + styles.Muted.Render(" disable") + "\n")
-	}
 
-	// Containers
 	if len(svc.Containers) > 0 {
-		b.WriteString("\n " + styles.PaneTitle.Render("Containers") + "\n")
+		lines = append(lines, "", section("Containers"))
 		for i := range svc.Containers {
 			c := &svc.Containers[i]
-			cName := clip(c.Name, 20)
-			stateStyle := styles.Muted
-			switch c.State {
-			case "running":
-				stateStyle = styles.Success
-			case "restarting":
-				stateStyle = styles.Warning
-			}
-			stateStr := stateStyle.Render(c.State)
-			var extra string
-			if m.containerDetails != nil && i < len(m.containerDetails) {
+			extra := ""
+			if i < len(m.containerDetails) {
 				d := m.containerDetails[i]
-				health := "–"
 				if d.Health != "" {
-					health = styles.HealthTag(d.Health)
+					extra += "  " + styles.HealthTag(d.Health)
 				}
-				ports := ""
 				if len(d.Ports) > 0 {
-					ports = " " + styles.Muted.Render(clip(strings.Join(d.Ports, ", "), 28))
+					extra += "  " + styles.Muted.Render(clip(strings.Join(d.Ports, ", "), 28))
 				}
-				extra = fmt.Sprintf("  %s  %s", health, ports)
 			}
-			fmt.Fprintf(&b, "  %s  %s%s\n",
-				lipgloss.NewStyle().Width(20).Render(cName), stateStr, extra)
+			lines = append(lines, lipgloss.NewStyle().Width(22).Render(clip(c.Name, 21))+styles.StateTag(c.State)+extra)
 		}
 	}
 
-	// Log tail
-	if len(m.logLines) > 0 && m.logSvcName == svc.Name {
-		b.WriteString("\n " + styles.PaneTitle.Render("Logs") + "\n")
-		logWidth := w - 2
-		for _, line := range m.logLines {
-			if line == "" {
-				continue
-			}
-			b.WriteString("  " + styles.Muted.Render(clip(stripAnsi(line), logWidth)) + "\n")
+	return lines
+}
+
+// logTail is the selected service's last log lines, shown under its actions.
+func (m Model) logTail(svc *service.Service, w int) []string {
+	if len(m.logLines) == 0 || svc == nil || m.logSvcName != svc.Name {
+		return nil
+	}
+	lines := []string{"", section("Logs")}
+	for _, l := range m.logLines {
+		lines = append(lines, styles.Muted.Render(clip(stripAnsi(l), w-3)))
+	}
+	return lines
+}
+
+func (m Model) coreDetail(w int) []string {
+	c := m.coreService()
+	lines := titleLine(styles.Icon("core"), "core stack", stateTag(c.Running, c.Total), w)
+	lines = append(lines, "", section("Containers"))
+	for _, name := range m.coreHeaderContainers() {
+		st := m.core[name]
+		if st == "" {
+			st = "not running"
+		}
+		lines = append(lines, lipgloss.NewStyle().Width(14).Render(name)+styles.StateTag(st))
+	}
+	return lines
+}
+
+func (m Model) catalogDetail(svc *service.Service, w int) []string {
+	lines := titleLine(styles.Icon("catalog"), svc.Name, styles.Muted.Render("not installed"), w)
+	return append(lines, "",
+		styles.Subtle.Render("Bundled with homelab. Install it, then:"),
+		styles.Muted.Render("  configure "+styles.Icon("gear")+"  ·  up "+styles.Icon("play")+"  ·  expose "+styles.Icon("shield")),
+		"", styles.Key("enter")+" install")
+}
+
+func (m Model) multiDetail(w int) []string {
+	t := m.multiTarget()
+	lines := titleLine(styles.Icon("marked"), fmt.Sprintf("%d services", len(t.Names)), stateTag(t.Running, t.Total), w)
+	lines = append(lines, styles.Accent.Render(clip(strings.Join(t.Names, ", "), w*2)), "",
+		styles.Muted.Render("Actions run on every marked service. esc clears."))
+	return lines
+}
+
+func (m Model) layerDetail(w int) []string {
+	l := m.selectedLayer()
+	running := 0
+	if m.layerRunning(l) {
+		running = 1
+	}
+	tag := styles.Muted.Render("disabled")
+	if m.enabled[l.Name()] {
+		tag = stateTag(running, 1)
+	}
+	lines := titleLine(styles.Icon(layerIcon(l.Name())), l.Name(), tag, w)
+	exposed := 0
+	for _, s := range m.services {
+		if s.On(l.Name()) {
+			exposed++
 		}
 	}
+	return append(lines, styles.Subtle.Render(l.Label()),
+		styles.Muted.Render(fmt.Sprintf("container %s · %d services exposed", l.ContainerName(), exposed)))
+}
 
-	content := b.String()
-	for strings.Count(content, "\n") < height {
-		content += "\n"
+func (m Model) backupDetail(w int) []string {
+	b := m.selectedBackup()
+	if b == nil {
+		return []string{styles.Muted.Render("Backups live in <config-dir>/backups."), "",
+			styles.Key("b") + " back up every service"}
 	}
-	return lipgloss.NewStyle().Width(width).Render(content)
+	lines := titleLine(styles.Icon("backup"), b.Created.Local().Format("2006-01-02 15:04:05"), "", w)
+	lines = append(lines, styles.Muted.Render(clip(b.Dir, w*2)), "", section("Services"))
+	for _, s := range b.Services {
+		lines = append(lines, "  "+s)
+	}
+	if b.Live {
+		lines = append(lines, "", styles.Warning.Render(styles.Icon("warn")+" taken live — files may be torn"))
+	}
+	return append(lines, "", styles.Key("r")+" restore  "+styles.Key("b")+" new backup  "+styles.Key("enter")+" all actions")
+}
+
+func (m Model) healthDetail(h, w int) string {
+	r := m.selectedHealth()
+	if r == nil {
+		return ""
+	}
+	lines := titleLine(styles.Icon(r.a.Icon), r.a.Label, styles.Muted.Render(r.t.Scope.String()), w)
+	if r.a.Help != "" {
+		lines = append(lines, styles.Muted.Render(r.a.Help))
+	}
+	res, ok := m.health[r.a.ID]
+	if !ok {
+		lines = append(lines, "", styles.Key("enter")+" run   "+styles.Key(":")+" with options")
+		return indent(lines, h, w)
+	}
+	status := styles.Success.Render(styles.Icon("ok") + " passed")
+	if res.err != nil {
+		status = styles.Danger.Render(styles.Icon("error") + " " + res.err.Error())
+	}
+	lines = append(lines, status+"  "+styles.Muted.Render("J/K scroll · enter re-run"), "")
+	out := strings.Split(strings.TrimRight(stripAnsi(res.out), "\n"), "\n")
+	top := min(m.healthScroll, max(len(out)-1, 0))
+	for _, l := range out[top:] {
+		lines = append(lines, l)
+	}
+	return indent(lines, h, w)
+}
+
+// actionLines lists what can be done to t, with shortcut keys, in the space
+// left: the registry, not a hand-kept list, decides what shows.
+func (m Model) actionLines(t actions.Target, room, w int) []string {
+	acts := actions.For(t)
+	if m.view == viewServices && len(m.logLines) > 0 {
+		room = min(room, 8) // leave the log tail some room
+	}
+	if room < 4 || len(acts) == 0 {
+		return nil
+	}
+	lines := []string{"", section("Actions") + "  " + styles.Muted.Render("enter for all")}
+	room -= 2
+	// Shortcut actions first: they are the ones a key reaches.
+	var keyed, rest []actions.Action
+	for _, a := range acts {
+		if keyFor(a.ID) != "" {
+			keyed = append(keyed, a)
+		} else {
+			rest = append(rest, a)
+		}
+	}
+	var cells []string
+	for _, a := range append(keyed, rest...) {
+		k := keyFor(a.ID)
+		if k == "" {
+			k = " "
+		}
+		label := a.Label
+		st := styles.Text
+		if a.Danger != actions.None {
+			st = styles.Danger
+		}
+		cells = append(cells, styles.Key(k)+" "+st.Render(styles.Icon(a.Icon)+" "+label))
+	}
+	cols := 1
+	if w >= 60 {
+		cols = 2
+	}
+	colW := (w - 2) / cols
+	for i := 0; i < len(cells) && room > 0; i += cols {
+		var row strings.Builder
+		for c := 0; c < cols && i+c < len(cells); c++ {
+			row.WriteString(lipgloss.NewStyle().Width(colW).MaxWidth(colW).Render(clipWidth(cells[i+c], colW-1)))
+		}
+		lines = append(lines, row.String())
+		room--
+	}
+	return lines
 }
 
 // ── Status bar ────────────────────────────────────────────────────────────────
 
 func (m Model) renderStatusBar() string {
-	var hints string
-
-	switch m.state {
-	case stateFilterInput:
-		hints = hintBar("enter", "keep filter", "esc", "clear", "backspace", "delete")
-
-	case stateEnablePrompt, stateDisablePrompt:
-		verb, all := "Enable", "all"
-		if m.state == stateDisablePrompt {
-			verb, all = "Disable", "all"
+	var s string
+	switch {
+	case m.running > 0 && m.mode == modeNormal:
+		s = styles.Primary.Render(m.spin.View() + " " + m.busyMsg)
+	case m.toast != "" && m.mode == modeNormal:
+		if m.toastErr {
+			s = styles.Danger.Render(styles.Icon("error") + " " + m.toast)
+		} else {
+			s = styles.Success.Render(m.toast)
 		}
-		var pairs []string
-		if svc := m.selectedService(); svc != nil {
-			for _, c := range m.promptChoices(svc) {
-				label := c.layer
-				if c.flag == "" {
-					label = "private"
-				}
-				pairs = append(pairs, c.key, label)
-			}
-			verb += " " + svc.Name
+		if m.lastOut != nil {
+			s += "  " + hintBar("o", "output")
 		}
-		pairs = append(pairs, "a", all, "esc", "cancel")
-		hints = styles.Warning.Render(verb+":  ") + hintBar(pairs...)
-
-	case stateBusy:
-		hints = styles.Primary.Render(m.spin.View() + " " + m.busyMsg)
-
 	default:
-		svc := m.selectedService()
-		switch {
-		case m.lastErr != "":
-			hints = styles.Err.Render("✗ " + m.lastErr)
-		case m.lastMsg != "":
-			hints = styles.Success.Render("✓ " + m.lastMsg)
-		case isCore(svc):
-			hints = hintBar("u", "up", "r", "restart", "U", "update", "enter", "logs", "?", "help", "q", "quit")
-		case svc != nil && !svc.Installed:
-			hints = hintBar("enter", "install", "n", "new", "/", "filter", "?", "help", "q", "quit")
-		case svc != nil:
-			// Ordered by importance: the bar is clipped on narrow terminals.
-			hints = hintBar("u", "up", "s", "stop", "r", "restart", "e", "enable", "d", "disable",
-				"enter", "logs", "?", "help", "q", "quit", "/", "filter")
-		default:
-			hints = hintBar("n", "new", "/", "filter", "?", "help", "q", "quit")
-		}
+		s = m.hints()
 	}
-
-	return lipgloss.NewStyle().
-		Width(m.width).
-		MaxHeight(1).
-		Background(lipgloss.Color("#1E2030")).
-		Padding(0, 1).
-		Render(clipWidth(hints, m.width-2))
+	return styles.Bar.Width(m.width).MaxHeight(1).Padding(0, 1).Render(clipWidth(s, m.width-2))
 }
 
-// helpKeys is the full keymap shown by '?'. Action names are the CLI
-// commands they run, so what the dashboard does is what the docs say.
-var helpKeys = [][2]string{
-	{"", "Service"},
-	{"u", "up       create + start"},
-	{"s", "stop     keep containers"},
-	{"r", "restart"},
-	{"x", "down     remove containers"},
-	{"U", "update   pull + recreate"},
-	{"e", "enable   add a layer"},
-	{"d", "disable  remove a layer"},
-	{"enter", "logs · install"},
-	{"", "General"},
-	{"n", "new service"},
-	{"/", "filter · esc clears"},
-	{"R", "refresh (auto 5s)"},
-	{"j/k ↑/↓", "move"},
-	{"gg/G", "top / bottom"},
-	{"ctrl+u/d", "half page up / down"},
-	{"?", "close help"},
-	{"q", "quit"},
-}
-
-func renderHelp(height, width int) string {
-	var b strings.Builder
-	b.WriteString(" " + styles.Bold.Render("Keys") + "\n")
-	b.WriteString(" " + styles.PaneBorder.Render(strings.Repeat("─", max(width-2, 1))) + "\n")
-	for _, h := range helpKeys {
-		if h[0] == "" {
-			b.WriteString("\n " + styles.PaneTitle.Render(h[1]) + "\n")
-			continue
+func (m Model) hints() string {
+	switch m.mode {
+	case modeFilter:
+		return hintBar("enter", "keep", "esc", "clear")
+	case modePalette:
+		return hintBar("type", "filter", "↑↓", "move", "enter", "run", "esc", "close")
+	case modeForm:
+		return hintBar("tab", "next", "space/←→", "toggle·choose", "enter", "run", "esc", "cancel")
+	case modeConfirm:
+		return hintBar("y", "confirm", "n/esc", "cancel")
+	case modeTyped:
+		return hintBar("enter", "confirm", "esc", "cancel")
+	case modeOutput:
+		return hintBar("↑↓ pgup/pgdn", "scroll", "esc", "close")
+	case modeHelp:
+		return hintBar("j/k", "scroll", "any key", "close")
+	case modeSetup:
+		return hintBar("tab", "next", "enter", "save", "ctrl+o", "wizard", "esc", "cancel")
+	}
+	pairs := []string{"enter", "actions", ":", "palette"}
+	if t, ok := m.target(); ok {
+		for _, s := range shortcuts[t.Scope] {
+			if a, ok := actions.ByID(s.id); ok && a.Can(t) {
+				pairs = append(pairs, s.key, strings.ToLower(a.Label))
+			}
+			if len(pairs) >= 14 {
+				break
+			}
 		}
-		fmt.Fprintf(&b, "  %s %s\n",
-			lipgloss.NewStyle().Width(10).Render(styles.Primary.Render(h[0])), h[1])
 	}
-	content := b.String()
-	for strings.Count(content, "\n") < height {
-		content += "\n"
+	switch m.view {
+	case viewServices:
+		pairs = append(pairs, "space", "mark", "e", "expose", "/", "filter")
+	case viewCatalog:
+		pairs = append(pairs, "/", "filter")
 	}
-	return lipgloss.NewStyle().Width(width).MaxHeight(height).Render(content)
+	return hintBar(append(pairs, "?", "help", "q", "quit")...)
 }
 
 // hintBar renders key/label pairs as "[k] label  [k] label".
 func hintBar(pairs ...string) string {
 	var parts []string
 	for i := 0; i+1 < len(pairs); i += 2 {
-		parts = append(parts, key(pairs[i])+" "+pairs[i+1])
+		parts = append(parts, styles.Key(pairs[i])+" "+styles.Subtle.Render(pairs[i+1]))
 	}
 	return strings.Join(parts, "  ")
 }
 
-// clipWidth trims a styled string to w visible cells so the bar never wraps.
+// clipWidth trims a styled string to w visible cells so it never wraps.
 func clipWidth(s string, w int) string {
-	if w <= 0 || lipgloss.Width(s) <= w {
+	if w <= 0 {
+		return ""
+	}
+	if lipgloss.Width(s) <= w {
 		return s
 	}
 	return lipgloss.NewStyle().MaxWidth(w).Render(s)
 }
 
-// ── helpers ───────────────────────────────────────────────────────────────────
-
-func key(k string) string {
-	return styles.Muted.Render("[") + styles.Primary.Render(k) + styles.Muted.Render("]")
-}
-
 func clip(s string, n int) string {
 	if n <= 0 || len(s) <= n {
-		// len(s) is a byte count, always >= rune count for UTF-8, so passing
-		// here guarantees the rune count is also <= n — safe to return as-is.
 		return s
 	}
 	r := []rune(s)
@@ -611,7 +675,7 @@ func clip(s string, n int) string {
 	return string(r[:n-1]) + "…"
 }
 
-// stripAnsi removes ANSI escape sequences from log output.
+// stripAnsi removes ANSI escape sequences from command output.
 func stripAnsi(s string) string {
 	var b strings.Builder
 	inEsc := false
