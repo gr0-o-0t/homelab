@@ -1,8 +1,11 @@
 package cmd
 
 import (
+	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	neturl "net/url"
 	"strings"
@@ -88,11 +91,11 @@ var tunnelRouteAddCmd = &cobra.Command{
 	Short: "Add a Cloudflare DNS CNAME route for a service",
 	Long: `Register a DNS CNAME so Cloudflare Tunnel serves the service publicly.
 
-Requires CF_TUNNEL_NAME to be set (run 'homelab setup') and the cloudflared
-container to be running ('homelab start').
-
-After adding the DNS route, enable the public Caddy config:
-  homelab enable <service> --cf`,
+Creates a proxied CNAME <host>.<DOMAIN> → <tunnel-id>.cfargotunnel.com through
+the Cloudflare API, using CLOUDFLARE_API_TOKEN (Zone:Read + DNS:Edit — the token
+Caddy already uses for DNS-01) and the tunnel id inside CF_TUNNEL_TOKEN.
+'homelab enable <service> --cf' does this itself; this command is for adding
+the record by hand. An existing tunnel record is left as it is.`,
 	Args:              cobra.ExactArgs(1),
 	ValidArgsFunction: completeServiceNames,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -106,19 +109,16 @@ After adding the DNS route, enable the public Caddy config:
 		if err := requireTunnelConfig(env); err != nil {
 			return err
 		}
-		hostname := publicHostname(name, env)
-		tunnelName := env["CF_TUNNEL_NAME"]
-		fmt.Printf("%s Adding DNS route: %s → tunnel/%s\n",
-			styles.Primary.Render("→"), styles.Bold.Render(hostname), tunnelName)
-		if err := run.Default().DockerExec(cloudflaredContainer,
-			"cloudflared", "tunnel", "route", "dns", tunnelName, hostname,
-		); err != nil {
-			return fmt.Errorf(
-				"adding route %s: %w\n\n  Ensure CLOUDFLARE_API_TOKEN has DNS:Edit permissions", hostname, err)
+		hostname, created, err := addTunnelRoute(env, name)
+		if err != nil {
+			return fmt.Errorf("adding DNS route %s: %w", hostname, err)
 		}
-		fmt.Printf("%s DNS route added: %s\n", styles.Success.Render("✓"), styles.Bold.Render(hostname))
-		fmt.Printf("  Enable public routing: %s\n\n",
-			styles.Primary.Render(fmt.Sprintf("homelab enable %s --cf", name)))
+		if created {
+			fmt.Printf("%s DNS route added: %s → tunnel\n", styles.Success.Render("✓"), styles.Bold.Render(hostname))
+		} else {
+			fmt.Printf("%s DNS route already present: %s\n", styles.Success.Render("✓"), styles.Bold.Render(hostname))
+		}
+		fmt.Println()
 		return nil
 	},
 }
@@ -175,25 +175,36 @@ type cfResponse struct {
 }
 
 // cfCall performs one Cloudflare API request and decodes its result into out.
-func cfCall(method, url, token string, out any) error {
-	req, err := http.NewRequest(method, url, nil)
+func cfCall(method, url, token string, in, out any) error {
+	var body io.Reader
+	if in != nil {
+		b, err := json.Marshal(in)
+		if err != nil {
+			return err
+		}
+		body = bytes.NewReader(b)
+	}
+	req, err := http.NewRequest(method, url, body)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
+	if in != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	var body cfResponse
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+	var res cfResponse
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
 		return fmt.Errorf("%s %s: HTTP %d, undecodable body: %w", method, url, resp.StatusCode, err)
 	}
-	if !body.Success {
-		msgs := make([]string, 0, len(body.Errors))
-		for _, e := range body.Errors {
+	if !res.Success {
+		msgs := make([]string, 0, len(res.Errors))
+		for _, e := range res.Errors {
 			msgs = append(msgs, e.Message)
 		}
 		return fmt.Errorf("cloudflare API: HTTP %d: %s", resp.StatusCode, strings.Join(msgs, "; "))
@@ -201,7 +212,7 @@ func cfCall(method, url, token string, out any) error {
 	if out == nil {
 		return nil
 	}
-	return json.Unmarshal(body.Result, out)
+	return json.Unmarshal(res.Result, out)
 }
 
 // deleteTunnelCNAME deletes the tunnel CNAME for hostname in zone and returns
@@ -215,22 +226,16 @@ func deleteTunnelCNAME(apiBase, token, zone, hostname string) (int, error) {
 	if zone == "" {
 		return 0, fmt.Errorf("DOMAIN not set")
 	}
-	var zones []struct {
-		ID string `json:"id"`
+	zoneURL, err := cfRecordsURL(apiBase, token, zone)
+	if err != nil {
+		return 0, err
 	}
-	if err := cfCall(http.MethodGet, apiBase+"/zones?name="+neturl.QueryEscape(zone), token, &zones); err != nil {
-		return 0, fmt.Errorf("looking up zone %s: %w", zone, err)
-	}
-	if len(zones) == 0 {
-		return 0, fmt.Errorf("zone %s not visible to CLOUDFLARE_API_TOKEN", zone)
-	}
-	zoneURL := apiBase + "/zones/" + zones[0].ID + "/dns_records"
 
 	var records []struct {
 		ID      string `json:"id"`
 		Content string `json:"content"`
 	}
-	if err := cfCall(http.MethodGet, zoneURL+"?type=CNAME&name="+neturl.QueryEscape(hostname), token, &records); err != nil {
+	if err := cfCall(http.MethodGet, zoneURL+"?type=CNAME&name="+neturl.QueryEscape(hostname), token, nil, &records); err != nil {
 		return 0, fmt.Errorf("listing CNAME %s: %w", hostname, err)
 	}
 	removed := 0
@@ -238,7 +243,7 @@ func deleteTunnelCNAME(apiBase, token, zone, hostname string) (int, error) {
 		if !strings.HasSuffix(r.Content, ".cfargotunnel.com") {
 			continue
 		}
-		if err := cfCall(http.MethodDelete, zoneURL+"/"+r.ID, token, nil); err != nil {
+		if err := cfCall(http.MethodDelete, zoneURL+"/"+r.ID, token, nil, nil); err != nil {
 			return removed, fmt.Errorf("deleting record %s: %w", r.ID, err)
 		}
 		removed++
@@ -247,6 +252,101 @@ func deleteTunnelCNAME(apiBase, token, zone, hostname string) (int, error) {
 		return 0, fmt.Errorf("no tunnel CNAME named %s in zone %s", hostname, zone)
 	}
 	return removed, nil
+}
+
+// cfRecordsURL resolves zone to its dns_records endpoint.
+func cfRecordsURL(apiBase, token, zone string) (string, error) {
+	if token == "" {
+		return "", fmt.Errorf("CLOUDFLARE_API_TOKEN not configured")
+	}
+	if zone == "" {
+		return "", fmt.Errorf("DOMAIN not set")
+	}
+	var zones []struct {
+		ID string `json:"id"`
+	}
+	if err := cfCall(http.MethodGet, apiBase+"/zones?name="+neturl.QueryEscape(zone), token, nil, &zones); err != nil {
+		return "", fmt.Errorf("looking up zone %s: %w", zone, err)
+	}
+	if len(zones) == 0 {
+		return "", fmt.Errorf("zone %s not visible to CLOUDFLARE_API_TOKEN", zone)
+	}
+	return apiBase + "/zones/" + zones[0].ID + "/dns_records", nil
+}
+
+// ensureTunnelCNAME creates hostname → <tunnelID>.cfargotunnel.com as a
+// proxied CNAME, which is what routes a public name into the tunnel. A record
+// already pointing there is left alone (created=false); any other record with
+// that name is not ours to replace, so it is an error.
+func ensureTunnelCNAME(apiBase, token, zone, hostname, tunnelID string) (created bool, err error) {
+	zoneURL, err := cfRecordsURL(apiBase, token, zone)
+	if err != nil {
+		return false, err
+	}
+	target := tunnelID + ".cfargotunnel.com"
+	var records []struct {
+		Type    string `json:"type"`
+		Content string `json:"content"`
+	}
+	if err := cfCall(http.MethodGet, zoneURL+"?name="+neturl.QueryEscape(hostname), token, nil, &records); err != nil {
+		return false, fmt.Errorf("looking up %s: %w", hostname, err)
+	}
+	for _, r := range records {
+		if r.Type == "CNAME" && strings.EqualFold(r.Content, target) {
+			return false, nil
+		}
+	}
+	if len(records) > 0 {
+		r := records[0]
+		return false, fmt.Errorf("a %s record for %s already exists (→ %s); not replacing it", r.Type, hostname, r.Content)
+	}
+	rec := map[string]any{
+		"type": "CNAME", "name": hostname, "content": target,
+		"proxied": true, "ttl": 1, "comment": "homelab: Cloudflare Tunnel route",
+	}
+	if err := cfCall(http.MethodPost, zoneURL, token, rec, nil); err != nil {
+		return false, fmt.Errorf("creating CNAME %s: %w", hostname, err)
+	}
+	return true, nil
+}
+
+// tunnelIDFromToken returns the tunnel UUID carried in a cloudflared tunnel
+// token — base64 JSON {"a": account tag, "t": tunnel id, "s": secret} — so the
+// DNS target can be built without a cert.pem or an extra API permission.
+func tunnelIDFromToken(tok string) (string, error) {
+	tok = strings.TrimSpace(tok)
+	var raw []byte
+	var err error
+	for _, enc := range []*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding, base64.URLEncoding, base64.RawURLEncoding} {
+		if raw, err = enc.DecodeString(tok); err == nil {
+			break
+		}
+	}
+	if err != nil {
+		return "", fmt.Errorf("CF_TUNNEL_TOKEN is not a tunnel token: %w", err)
+	}
+	var t struct {
+		Tunnel string `json:"t"`
+	}
+	if err := json.Unmarshal(raw, &t); err != nil || t.Tunnel == "" {
+		return "", fmt.Errorf("CF_TUNNEL_TOKEN carries no tunnel id")
+	}
+	return t.Tunnel, nil
+}
+
+// addTunnelRoute makes svc's public hostname resolve into the tunnel. It
+// returns the hostname even on error, for messages.
+func addTunnelRoute(env map[string]string, svc string) (hostname string, created bool, err error) {
+	hostname = publicHostname(svc, env)
+	if err := requireTunnelConfig(env); err != nil {
+		return hostname, false, err
+	}
+	tid, err := tunnelIDFromToken(env["CF_TUNNEL_TOKEN"])
+	if err != nil {
+		return hostname, false, err
+	}
+	created, err = ensureTunnelCNAME(cfAPIBase, env["CLOUDFLARE_API_TOKEN"], env["DOMAIN"], hostname, tid)
+	return hostname, created, err
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────

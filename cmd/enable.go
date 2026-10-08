@@ -127,9 +127,29 @@ func runEnable(cmd *cobra.Command, args []string) error {
 		} else {
 			fmt.Printf("  %s  %s: enabled\n", styles.Success.Render("✓"), l.Label())
 		}
+		if l.Name() == "cf" {
+			reportTunnelRoute(buildEnv(root, ""), svcName)
+		}
 	}
 	fmt.Println()
 	return nil
+}
+
+// reportTunnelRoute makes the service's public name resolve into the tunnel
+// after `enable --cf`. Without the DNS record the Caddy site exists but no one
+// can reach it — which is what `enable --cf` used to leave behind. Failure is
+// reported, not fatal: the route is in place and the record can be added later.
+func reportTunnelRoute(env map[string]string, svc string) {
+	host, created, err := addTunnelRoute(env, svc)
+	switch {
+	case err != nil:
+		fmt.Printf("  %s  DNS for %s not created: %v\n     Retry: %s\n", styles.Warning.Render("!"),
+			host, err, styles.Primary.Render("homelab cf route add "+svc))
+	case created:
+		fmt.Printf("  %s  DNS: %s → tunnel (public; may take a minute to resolve)\n", styles.Success.Render("✓"), host)
+	default:
+		fmt.Printf("  %s  DNS: %s → tunnel\n", styles.Success.Render("✓"), host)
+	}
 }
 
 // selectedEnableLayers is the private layer plus every layer whose flag was

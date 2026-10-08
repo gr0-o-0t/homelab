@@ -169,8 +169,8 @@ Extension-specific management (DNS routes, per-layer status/logs)
 lives under each extension's own top-level command, not under `ext`:
 
 ```bash
-homelab cf route add <service>                     # add Cloudflare DNS route
-homelab cf route rm <service>                      # remove Cloudflare DNS route
+homelab cf route add <service>                     # proxied CNAME → <tunnel>.cfargotunnel.com via the API (enable --cf does it)
+homelab cf route rm <service>                      # remove that CNAME (disable --cf does it)
 homelab i2p <status|logs|list>                     # i2pd router management
 homelab tor <status|logs|list>                      # Tor onion service management
 homelab ygg <status|logs|list>                      # Yggdrasil mesh management

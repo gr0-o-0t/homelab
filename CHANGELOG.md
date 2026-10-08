@@ -3,6 +3,18 @@
 Notable changes per release. The release workflow publishes the section
 matching the pushed tag as the GitHub release notes.
 
+## Unreleased
+
+### Fixed
+
+- `enable --cf` left a service unreachable: it wrote the Caddy site but no
+  DNS record, and `cf route add` could never create one for a token-based
+  tunnel (it needed the cert.pem of an interactive `cloudflared tunnel
+  login`). Both now create a proxied CNAME to the tunnel through the
+  Cloudflare API with `CLOUDFLARE_API_TOKEN`, taking the tunnel id from
+  `CF_TUNNEL_TOKEN`; `disable --cf` removes it. Existing records that are not
+  the tunnel's are never overwritten.
+
 ## v0.4.0 — 2026-10-08
 
 ### Highlights

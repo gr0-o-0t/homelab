@@ -91,6 +91,11 @@ func runDisable(cmd *cobra.Command, args []string) error {
 		ls = append(ls, l)
 	}
 
+	// The public name is resolved before the exposure state goes: it may be a
+	// --name that only the state remembers.
+	env := buildEnv(root, "")
+	publicHost := publicHostname(svcName, env)
+
 	mgr, _, explain := quietCaddy(root)
 	err := mgr.Disable(extRegistry(), svcName, ls)
 	if errors.Is(err, caddy.ErrInvalidConfig) {
@@ -99,8 +104,14 @@ func runDisable(cmd *cobra.Command, args []string) error {
 	for _, l := range ls {
 		if l.Flag() == "" {
 			fmt.Printf("  %s  Private: removed\n", styles.Warning.Render("→"))
-		} else {
-			fmt.Printf("  %s  %s: removed\n", styles.Warning.Render("→"), l.Label())
+			continue
+		}
+		fmt.Printf("  %s  %s: removed\n", styles.Warning.Render("→"), l.Label())
+		if l.Name() == "cf" && env["CLOUDFLARE_API_TOKEN"] != "" {
+			// Best effort: only a tunnel CNAME is removed, and none may exist.
+			if n, derr := deleteTunnelCNAME(cfAPIBase, env["CLOUDFLARE_API_TOKEN"], env["DOMAIN"], publicHost); derr == nil {
+				fmt.Printf("  %s  DNS: %s removed (%d record(s))\n", styles.Warning.Render("→"), publicHost, n)
+			}
 		}
 	}
 	if err != nil {
