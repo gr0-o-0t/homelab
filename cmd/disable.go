@@ -8,6 +8,7 @@ import (
 	"github.com/groot/homelab/internal/network"
 	"github.com/groot/homelab/internal/network/layers"
 	"github.com/groot/homelab/internal/run"
+	"github.com/groot/homelab/internal/session"
 	"github.com/groot/homelab/internal/tui/styles"
 	"github.com/spf13/cobra"
 )
@@ -107,6 +108,7 @@ func runDisable(cmd *cobra.Command, args []string) error {
 	}
 
 	if disableStop {
+		recordService(root, svcName, session.Stopped)
 		fmt.Printf("  %s  Stopping container…\n", styles.Muted.Render("→"))
 		if err := stopAndRemoveService(root, svcName); err != nil {
 			return err

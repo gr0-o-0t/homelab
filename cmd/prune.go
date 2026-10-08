@@ -8,6 +8,7 @@ import (
 
 	"github.com/groot/homelab/internal/backup"
 	"github.com/groot/homelab/internal/run"
+	"github.com/groot/homelab/internal/session"
 	"github.com/groot/homelab/internal/tui/styles"
 )
 
@@ -152,6 +153,7 @@ func runPrune(_ *cobra.Command, args []string) error {
 			downArgs = append(downArgs, "--volumes")
 		}
 
+		recordService(root, name, session.Removed)
 		fmt.Printf("  %s Pruning %s…\n", styles.Primary.Render("→"), styles.Bold.Render(name))
 		if err := run.Default().DockerComposeEnv(
 			run.ServiceComposeFile(root, name), buildEnv(root, name), downArgs...,

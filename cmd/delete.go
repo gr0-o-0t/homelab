@@ -7,6 +7,7 @@ import (
 
 	"github.com/groot/homelab/internal/exposure"
 	"github.com/groot/homelab/internal/routing"
+	"github.com/groot/homelab/internal/session"
 	"github.com/groot/homelab/internal/tui/styles"
 	"github.com/spf13/cobra"
 )
@@ -110,6 +111,7 @@ func deleteOne(root, svcName string) error {
 		return fmt.Errorf("removing service directory: %w", err)
 	}
 
+	recordService(root, svcName, session.Removed)
 	fmt.Printf("  %s  %s deleted (%s)\n\n", styles.Success.Render("✓"), styles.Bold.Render(svcName), svcDir)
 	return nil
 }

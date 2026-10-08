@@ -138,6 +138,15 @@ homelab setup [service] --set KEY=VALUE            # write vars without promptin
 homelab setup [service] --secrets-stdin            # secrets as {"NAME":"value"} JSON on stdin
 ```
 
+### Session mode (`homelab session`)
+
+```bash
+homelab session install                           # ~/.config/systemd/user/homelab.service, enable --now; restart policies → no
+homelab session uninstall                         # disable + remove the unit; restore recorded restart policies
+homelab session status                            # unit active/enabled, desired state, boot-starting containers
+homelab session run                               # hidden: the supervisor the unit runs
+```
+
 ### Shell completion
 
 ```bash
@@ -369,6 +378,7 @@ homelab down --group media            # stop all media services
 | `internal/docker` | Docker SDK client — read-only (ContainerList, ContainerInspect) |
 | `internal/run` | `Commander` — shells out to `docker compose`; injects env via `cmd.Env` |
 | `internal/exposure` | `services/<svc>/exposure.yaml` — the stored exposure state |
+| `internal/session` | Session mode: desired state, restart-policy record, systemd user unit, supervisor |
 | `internal/configgen` | Renders site blocks per layer and the per-service `caddy/sites/<svc>.conf` |
 | `internal/routing` | State → sites file (`Apply`/`Sync`), daemon Configure/Teardown, legacy migration |
 | `internal/caddy` | Caddy validate/reload via docker exec; `Enable`/`Disable`/`ReloadService` with snapshot/rollback of a service's sites file + exposure.yaml |
@@ -391,12 +401,65 @@ action listing it in `Commands`, unless it is on that test's commented
 exclusion list — so a new CLI command or flag needs an action (or a reason).
 Every action's argv is also parsed through `rootCmd` in tests.
 
+### Session mode and desired state (`internal/session`)
+
+**Why**: Docker starts `restart: always` containers at boot, before login. With
+the home directory on ecryptfs (or fscrypt, systemd-homed — anything mounted at
+login), every bind mount into the config dir resolves against the *unmounted*
+home: Docker creates root-owned placeholder directories there, so single-file
+mounts (Caddyfile, torrc, yggdrasil.conf, bifrost-config.json) fail with
+"mounting a directory onto a file" and directory mounts (i2p) silently bind an
+empty dir. Session mode moves "what runs and when" from Docker's restart
+policies to a systemd **user** service, which only exists while the user is
+logged in.
+
+- **Desired state** — `<config-dir>/state/desired.yaml` (`core: running`,
+  `services: {name: running|stopped}`). Lifecycle commands record intent
+  *before* running compose (`recordCore`/`recordService` in `cmd/session.go`):
+  `up/start/restart/update` → running, `stop/down/disable --stop` → stopped,
+  `delete/prune` → removed. Recording only warns on failure; it never blocks a
+  command. A missing file is seeded from the running containers (read-only
+  SDK); without Docker nothing is written. The hidden persistent flag
+  `--no-record` turns recording off — the supervisor passes it to its own CLI
+  calls.
+- **Restart policies** — the supervisor and `session install` set every
+  homelab container's restart policy to `no` (`docker update`, shell-out) and
+  record the previous one in `state/restart-policies.yaml`, keyed by container
+  name. Compose does not notice (its config hash is unchanged), but a
+  *recreated* container gets its compose policy back, so the supervisor
+  re-applies `no` on every `start` event. The record decides whether a dead
+  container is restarted (always/unless-stopped: yes; on-failure: non-zero
+  exit; no: never — one-shot jobs) and is what `session uninstall` restores.
+- **Managed containers** are identified by the compose label
+  `com.docker.compose.project.working_dir` = `<config-dir>/core` or
+  `<config-dir>/services/<name>`; one-off (`compose run`) containers and other
+  projects on the daemon are never touched.
+- **Supervisor** (`session run`): waits for `config.yaml` (home mounted) and
+  Docker; stops running containers that started before the session (the user
+  manager's start time, or when the config dir appeared) and bind-mount
+  something under `$HOME` — with the rest of their project, since caddy shares
+  tailscale's netns; brings up the core, then desired services (shared DBs
+  first) via `homelab --no-record up …`; then follows Docker events. A `die`
+  is restarted (`docker start`, backoff 1s→60s, gives up loudly after 5 in 10
+  min) only if no stop-signal `kill` event preceded it (docker/compose stop,
+  backup), the project is desired running (re-read per event) and the recorded
+  policy says so. SIGTERM (logout) → `docker stop` services, then core; desired
+  state untouched. A `state/session-detach` marker (written around install's
+  restart and uninstall's stop) makes it exit without stopping anything.
+- **Unit** — `${XDG_CONFIG_HOME:-~/.config}/systemd/user/homelab.service`,
+  ExecStart = absolute binary + `--no-color --config-dir <abs> [--config <abs>]
+  session run` (systemd-quoted), DOCKER_* env copied from the installing shell,
+  `Restart=on-failure`, `TimeoutStopSec=120`, `KillMode=mixed`,
+  `WantedBy=default.target`. systemctl and docker calls go through injectable
+  runners (`sessionSystemctl`, `sessionRunner`, `sessionDocker`); `cmd`'s
+  TestMain swaps systemctl and the unit path for fakes.
+
 ### Key design decisions
 
 - **Docker SDK for status, shell-out for lifecycle**: SDK used only for read-only inspection (ContainerList, ContainerInspect). `docker compose` CLI is shelled out for lifecycle ops to preserve Compose's reconciliation logic.
 - **No secrets on disk**: Commander injects via `cmd.Env` — no temp `.env` files.
 - **TTY detection**: `isatty.IsTerminal(os.Stdout.Fd()) && !noColor()` — TUI when interactive, plain table when piped/CI.
-- **Tests never reach the real Docker daemon**: every test package that can shell out to docker has a `TestMain` pointing `DOCKER_HOST` at a nonexistent socket. Compose names the core project after its directory ("core"), so a test running a core command against a temp config dir would otherwise recreate the live containers. New test packages that touch docker need the same guard.
+- **Tests never reach the real Docker daemon or systemd**: every test package that can shell out to docker has a `TestMain` pointing `DOCKER_HOST` at a nonexistent socket. Compose names the core project after its directory ("core"), so a test running a core command against a temp config dir would otherwise recreate the live containers. New test packages that touch docker need the same guard.
 - **Core files are refreshed, user files are not**: `homelab update` (no service) re-installs the embedded core files before pulling and rebuilding, but only those homelab owns (`core/`, the Caddyfile, READMEs); `i2p/tunnels.conf`, `torrc`, `i2pd.conf` and `yggdrasil.conf` are created once and then left alone.
 - **Front ends run the CLI**: the TUI dashboard and the GUI never reimplement an action — each button/key execs this binary (`selfCLI`) with the matching command, so they cannot drift from the CLI.
 - **Spinner + captured output**: Caddy reload output is captured in a `bytes.Buffer` Commander while the spinner runs; buffer is printed only on error.

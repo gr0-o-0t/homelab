@@ -105,6 +105,27 @@ Visit `https://status.home.example.com` from any device on your tailnet.
 
 ---
 
+## Running at login (encrypted home / laptops)
+
+Docker starts `restart: always` containers at boot, before you log in. If your
+home directory is encrypted (ecryptfs, fscrypt, systemd-homed) or otherwise
+mounted at login, those containers see the unmounted home: single-file bind
+mounts fail ("mounting a directory onto a file") and directory mounts are
+silently empty. Session mode ties the stack to your login session instead:
+
+```bash
+homelab session install     # systemd user service; restart policies → "no"
+homelab session status      # unit state, desired state, boot-starting containers
+journalctl --user -u homelab -f
+homelab session uninstall   # back to Docker's restart policies
+```
+
+At login the service waits for the config dir and Docker, brings up the core
+and every service recorded as running in `state/desired.yaml`, and restarts
+containers that crash. At logout it stops them (services first, then the core);
+the next login restores the same set. `up`/`stop`/`down`/… keep the desired
+state current, so stopping a service by hand keeps it stopped.
+
 ## CLI reference
 
 ### Global flags

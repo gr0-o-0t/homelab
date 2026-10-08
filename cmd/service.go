@@ -15,6 +15,7 @@ import (
 	"github.com/groot/homelab/internal/run"
 	"github.com/groot/homelab/internal/scaffold"
 	"github.com/groot/homelab/internal/service"
+	"github.com/groot/homelab/internal/session"
 	"github.com/groot/homelab/internal/tui/styles"
 	"github.com/spf13/cobra"
 )
@@ -119,7 +120,10 @@ func runServiceUp(_ *cobra.Command, args []string) error {
 	if upFlags.build {
 		extra = append(extra, "--build")
 	}
-	return forEachService(root, names, func(name string) error { return upOne(root, name, extra...) })
+	return forEachService(root, names, func(name string) error {
+		recordService(root, name, session.Running)
+		return upOne(root, name, extra...)
+	})
 }
 
 // upOne is `up` for one service: shared databases first, then compose up.
@@ -155,6 +159,7 @@ func runServiceDown(_ *cobra.Command, args []string) error {
 		return err
 	}
 	return forEachService(root, names, func(name string) error {
+		recordService(root, name, session.Stopped)
 		fmt.Printf("%s Removing %s…\n", styles.Warning.Render("→"), styles.Bold.Render(name))
 		return run.Default().DockerComposeEnv(
 			run.ServiceComposeFile(root, name),
@@ -171,6 +176,7 @@ func runServiceRestart(_ *cobra.Command, args []string) error {
 		return err
 	}
 	return forEachService(root, names, func(name string) error {
+		recordService(root, name, session.Running)
 		// Same reasoning as `up`: restarting a service whose database is down
 		// just produces connection errors.
 		if err := ensureDBDependencies(context.Background(), root, name); err != nil {

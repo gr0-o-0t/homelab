@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/groot/homelab/internal/run"
+	"github.com/groot/homelab/internal/session"
 	"github.com/groot/homelab/internal/tui/styles"
 	"github.com/spf13/cobra"
 )
@@ -34,6 +35,7 @@ already exist. Use 'homelab up' to create and start.`,
 		if _, err := os.Stat(composeFile); err != nil {
 			return err
 		}
+		recordCore(dir, session.Running)
 		fmt.Printf("%s Starting core stack…\n", styles.Primary.Render("→"))
 		return run.Default().DockerComposeEnv(
 			composeFile,
@@ -52,6 +54,7 @@ func runServiceStart(_ *cobra.Command, args []string) error {
 		return err
 	}
 	return forEachService(root, names, func(name string) error {
+		recordService(root, name, session.Running)
 		fmt.Printf("%s Starting %s…\n", styles.Primary.Render("→"), styles.Bold.Render(name))
 		return run.Default().DockerComposeEnv(run.ServiceComposeFile(root, name), buildEnv(root, name), "start")
 	})

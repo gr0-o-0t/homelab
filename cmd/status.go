@@ -41,6 +41,9 @@ func runStatus(_ *cobra.Command, args []string) error {
 	}
 
 	fmt.Printf("\n%s\n\n", styles.Header.Render("Homelab Status"))
+	if line := sessionStatusLine(dir); line != "" {
+		fmt.Printf("  %s\n\n", line)
+	}
 
 	// ── Core Stack ────────────────────────────────────────────────────────────
 	fmt.Printf("  %s\n", styles.Bold.Render("Core Stack"))

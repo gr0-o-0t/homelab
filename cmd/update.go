@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/groot/homelab/internal/run"
+	"github.com/groot/homelab/internal/session"
 	"github.com/groot/homelab/internal/tui/styles"
 	"github.com/spf13/cobra"
 )
@@ -36,6 +37,7 @@ func runServiceUpdate(_ *cobra.Command, args []string) error {
 		return err
 	}
 	return forEachService(root, names, func(name string) error {
+		recordService(root, name, session.Running)
 		if err := pullOneService(root, name); err != nil {
 			return err
 		}
@@ -56,6 +58,7 @@ func updateCoreStack(root string) error {
 	if err := installAssets(root); err != nil {
 		return fmt.Errorf("refreshing core files: %w", err)
 	}
+	recordCore(root, session.Running)
 	env := buildEnv(root, "")
 	composeFile := run.CoreComposeFile(root)
 	// withProfiles: the extension containers are profile-gated, and without

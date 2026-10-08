@@ -69,6 +69,13 @@ func ensureDBDependencies(ctx context.Context, root, name string) error {
 			if err := startSharedDB(ctx, root, dbType, p); err != nil {
 				return err
 			}
+			continue
+		}
+		// Running is not ready. Right after the shared instance starts — a
+		// login restore brings it up moments before its dependents — it
+		// refuses connections until healthy, and provisioning would fail.
+		if err := p.WaitHealthy(ctx, dbType, sharedDBStartTimeout); err != nil {
+			return err
 		}
 	}
 

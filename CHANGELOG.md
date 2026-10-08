@@ -3,6 +3,27 @@
 Notable changes per release. The release workflow publishes the section
 matching the pushed tag as the GitHub release notes.
 
+## Unreleased
+
+### Added
+
+- **Session mode** (`homelab session install|uninstall|status`): a systemd
+  user service that starts the stack at login and stops it at logout instead
+  of Docker starting it at boot. Fixes stacks whose config dir lives on an
+  encrypted or late-mounted home (ecryptfs, fscrypt, systemd-homed), where
+  boot-started containers got empty placeholder bind mounts or failed with
+  "mounting a directory onto a file". The supervisor sets every homelab
+  container's restart policy to `no`, restores the desired state at login
+  (core first, then services, shared databases first), restarts crashed
+  containers with backoff (1s → 60s, gives up after 5 failures in 10 minutes)
+  and stops everything at logout without changing the desired state.
+- **Desired state** (`<config-dir>/state/desired.yaml`): `up`, `start`,
+  `restart` and `update` record "running"; `stop`, `down` and `disable --stop`
+  "stopped"; `delete` and `prune` forget the service. Single, batch, `--group`
+  and core forms alike. Seeded from the running containers the first time.
+- `homelab status` shows a session mode line, with a warning when the config
+  dir is on a late-mounted home and containers still start at boot.
+
 ## v0.3.0 — 2026-10-07
 
 ### Highlights
