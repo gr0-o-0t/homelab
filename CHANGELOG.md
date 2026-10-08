@@ -3,7 +3,7 @@
 Notable changes per release. The release workflow publishes the section
 matching the pushed tag as the GitHub release notes.
 
-## Unreleased
+## v0.4.1 — 2026-10-08
 
 ### Fixed
 
