@@ -16,6 +16,7 @@ caddy/data/
 
 # Go binary
 /homelab
+/dist/
 
 # Root services/ is a generated export of assets/services/ (not the canonical source).
 # Use `make catalog` to regenerate it for local browsing.

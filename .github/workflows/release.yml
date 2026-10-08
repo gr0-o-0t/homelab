@@ -31,14 +31,10 @@ jobs:
       - name: Install GUI build dependencies
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libgl1-mesa-dev xorg-dev
 
-      - name: Build Linux amd64 (with GUI)
-        run: make build-linux-amd64
-
-      - name: Build Linux amd64 headless
-        run: make build-linux-amd64-headless
-
-      - name: Build Linux arm64 (headless)
-        run: make build-linux-arm64
+      # amd64 with the GUI, amd64 headless and arm64 headless, each packed as
+      # dist/homelab_<tag>_linux_<arch>.tar.gz, plus dist/SHA256SUMS.
+      - name: Build and package
+        run: make release
 
       # Release notes are the CHANGELOG.md section for this tag, followed by
       # install instructions. A tag without a section fails here rather than
@@ -56,12 +52,15 @@ jobs:
 
           ```bash
           VERSION=${{ github.ref_name }}
-          # Desktop (amd64, includes `homelab --gui`; needs libGL and X11 at runtime):
-          wget https://github.com/${{ github.repository }}/releases/download/$VERSION/homelab_${VERSION}_linux_amd64
-          # Server without a desktop: use homelab_${VERSION}_linux_amd64_headless
-          # Raspberry Pi / ARM64 (headless): use homelab_${VERSION}_linux_arm64
-          chmod +x homelab_${VERSION}_linux_*
-          sudo mv homelab_${VERSION}_linux_* /usr/local/bin/homelab
+          # Desktop amd64 (includes `homelab --gui`; needs libGL and X11 at runtime).
+          # Servers: ARCH=amd64_headless. Raspberry Pi / ARM64 (headless): ARCH=arm64.
+          ARCH=amd64
+          NAME=homelab_${VERSION}_linux_${ARCH}
+          BASE=https://github.com/${{ github.repository }}/releases/download/$VERSION
+          wget "$BASE/$NAME.tar.gz" "$BASE/SHA256SUMS"
+          sha256sum --check --ignore-missing SHA256SUMS
+          tar xzf "$NAME.tar.gz"
+          sudo install -m 0755 "$NAME/homelab" /usr/local/bin/homelab
           ```
 
           Then run `homelab setup` to configure, or `homelab update` to refresh an existing core.
@@ -73,6 +72,7 @@ jobs:
           name: "homelab ${{ github.ref_name }}"
           body_path: notes.md
           files: |
-            homelab_*
+            dist/*.tar.gz
+            dist/SHA256SUMS
           draft: false
           prerelease: false

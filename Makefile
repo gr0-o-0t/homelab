@@ -28,20 +28,33 @@ build:
 build-headless:
 	CGO_ENABLED=0 go build -tags nogui $(LDFLAGS) -o homelab .
 
+# Release builds land in dist/<name>/homelab; `make release` packs each into
+# dist/<name>.tar.gz next to SHA256SUMS.
+DIST := dist
+
 build-linux-amd64:
-	CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o "homelab_$(VERSION)_linux_amd64" .
+	CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o "$(DIST)/homelab_$(VERSION)_linux_amd64/homelab" .
 
 build-linux-amd64-headless:
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -tags nogui $(LDFLAGS) -o "homelab_$(VERSION)_linux_amd64_headless" .
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -tags nogui $(LDFLAGS) -o "$(DIST)/homelab_$(VERSION)_linux_amd64_headless/homelab" .
 
 # ARM64 is built headless: cross-compiling the cgo GUI needs an ARM sysroot,
 # and ARM64 hosts here are servers and Raspberry Pis.
 build-linux-arm64:
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -tags nogui $(LDFLAGS) -o "homelab_$(VERSION)_linux_arm64" .
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -tags nogui $(LDFLAGS) -o "$(DIST)/homelab_$(VERSION)_linux_arm64/homelab" .
 
-release: build-linux-amd64 build-linux-amd64-headless build-linux-arm64
-	@echo "Release binaries:"
-	@ls -lh homelab_$(VERSION)_linux_*
+# Each archive unpacks to homelab_<version>_linux_<arch>/ holding the binary,
+# LICENSE, README.md and CHANGELOG.md. Owner and mtime are fixed so the same
+# commit packs to the same bytes.
+release:
+	@rm -rf $(DIST)
+	@$(MAKE) --no-print-directory build-linux-amd64 build-linux-amd64-headless build-linux-arm64
+	@cd $(DIST) && for d in homelab_$(VERSION)_linux_*/; do \
+		d=$${d%/}; cp ../LICENSE ../README.md ../CHANGELOG.md "$$d/"; \
+		tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@$$(git log -1 --format=%ct)" \
+			-czf "$$d.tar.gz" "$$d" && rm -rf "$$d"; \
+	done && sha256sum *.tar.gz > SHA256SUMS
+	@ls -lh $(DIST)
 
 install:
 	CGO_ENABLED=1 go install $(LDFLAGS) .
