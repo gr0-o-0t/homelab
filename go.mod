@@ -2,6 +2,8 @@ module github.com/groot/homelab
 
 go 1.25.0
 
+toolchain go1.26.3
+
 require (
 	github.com/99designs/keyring v1.2.2
 	github.com/AllenDang/giu v0.15.0
