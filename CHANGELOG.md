@@ -3,7 +3,18 @@
 Notable changes per release. The release workflow publishes the section
 matching the pushed tag as the GitHub release notes.
 
-## Unreleased
+## v0.4.0 — 2026-10-08
+
+### Highlights
+
+- **The stack runs as a login session.** On laptops with an encrypted home,
+  Docker used to start homelab at boot, before the home was mounted — Caddy,
+  Tor, Yggdrasil and services failed to start or ran without their config.
+  `homelab session install` hands start-up to a systemd user service instead:
+  restored at login, supervised while you are logged in, stopped at logout.
+- **Release archives.** Each platform ships as
+  `homelab_<tag>_linux_<arch>.tar.gz` (binary, LICENSE, README, CHANGELOG)
+  with a `SHA256SUMS` file; archives are byte-reproducible.
 
 ### Added
 
@@ -23,6 +34,21 @@ matching the pushed tag as the GitHub release notes.
   and core forms alike. Seeded from the running containers the first time.
 - `homelab status` shows a session mode line, with a warning when the config
   dir is on a late-mounted home and containers still start at boot.
+
+### Changed
+
+- With session mode installed, homelab containers have restart policy `no`;
+  the supervisor does the restarting. `homelab session uninstall` restores the
+  recorded policies.
+- Release assets are tar.gz archives instead of bare binaries; see the
+  install snippet in the release notes.
+
+### Fixed
+
+- `up` waits for a shared database to be healthy even when it is already
+  running, instead of provisioning against one that is still starting.
+- CI pins the Go toolchain to 1.26.3: Go 1.25.0's linker panicked building the
+  GUI's cgo bindings under `-race`.
 
 ## v0.3.0 — 2026-10-07
 
