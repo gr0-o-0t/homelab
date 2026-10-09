@@ -4,7 +4,10 @@ vars:
     required: false
     description: "Log level: debug, info, warn, error"
 
-secrets: {}
+secrets:
+  BIFROST_SETUP_TOKEN:
+    required: true
+    description: "One-time token Bifrost asks for when creating the first admin account (pick any long random string)"
 
 databases:
   - postgres:

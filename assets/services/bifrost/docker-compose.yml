@@ -33,6 +33,8 @@ services:
       BIFROST_PG_USER: ${BIFROST_PG_USER}
       BIFROST_PG_PASSWORD: ${BIFROST_PG_PASSWORD}
       BIFROST_PG_DB: ${BIFROST_PG_DB}
+      # Required (v2.0.0+) to create the first admin account; Bifrost never stores or logs it.
+      BIFROST_SETUP_TOKEN: ${BIFROST_SETUP_TOKEN}
     volumes:
       - ./bifrost-config.json:/app/data/config.json:ro
       - bifrost-data:/app/data
