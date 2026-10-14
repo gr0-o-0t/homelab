@@ -52,8 +52,9 @@ jobs:
 
           ```bash
           VERSION=${{ github.ref_name }}
-          # Desktop amd64 (includes `homelab --gui`; needs libGL and X11 at runtime).
+          # Desktop amd64 (includes `homelab --gui`; needs glibc, libGL and X11 at runtime).
           # Servers: ARCH=amd64_headless. Raspberry Pi / ARM64 (headless): ARCH=arm64.
+          # The headless builds are static binaries: any distro, Alpine/musl included.
           ARCH=amd64
           NAME=homelab_${VERSION}_linux_${ARCH}
           BASE=https://github.com/${{ github.repository }}/releases/download/$VERSION
