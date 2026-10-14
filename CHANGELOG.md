@@ -3,6 +3,22 @@
 Notable changes per release. The release workflow publishes the section
 matching the pushed tag as the GitHub release notes.
 
+## v0.4.2 — 2026-10-14
+
+### Fixed
+
+- Bifrost 2.0 refuses to create the first admin account without a setup
+  token. The bifrost service now declares a `BIFROST_SETUP_TOKEN` secret and
+  passes it to the container. Set it with `homelab setup bifrost`, then
+  `homelab update bifrost`, and enter the same token in the dashboard's
+  **Setup token** field.
+
+### Build
+
+- The headless release builds (`linux_amd64_headless`, `linux_arm64`) are
+  static binaries and run on any Linux, Alpine/musl included. The release now
+  fails if either one is not statically linked.
+
 ## v0.4.1 — 2026-10-08
 
 ### Fixed
