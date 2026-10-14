@@ -49,6 +49,11 @@ build-linux-arm64:
 release:
 	@rm -rf $(DIST)
 	@$(MAKE) --no-print-directory build-linux-amd64 build-linux-amd64-headless build-linux-arm64
+	@# The headless builds are pure Go (CGO_ENABLED=0), so they run on any Linux,
+	@# Alpine/musl included. Fail rather than ship one that picked up a libc.
+	@for b in $(DIST)/homelab_$(VERSION)_linux_amd64_headless/homelab $(DIST)/homelab_$(VERSION)_linux_arm64/homelab; do \
+		file "$$b" | grep -q 'statically linked' || { echo "$$b is not statically linked"; exit 1; }; \
+	done
 	@cd $(DIST) && for d in homelab_$(VERSION)_linux_*/; do \
 		d=$${d%/}; cp ../LICENSE ../README.md ../CHANGELOG.md "$$d/"; \
 		tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@$$(git log -1 --format=%ct)" \
