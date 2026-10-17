@@ -91,7 +91,8 @@ func TestBootstrapAndShutdownPlan(t *testing.T) {
 		{Name: "tailscale", State: "running", Labels: core},
 		{Name: "jellyfin", State: "running", Labels: svc("jellyfin")},
 		{Name: "homelab-postgres", State: "running", Labels: svc("postgres")},
-		{Name: "immich-server", State: "exited", Labels: svc("immich")},
+		{Name: "immich-server", State: "exited", RestartPolicy: "no", Labels: svc("immich")},
+		{Name: "searxng", State: "exited", RestartPolicy: "always", Labels: svc("searxng")},
 		{Name: "stranger", State: "running", Labels: labelsFor("/srv/x")},
 	}
 
@@ -100,7 +101,8 @@ func TestBootstrapAndShutdownPlan(t *testing.T) {
 	assert.True(t, d.ServiceRunning("jellyfin"))
 	assert.True(t, d.ServiceRunning("postgres"))
 	assert.False(t, d.ServiceRunning("immich"))
-	assert.Len(t, d.Services, 2)
+	assert.True(t, d.ServiceRunning("searxng"), "down after a reboot, but Docker would have started it")
+	assert.Len(t, d.Services, 3)
 
 	svcs, coreNames := ShutdownPlan(s, cs)
 	assert.Equal(t, []string{"jellyfin", "homelab-postgres"}, svcs, "shared databases stop after their users")

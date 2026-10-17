@@ -143,14 +143,17 @@ func NeedsRebind(c docker.ContainerInfo, cutoff time.Time, home string) bool {
 	return false
 }
 
-// Bootstrap infers a desired state from the containers running now: a
-// project with a running container should be running, everything else not.
-// Used once, when there is no desired.yaml yet.
+// Bootstrap infers a desired state from the containers: a project with a
+// container that is running, or that Docker would start at boot (its restart
+// policy), should be running; everything else not. The second half matters
+// after a reboot that left the stack down — exactly when session mode gets
+// installed — where "running now" would record nothing. Used once, when there
+// is no desired.yaml yet.
 func Bootstrap(s Scope, cs []docker.ContainerInfo) *Desired {
 	d := &Desired{Core: Stopped, Services: map[string]State{}}
 	for i := range cs {
 		p, ok := s.Classify(cs[i].Labels)
-		if !ok || cs[i].State != stateRunning {
+		if !ok || (cs[i].State != stateRunning && !BootStarting(cs[i].RestartPolicy)) {
 			continue
 		}
 		if p.Core {

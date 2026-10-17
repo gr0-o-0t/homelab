@@ -25,6 +25,29 @@ func UnitPath() (string, error) {
 	return filepath.Join(dir, "systemd", "user", UnitName), nil
 }
 
+// AutostartPath is the desktop autostart entry next to the unit:
+// <config>/autostart/homelab-session.desktop for <config>/systemd/user/<unit>.
+func AutostartPath(unitPath string) string {
+	return filepath.Join(filepath.Dir(filepath.Dir(filepath.Dir(unitPath))), "autostart", "homelab-session.desktop")
+}
+
+// Autostart is the login trigger for a home mounted at login (ecryptfs,
+// fscrypt, …). The user manager starts before the home is mounted — with
+// lingering at boot, and even without it pam_systemd may run before the
+// mount — so it reads an empty ~/.config/systemd/user, never sees the unit and
+// never looks again. The desktop session runs this after login, home mounted:
+// reload the unit files, then start the unit (a no-op when already running).
+const Autostart = `# Written by "homelab session install"; "homelab session uninstall" removes it.
+[Desktop Entry]
+Type=Application
+Name=homelab session
+Comment=Start the homelab stack for this login session
+Exec=sh -c "systemctl --user daemon-reload && systemctl --user start homelab.service"
+Terminal=false
+NoDisplay=true
+X-GNOME-Autostart-enabled=true
+`
+
 // RenderUnit renders the user unit running argv (binary first) as the
 // supervisor. env is written as Environment= lines, sorted.
 func RenderUnit(argv []string, env map[string]string) string {
@@ -146,6 +169,14 @@ func (m *Manager) Install(ctx context.Context) error {
 		return err
 	}
 	m.printf("✓ Wrote %s\n", m.UnitPath)
+	auto := AutostartPath(m.UnitPath)
+	if err := os.MkdirAll(filepath.Dir(auto), 0o750); err != nil {
+		return err
+	}
+	if err := os.WriteFile(auto, []byte(Autostart), 0o644); err != nil { //nolint:gosec // not secret
+		return err
+	}
+	m.printf("✓ Wrote %s (starts the unit at login, after the home is mounted)\n", auto)
 	if _, err := m.Systemctl(ctx, "daemon-reload"); err != nil {
 		return fmt.Errorf("systemctl --user daemon-reload: %w", err)
 	}
@@ -197,6 +228,9 @@ func (m *Manager) Uninstall(ctx context.Context) error {
 			return err
 		}
 		m.printf("✓ Removed %s\n", m.UnitPath)
+		if err := os.Remove(AutostartPath(m.UnitPath)); err == nil {
+			m.printf("✓ Removed %s\n", AutostartPath(m.UnitPath))
+		}
 		if _, err := m.Systemctl(ctx, "daemon-reload"); err != nil {
 			m.printf("! systemctl --user daemon-reload: %v\n", err)
 		}

@@ -141,7 +141,7 @@ homelab setup [service] --secrets-stdin            # secrets as {"NAME":"value"}
 ### Session mode (`homelab session`)
 
 ```bash
-homelab session install                           # ~/.config/systemd/user/homelab.service, enable --now; restart policies → no
+homelab session install                           # ~/.config/systemd/user/homelab.service + autostart login trigger, enable --now; restart policies → no
 homelab session uninstall                         # disable + remove the unit; restore recorded restart policies
 homelab session status                            # unit active/enabled, desired state, boot-starting containers
 homelab session run                               # hidden: the supervisor the unit runs
@@ -418,8 +418,11 @@ logged in.
   *before* running compose (`recordCore`/`recordService` in `cmd/session.go`):
   `up/start/restart/update` → running, `stop/down/disable --stop` → stopped,
   `delete/prune` → removed. Recording only warns on failure; it never blocks a
-  command. A missing file is seeded from the running containers (read-only
-  SDK); without Docker nothing is written. The hidden persistent flag
+  command. A missing file is seeded from the containers (read-only SDK): a
+  project is running if a container runs or would start at boot (restart
+  policy), so an install after a reboot that left the stack down still
+  records it; without Docker nothing is written. Starting a service's shared
+  database as a dependency records that database running too. The hidden persistent flag
   `--no-record` turns recording off — the supervisor passes it to its own CLI
   calls.
 - **Restart policies** — the supervisor and `session install` set every
@@ -453,6 +456,15 @@ logged in.
   `WantedBy=default.target`. systemctl and docker calls go through injectable
   runners (`sessionSystemctl`, `sessionRunner`, `sessionDocker`); `cmd`'s
   TestMain swaps systemctl and the unit path for fakes.
+- **Login trigger** — `WantedBy=default.target` alone never fires with a
+  home mounted at login: the user manager starts before the mount (at boot
+  with lingering; and pam_systemd can precede pam_ecryptfs in the PAM session
+  stack), reads an empty `~/.config/systemd/user` and never rescans. So
+  install also writes `<config>/autostart/homelab-session.desktop`
+  (`session.AutostartPath`, next to the unit), which the desktop session runs
+  after login: `systemctl --user daemon-reload && systemctl --user start
+  homelab.service`. Uninstall removes it. Non-graphical logins (ssh, tty) get
+  no trigger.
 
 ### Key design decisions
 

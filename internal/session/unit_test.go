@@ -88,6 +88,9 @@ func TestManager_InstallAndUninstall(t *testing.T) {
 	unit, err := os.ReadFile(m.UnitPath)
 	require.NoError(t, err)
 	assert.Contains(t, string(unit), `ExecStart="/bin/homelab"`)
+	auto, err := os.ReadFile(AutostartPath(m.UnitPath))
+	require.NoError(t, err, "login trigger written next to the unit")
+	assert.Contains(t, string(auto), "systemctl --user daemon-reload && systemctl --user start homelab.service")
 	assert.Equal(t, []string{"daemon-reload", "enable homelab.service", "restart homelab.service"}, sc.calls)
 	assert.True(t, detachSeen, "the old supervisor must not stop the stack on reinstall")
 	assert.NoFileExists(t, DetachFile(m.Root))
@@ -118,6 +121,7 @@ func TestManager_InstallAndUninstall(t *testing.T) {
 	assert.Equal(t, []string{"disable --now homelab.service", "daemon-reload"}, sc.calls)
 	assert.True(t, detachSeen)
 	assert.NoFileExists(t, m.UnitPath)
+	assert.NoFileExists(t, AutostartPath(m.UnitPath))
 	assert.Equal(t, []string{
 		"docker update --restart=no caddy jellyfin",
 		"docker update --restart=always caddy",
@@ -167,4 +171,9 @@ func TestDisableRestartPolicies_ForgetsRemovedContainers(t *testing.T) {
 	require.NoError(t, err)
 	pol, _ = LoadPolicies(root)
 	assert.Equal(t, Policies{"web": "always"}, pol)
+}
+
+func TestAutostartPath(t *testing.T) {
+	assert.Equal(t, "/home/u/.config/autostart/homelab-session.desktop",
+		AutostartPath("/home/u/.config/systemd/user/homelab.service"))
 }

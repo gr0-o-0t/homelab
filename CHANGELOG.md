@@ -3,6 +3,25 @@
 Notable changes per release. The release workflow publishes the section
 matching the pushed tag as the GitHub release notes.
 
+## Unreleased
+
+### Fixed
+
+- Session mode did not start at login on an encrypted home. The systemd user
+  manager starts before the home is mounted (at boot with lingering, and
+  pam_systemd can run before pam_ecryptfs), so it never saw the unit in
+  `~/.config/systemd/user`. `homelab session install` now also writes
+  `~/.config/autostart/homelab-session.desktop`, which the desktop session
+  runs after login to load and start the unit. Run `homelab session install`
+  once to add it.
+- The first `session install` recorded only the containers running at that
+  moment, so after a reboot that left the stack down nothing was restored. A
+  container whose restart policy would have started it at boot now counts as
+  desired running too.
+- Shared databases started as a dependency (postgres for bifrost) were
+  recorded as not desired, so the supervisor would not restart them after a
+  crash. Starting one as a dependency now records it running.
+
 ## v0.4.2 — 2026-10-14
 
 ### Fixed

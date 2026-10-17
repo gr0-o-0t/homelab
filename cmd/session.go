@@ -32,9 +32,12 @@ every bind mount into the config dir then points at an empty placeholder:
 single-file mounts fail, directory mounts serve nothing. Session mode sets
 every homelab container's restart policy to "no" and runs a supervisor as a
 systemd user service that restores the desired state (state/desired.yaml) at
-login and restarts crashed containers itself.
+login and restarts crashed containers itself. Because the user manager can
+start before a late-mounted home is (it then never sees the unit), install
+also writes a desktop autostart entry that starts the unit after login.
 
   homelab session install     # write and start ~/.config/systemd/user/homelab.service
+                              # and ~/.config/autostart/homelab-session.desktop
   homelab session status      # unit state, desired state, boot-starting containers
   homelab session uninstall   # remove it and restore the compose restart policies`,
 }
