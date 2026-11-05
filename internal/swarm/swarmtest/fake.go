@@ -381,6 +381,20 @@ func (f *Fake) NetworkCreate(_ context.Context, name string, opts network.Create
 	return network.CreateResponse{ID: id}, nil
 }
 
+// NetworkRemove removes a network by ID or name.
+func (f *Fake) NetworkRemove(_ context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rec("NetworkRemove", id)
+	for i := range f.networks {
+		if f.networks[i].ID == id || f.networks[i].Name == id {
+			f.networks = append(f.networks[:i], f.networks[i+1:]...)
+			return nil
+		}
+	}
+	return fmt.Errorf("swarmtest: network %q not found: %w", id, errdefs.ErrNotFound)
+}
+
 func (f *Fake) SecretList(_ context.Context, o swarm.SecretListOptions) ([]swarm.Secret, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

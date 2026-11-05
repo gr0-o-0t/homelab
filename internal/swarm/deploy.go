@@ -8,6 +8,7 @@ import (
 	"maps"
 	"path/filepath"
 	"slices"
+	"strings"
 
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
@@ -36,6 +37,9 @@ type TaskStatus struct {
 
 // LabelNodeRole is the node label placement constraints match on.
 const LabelNodeRole = "homelab.role"
+
+// ErrNoSecrets means a deploy was asked for without a secrets manager.
+var ErrNoSecrets = errors.New("no secrets manager (keyring or vault unavailable): refusing to deploy without the service's secrets")
 
 // stack builds the service's environment and translates its compose file.
 // Every value BuildEnv took from the secrets manager is passed on, so
@@ -79,6 +83,11 @@ func (d *Deployer) services(ctx context.Context, svc string) ([]swarm.Service, e
 // more. Volumes are never touched: Swarm creates a missing named volume when
 // a task first starts, on the (pinned) node it runs on.
 func (d *Deployer) Up(ctx context.Context, svc string) error {
+	if d.SM == nil {
+		// Deploying anyway would rotate a working env secret to one
+		// missing every secret (R23).
+		return ErrNoSecrets
+	}
 	st, err := d.stack(svc)
 	if err != nil {
 		return err
@@ -126,9 +135,13 @@ func (d *Deployer) Up(ctx context.Context, svc string) error {
 
 		if cur, ok := existing[spec.Name]; ok {
 			delete(existing, spec.Name)
-			spec.TaskTemplate.ForceUpdate = cur.Spec.TaskTemplate.ForceUpdate
-			if _, err := d.API.ServiceUpdate(ctx, cur.ID, cur.Version, *spec,
-				swarm.ServiceUpdateOptions{QueryRegistry: true}); err != nil {
+			err := d.update(ctx, cur.ID, swarm.ServiceUpdateOptions{QueryRegistry: true},
+				func(now *swarm.ServiceSpec) swarm.ServiceSpec {
+					next := *spec
+					next.TaskTemplate.ForceUpdate = now.TaskTemplate.ForceUpdate
+					return next
+				})
+			if err != nil {
 				return fmt.Errorf("updating %s: %w", spec.Name, err)
 			}
 			continue
@@ -155,10 +168,19 @@ func (d *Deployer) Down(ctx context.Context, svc string) error {
 	})
 }
 
-// Restart replaces every task of svc with a fresh one.
+// Restart replaces every task of svc with a fresh one. A service that was
+// stopped (scaled to zero) comes back with one replica: restart means
+// running afterwards.
 func (d *Deployer) Restart(ctx context.Context, svc string) error {
+	if d.SM == nil {
+		return ErrNoSecrets
+	}
 	return d.eachService(ctx, svc, true, func(spec *swarm.ServiceSpec) {
 		spec.TaskTemplate.ForceUpdate++
+		if r := spec.Mode.Replicated; r != nil && (r.Replicas == nil || *r.Replicas == 0) {
+			one := uint64(1)
+			r.Replicas = &one
+		}
 	})
 }
 
@@ -173,14 +195,41 @@ func (d *Deployer) eachService(ctx context.Context, svc string, mustExist bool, 
 	}
 	var errs []error
 	for i := range list {
-		s := &list[i]
-		spec := s.Spec
-		change(&spec)
-		if _, err := d.API.ServiceUpdate(ctx, s.ID, s.Version, spec, swarm.ServiceUpdateOptions{}); err != nil {
-			errs = append(errs, fmt.Errorf("updating %s: %w", s.Spec.Name, err))
+		err := d.update(ctx, list[i].ID, swarm.ServiceUpdateOptions{}, func(now *swarm.ServiceSpec) swarm.ServiceSpec {
+			next := *now
+			if r := now.Mode.Replicated; r != nil { // don't mutate the inspected spec
+				rc := *r
+				next.Mode.Replicated = &rc
+			}
+			change(&next)
+			return next
+		})
+		if err != nil {
+			errs = append(errs, fmt.Errorf("updating %s: %w", list[i].Spec.Name, err))
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// update inspects the service for its current version right before
+// updating it to build(current spec): a version listed before minutes of
+// image pulls may be stale. An out-of-sequence rejection (someone updated
+// it in between) is retried once from a fresh inspect.
+func (d *Deployer) update(ctx context.Context, id string, opts swarm.ServiceUpdateOptions,
+	build func(now *swarm.ServiceSpec) swarm.ServiceSpec,
+) error {
+	var err error
+	for range 2 {
+		cur, _, ierr := d.API.ServiceInspectWithRaw(ctx, id, swarm.ServiceInspectOptions{})
+		if ierr != nil {
+			return ierr
+		}
+		_, err = d.API.ServiceUpdate(ctx, cur.ID, cur.Version, build(&cur.Spec), opts)
+		if err == nil || !strings.Contains(err.Error(), "out of sequence") {
+			return err
+		}
+	}
+	return err
 }
 
 // Pull pulls every image svc uses onto this node. Nodes running its tasks
@@ -216,7 +265,10 @@ func (d *Deployer) Remove(ctx context.Context, svc string) error {
 			return fmt.Errorf("removing %s: %w", list[i].Spec.Name, err)
 		}
 	}
-	return d.prune(ctx, svc, keepSet{})
+	if err := d.prune(ctx, svc, keepSet{}); err != nil {
+		return err
+	}
+	return d.removeStackNetworks(ctx, svc)
 }
 
 // Status lists the current tasks of svc, by service name.

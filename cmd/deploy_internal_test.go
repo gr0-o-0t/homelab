@@ -2,17 +2,23 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/99designs/keyring"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
 	dswarm "github.com/docker/docker/api/types/swarm"
+	dockerspec "github.com/moby/docker-image-spec/specs-go/v1"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/groot/homelab/internal/secrets"
+	"github.com/groot/homelab/internal/session"
 	"github.com/groot/homelab/internal/swarm"
 	"github.com/groot/homelab/internal/swarm/swarmtest"
 )
@@ -21,10 +27,14 @@ import (
 func fakeSwarm(t *testing.T) *swarmtest.Fake {
 	t.Helper()
 	f := swarmtest.New()
-	f.SetImage("nginx:1", image.InspectResponse{})
-	old := newSwarmAPI
+	f.SetImage("nginx:1", image.InspectResponse{Config: &dockerspec.DockerOCIImageConfig{
+		ImageConfig: ocispec.ImageConfig{Cmd: []string{"nginx"}},
+	}})
+	old, oldSecrets := newSwarmAPI, openSecrets
 	newSwarmAPI = func() (swarm.API, error) { return f, nil }
-	t.Cleanup(func() { newSwarmAPI = old })
+	sm := secrets.NewForTest(keyring.NewArrayKeyring(nil))
+	openSecrets = func() (*secrets.Manager, error) { return sm, nil }
+	t.Cleanup(func() { newSwarmAPI, openSecrets = old, oldSecrets })
 	return f
 }
 
@@ -101,6 +111,40 @@ func TestLifecycle_ServiceVerbsRunOnSwarm(t *testing.T) {
 	secs, err := f.SecretList(context.Background(), dswarm.SecretListOptions{})
 	require.NoError(t, err)
 	assert.Empty(t, secs, "delete removes the env secrets")
+}
+
+func TestLifecycle_RestartAfterStopRuns(t *testing.T) {
+	f := fakeSwarm(t)
+	root := webFixture(t)
+	runCLI(t, root, "up", "alpha")
+	runCLI(t, root, "stop", "alpha")
+	require.Equal(t, uint64(0), replicasOf(alphaServices(t, f)[0]))
+	runCLI(t, root, "restart", "alpha")
+	assert.Equal(t, uint64(1), replicasOf(alphaServices(t, f)[0]), "restart after stop runs the service")
+	assert.Equal(t, session.Running, loadDesired(t, root).Services["alpha"])
+}
+
+// R23: without the secrets manager, verbs that start containers refuse;
+// stopping still works.
+func TestLifecycle_NoSecretsManagerRefusesDeploy(t *testing.T) {
+	f := fakeSwarm(t)
+	root := webFixture(t)
+	runCLI(t, root, "up", "alpha")
+	openSecrets = func() (*secrets.Manager, error) { return nil, errors.New("vault locked") }
+
+	before := len(f.CallLog())
+	for _, verb := range []string{"up", "start", "restart", "update"} {
+		resetFlags()
+		rootCmd.SetArgs([]string{"--config-dir", root, verb, "alpha"})
+		err := rootCmd.Execute()
+		require.Error(t, err, verb)
+		assert.Contains(t, err.Error(), "vault locked", verb)
+	}
+	resetFlags()
+	assert.Len(t, f.CallLog(), before, "no Swarm call made")
+
+	runCLI(t, root, "stop", "alpha")
+	assert.Equal(t, uint64(0), replicasOf(alphaServices(t, f)[0]), "stop still works")
 }
 
 // R20: the core stack still runs on compose for now.

@@ -2,6 +2,7 @@ package swarm
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 
@@ -78,6 +79,26 @@ func (d *Deployer) ensureStackNetworks(ctx context.Context, st Stack) error {
 		}
 	}
 	return nil
+}
+
+// removeStackNetworks deletes the overlays labelled as svc's own, once its
+// services are gone. home-services carries no service label and is never
+// removed.
+func (d *Deployer) removeStackNetworks(ctx context.Context, svc string) error {
+	list, err := d.API.NetworkList(ctx, network.ListOptions{Filters: byService(svc)})
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for i := range list {
+		if list[i].Name == SharedNetwork || list[i].Labels[LabelService] != svc {
+			continue
+		}
+		if err := d.API.NetworkRemove(ctx, list[i].ID); err != nil && !errdefs.IsNotFound(err) {
+			errs = append(errs, fmt.Errorf("removing network %s: %w", list[i].Name, err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // checkAliases refuses a stack whose names on home-services (compose key,

@@ -124,7 +124,7 @@ func startSharedDB(ctx context.Context, root string, dbType config.DBType, p *db
 	if err := ensureGeneratedSecrets(p, shared); err != nil {
 		return err
 	}
-	if err := deploy(root, shared, (*swarm.Deployer).Up); err != nil {
+	if err := deployRunning(root, shared, (*swarm.Deployer).Up); err != nil {
 		return fmt.Errorf("starting %s: %w", shared, err)
 	}
 

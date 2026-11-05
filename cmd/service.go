@@ -146,7 +146,7 @@ func upOne(root, name string) error {
 		return err
 	}
 	fmt.Printf("%s Starting %s…\n", styles.Primary.Render("→"), styles.Bold.Render(name))
-	if err := deploy(root, name, (*swarm.Deployer).Up); err != nil {
+	if err := deployRunning(root, name, (*swarm.Deployer).Up); err != nil {
 		return err
 	}
 	return bootstrapIfShared(ctx, root, name)
@@ -184,7 +184,7 @@ func runServiceRestart(_ *cobra.Command, args []string) error {
 			return err
 		}
 		fmt.Printf("%s Restarting %s…\n", styles.Primary.Render("→"), styles.Bold.Render(name))
-		return deploy(root, name, (*swarm.Deployer).Restart)
+		return deployRunning(root, name, (*swarm.Deployer).Restart)
 	})
 }
 

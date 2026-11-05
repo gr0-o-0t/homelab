@@ -27,6 +27,7 @@ type API interface {
 	NodeUpdate(ctx context.Context, nodeID string, version swarm.Version, node swarm.NodeSpec) error
 	NetworkList(ctx context.Context, options network.ListOptions) ([]network.Summary, error)
 	NetworkCreate(ctx context.Context, name string, options network.CreateOptions) (network.CreateResponse, error)
+	NetworkRemove(ctx context.Context, networkID string) error
 	SecretList(ctx context.Context, options swarm.SecretListOptions) ([]swarm.Secret, error)
 	SecretCreate(ctx context.Context, secret swarm.SecretSpec) (swarm.SecretCreateResponse, error)
 	SecretRemove(ctx context.Context, id string) error

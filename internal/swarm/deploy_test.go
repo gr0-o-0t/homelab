@@ -78,7 +78,8 @@ func newDeployer(t *testing.T) (*swarm.Deployer, *swarmtest.Fake, string) {
 	withImage(f, "nginx:1", []string{"/docker-entrypoint.sh"}, []string{"nginx", "-g", "daemon off;"})
 	withImage(f, "gitea/gitea:1", nil, []string{"/usr/bin/entrypoint"})
 	root := t.TempDir()
-	return &swarm.Deployer{API: f, Root: root}, f, root
+	sm := secrets.NewForTest(keyring.NewArrayKeyring(nil))
+	return &swarm.Deployer{API: f, Root: root, SM: sm}, f, root
 }
 
 func node(id string, role string, state dswarm.NodeState, avail dswarm.NodeAvailability) dswarm.Node {
@@ -294,6 +295,123 @@ func TestDeploy_RestartForcesUpdate(t *testing.T) {
 	before := services(t, f, "web")[0].Spec.TaskTemplate.ForceUpdate
 	require.NoError(t, d.Restart(ctx, "web"))
 	assert.Equal(t, before+1, services(t, f, "web")[0].Spec.TaskTemplate.ForceUpdate)
+}
+
+func TestDeploy_RestartRevivesStoppedService(t *testing.T) {
+	ctx := context.Background()
+	d, f, root := newDeployer(t)
+	writeService(t, root, "web", strings.Replace(webCompose, "%s", "bar", 1))
+	require.NoError(t, d.Up(ctx, "web"))
+	require.NoError(t, d.Down(ctx, "web"))
+	require.NoError(t, d.Restart(ctx, "web"))
+	s := services(t, f, "web")[0]
+	assert.Equal(t, uint64(1), replicas(s), "restart means running afterwards")
+	assert.Equal(t, uint64(1), s.Spec.TaskTemplate.ForceUpdate)
+}
+
+// R23: no secrets manager, no deploy — Up would rotate a working env secret
+// to one missing every secret. Taking things down stays possible.
+func TestDeploy_RefusesWithoutSecretsManager(t *testing.T) {
+	ctx := context.Background()
+	d, f, root := newDeployer(t)
+	writeService(t, root, "web", strings.Replace(webCompose, "%s", "bar", 1))
+	require.NoError(t, d.Up(ctx, "web"))
+
+	d.SM = nil
+	before := len(f.CallLog())
+	require.ErrorIs(t, d.Up(ctx, "web"), swarm.ErrNoSecrets)
+	require.ErrorIs(t, d.Update(ctx, "web"), swarm.ErrNoSecrets)
+	require.ErrorIs(t, d.Restart(ctx, "web"), swarm.ErrNoSecrets)
+	assert.Len(t, f.CallLog(), before, "nothing touched")
+	assert.Contains(t, swarm.ErrNoSecrets.Error(), "keyring")
+
+	require.NoError(t, d.Down(ctx, "web"))
+	require.NoError(t, d.Pull(ctx, "web"))
+	require.NoError(t, d.Remove(ctx, "web"))
+}
+
+func TestDeploy_RemoveDeletesStackNetworks(t *testing.T) {
+	ctx := context.Background()
+	d, f, root := newDeployer(t)
+	writeService(t, root, "web", `
+networks:
+  home-services:
+    name: home-services
+    external: true
+  internal:
+    internal: true
+services:
+  web:
+    image: nginx:1
+    networks: [home-services, internal]
+`)
+	require.NoError(t, d.Up(ctx, "web"))
+	nets, err := f.NetworkList(ctx, network.ListOptions{})
+	require.NoError(t, err)
+	require.Len(t, nets, 2)
+
+	require.NoError(t, d.Remove(ctx, "web"))
+	nets, err = f.NetworkList(ctx, network.ListOptions{})
+	require.NoError(t, err)
+	require.Len(t, nets, 1)
+	assert.Equal(t, "home-services", nets[0].Name, "the shared overlay is never removed")
+}
+
+func TestDeploy_UpRefusesImageWithoutCommand(t *testing.T) {
+	ctx := context.Background()
+	d, f, root := newDeployer(t)
+	f.SetImage("bare:1", image.InspectResponse{})
+	writeService(t, root, "bare", `
+services:
+  bare:
+    image: bare:1
+    environment:
+      FOO: bar
+`)
+	err := d.Up(ctx, "bare")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "bare_bare")
+	assert.Contains(t, err.Error(), "bare:1")
+	assert.Empty(t, services(t, f, "bare"))
+}
+
+// racingAPI updates the service behind the deployer's back on the first
+// ServiceUpdate, so the deployer's version is stale exactly once.
+type racingAPI struct {
+	*swarmtest.Fake
+	raced bool
+}
+
+func (r *racingAPI) ServiceUpdate(ctx context.Context, id string, v dswarm.Version, spec dswarm.ServiceSpec,
+	o dswarm.ServiceUpdateOptions,
+) (dswarm.ServiceUpdateResponse, error) {
+	if !r.raced {
+		r.raced = true
+		cur, _, err := r.ServiceInspectWithRaw(ctx, id, dswarm.ServiceInspectOptions{})
+		if err != nil {
+			return dswarm.ServiceUpdateResponse{}, err
+		}
+		other := cur.Spec
+		other.Labels = map[string]string{"raced": "yes"}
+		if _, err := r.Fake.ServiceUpdate(ctx, id, cur.Version, other, o); err != nil {
+			return dswarm.ServiceUpdateResponse{}, err
+		}
+	}
+	return r.Fake.ServiceUpdate(ctx, id, v, spec, o)
+}
+
+func TestDeploy_UpRetriesStaleVersion(t *testing.T) {
+	ctx := context.Background()
+	d, f, root := newDeployer(t)
+	writeService(t, root, "web", strings.Replace(webCompose, "%s", "bar", 1))
+	require.NoError(t, d.Up(ctx, "web"))
+
+	d.API = &racingAPI{Fake: f}
+	require.NoError(t, d.Up(ctx, "web"), "a stale version is re-inspected and retried once")
+	s := services(t, f, "web")[0]
+	assert.Equal(t, "web", s.Spec.Labels[swarm.LabelService], "our spec won, not the racer's")
+	assert.Equal(t, 3, count(f.CallLog(), "ServiceUpdate"), "racer's update, our stale attempt, our retry")
+	assert.Equal(t, 3, count(f.CallLog(), "ServiceInspectWithRaw"), "ours before each attempt, plus the racer's")
 }
 
 func TestDeploy_PullPullsEveryImage(t *testing.T) {

@@ -41,6 +41,11 @@ func (d *Deployer) withEnvSecret(ctx context.Context, svc string, spec *swarm.Se
 	if img.Config != nil {
 		entry, cmd = img.Config.Entrypoint, img.Config.Cmd
 	}
+	// The shim needs something to exec; caught here rather than as a task
+	// that dies at start.
+	if cs := spec.TaskTemplate.ContainerSpec; len(cs.Command)+len(cs.Args)+len(entry)+len(cmd) == 0 {
+		return fmt.Errorf("%s: image %s has no entrypoint or command and the compose file sets none", spec.Name, ref)
+	}
 	content := envshim.Encode(env)
 	name := envshim.SecretName(spec.Name, content)
 	id, err := d.ensureSecret(ctx, svc, name, content)
