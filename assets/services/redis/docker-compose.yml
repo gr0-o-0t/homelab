@@ -24,15 +24,17 @@ services:
     image: redis:${REDIS_VERSION:-8-alpine}
     container_name: homelab-redis
     restart: always
-    # The image entrypoint still drops to the redis user for redis-server.
-    # `:?` makes compose refuse to start an unauthenticated instance.
+    # The password is read from the environment at runtime, never put on the
+    # command line in the file: a Swarm service spec (and `docker service
+    # inspect`) would show it. The shell hands off to the image entrypoint,
+    # which still drops to the redis user for redis-server.
     command:
-      - redis-server
-      - --requirepass
-      - ${REDIS_PASSWORD:?REDIS_PASSWORD is not set — run `homelab up redis`}
-      - --databases
-      - "64"
+      - sh
+      - -c
+      - exec docker-entrypoint.sh redis-server --requirepass "$$REDIS_PASSWORD" --databases 64
     environment:
+      # `:?` refuses to start an unauthenticated instance.
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is not set — run `homelab up redis`}
       # redis-cli inside the container (healthcheck, provisioner) authenticates
       # with this automatically.
       REDISCLI_AUTH: ${REDIS_PASSWORD}

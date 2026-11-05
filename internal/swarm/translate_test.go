@@ -1,6 +1,7 @@
 package swarm_test
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/groot/homelab/internal/config"
+	"github.com/groot/homelab/internal/secrets"
 	"github.com/groot/homelab/internal/swarm"
 )
 
@@ -42,7 +44,7 @@ func dummyEnv(t *testing.T, composeFile string) map[string]string {
 func translate(t *testing.T, name string) swarm.Stack {
 	t.Helper()
 	dir := filepath.Join("testdata", name)
-	st, err := swarm.Translate(dir, dummyEnv(t, filepath.Join(dir, "docker-compose.yml")), nil, false)
+	st, err := swarm.Translate(dir, dummyEnv(t, filepath.Join(dir, "docker-compose.yml")), nil, nil, false)
 	require.NoError(t, err)
 	return st
 }
@@ -200,13 +202,13 @@ func TestTranslate_ContainerFields(t *testing.T) {
 func TestTranslate_RoleLabelFollowsPlacement(t *testing.T) {
 	dir := filepath.Join("testdata", "internalnet")
 	cfg := &config.Config{Placement: map[string]string{"job": "any"}}
-	st, err := swarm.Translate(dir, dummyEnv(t, filepath.Join(dir, "docker-compose.yml")), cfg, false)
+	st, err := swarm.Translate(dir, dummyEnv(t, filepath.Join(dir, "docker-compose.yml")), nil, cfg, false)
 	require.NoError(t, err)
 	assert.Equal(t, "core", specByName(t, st, "internalnet_web").Labels["homelab.role"], "named volume")
 	assert.Equal(t, "worker", specByName(t, st, "internalnet_worker").Labels["homelab.role"])
 	assert.Equal(t, "any", specByName(t, st, "internalnet_job").Labels["homelab.role"])
 
-	st, err = swarm.Translate(dir, dummyEnv(t, filepath.Join(dir, "docker-compose.yml")), cfg, true)
+	st, err = swarm.Translate(dir, dummyEnv(t, filepath.Join(dir, "docker-compose.yml")), nil, cfg, true)
 	require.NoError(t, err)
 	assert.Equal(t, "core", specByName(t, st, "internalnet_job").Labels["homelab.role"], "db provider")
 }
@@ -236,7 +238,7 @@ func TestTranslate_HostBindStays(t *testing.T) {
 }
 
 func TestTranslate_PrivilegedUnsupported(t *testing.T) {
-	_, err := swarm.Translate(filepath.Join("testdata", "privileged"), nil, nil, false)
+	_, err := swarm.Translate(filepath.Join("testdata", "privileged"), nil, nil, nil, false)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, swarm.ErrUnsupported))
 	assert.Contains(t, err.Error(), "privileged")
@@ -248,9 +250,101 @@ func TestTranslate_DevicesUnsupported(t *testing.T) {
 	require.NoError(t, os.Mkdir(dir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte(
 		"services:\n  render:\n    image: example/render:1\n    devices:\n      - /dev/dri:/dev/dri\n"), 0o644))
-	_, err := swarm.Translate(dir, nil, nil, false)
+	_, err := swarm.Translate(dir, nil, nil, nil, false)
 	require.ErrorIs(t, err, swarm.ErrUnsupported)
 	assert.Contains(t, err.Error(), "gpu/render")
+}
+
+// secretDBKeys are the databases: env mappings that carry credentials.
+var secretDBKeys = []string{"password", "dsn", "secret_key", "access_key"}
+
+// seedSecrets gives every secret-ish variable a distinct sentinel value in
+// env and returns those values: the service's declared secrets, names
+// secrets.IsSecret flags, and the env names its databases: credentials bind.
+func seedSecrets(t *testing.T, env map[string]string, cfg *config.Config) []string {
+	t.Helper()
+	names := map[string]bool{}
+	for name := range env {
+		if secrets.IsSecret(name) {
+			names[name] = true
+		}
+	}
+	if cfg != nil {
+		for name := range cfg.Secrets {
+			names[name] = true
+		}
+		dbs, err := cfg.ServiceDatabases()
+		require.NoError(t, err)
+		for _, d := range dbs {
+			for _, k := range secretDBKeys {
+				if n := d.Env[k]; n != "" {
+					names[n] = true
+				}
+			}
+		}
+	}
+	var values []string
+	for name := range names {
+		v := "s3ntinel-" + name + "-x"
+		env[name] = v
+		values = append(values, v)
+	}
+	return values
+}
+
+func TestTranslate_SecretInCommandRejected(t *testing.T) {
+	dir := filepath.Join("testdata", "secretcmd")
+	env := map[string]string{"APP_TOKEN": "hunter2-very-secret"}
+	_, err := swarm.Translate(dir, env, []string{"hunter2-very-secret"}, nil, false)
+	require.ErrorIs(t, err, swarm.ErrSecretInSpec)
+	assert.Contains(t, err.Error(), "secretcmd/app")
+	assert.NotContains(t, err.Error(), "hunter2")
+
+	_, err = swarm.Translate(dir, env, []string{"abc"}, nil, false)
+	assert.NoError(t, err, "values under 4 bytes are not checked")
+}
+
+func TestTranslate_GiteaEnvironmentResolved(t *testing.T) {
+	dir := filepath.Join("testdata", "gitea")
+	env := dummyEnv(t, filepath.Join(dir, "docker-compose.yml"))
+	env["GI_DB_HOST"] = "homelab-postgres"
+	env["GI_DB_PORT"] = "5432"
+	env["GI_DB_PASS"] = "pg-pass-value"
+	st, err := swarm.Translate(dir, env, []string{"pg-pass-value"}, nil, false)
+	require.NoError(t, err)
+
+	e := st.Env["gitea_gitea"]
+	require.NotNil(t, e)
+	assert.Equal(t, "homelab-postgres:5432", e["GITEA__database__HOST"])
+	assert.Equal(t, "pg-pass-value", e["GITEA__database__PASSWD"])
+	assert.Equal(t, "2222", e["GITEA__server__SSH_PORT"])
+
+	data, err := json.Marshal(st.Services)
+	require.NoError(t, err)
+	for _, v := range []string{"homelab-postgres:5432", "pg-pass-value", "GITEA__database"} {
+		assert.NotContains(t, string(data), v)
+	}
+}
+
+func TestTranslate_EnvironmentWithoutValueTakesEnv(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "bare")
+	require.NoError(t, os.Mkdir(dir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte(
+		"services:\n  app:\n    image: example/app:1\n    environment:\n      - PRESENT\n      - ABSENT\n"), 0o644))
+	st, err := swarm.Translate(dir, map[string]string{"PRESENT": "yes"}, nil, nil, false)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"PRESENT": "yes"}, st.Env["bare_app"])
+}
+
+func TestTranslate_WritableBindUnderServiceDirUnsupported(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "rw")
+	require.NoError(t, os.Mkdir(dir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte(
+		"services:\n  app:\n    image: example/app:1\n    volumes:\n      - ./state.json:/state.json\n"), 0o644))
+	_, err := swarm.Translate(dir, nil, nil, nil, false)
+	require.ErrorIs(t, err, swarm.ErrUnsupported)
+	assert.Contains(t, err.Error(), "rw/app")
+	assert.Contains(t, err.Error(), "state.json")
 }
 
 // Every catalog service but minero (privileged xmrig) must translate.
@@ -276,7 +370,9 @@ func TestTranslate_EveryCatalogServiceTranslates(t *testing.T) {
 				require.NoError(t, err)
 			}
 			_, provider := config.IsSharedDBService(e.Name())
-			st, err := swarm.Translate(dir, dummyEnv(t, compose), cfg, provider)
+			env := dummyEnv(t, compose)
+			sentinels := seedSecrets(t, env, cfg)
+			st, err := swarm.Translate(dir, env, sentinels, cfg, provider)
 			if e.Name() == "minero" {
 				require.ErrorIs(t, err, swarm.ErrUnsupported)
 				assert.Contains(t, err.Error(), "minero")

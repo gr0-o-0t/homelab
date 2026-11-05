@@ -1,7 +1,9 @@
 package swarm
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -24,6 +26,46 @@ import (
 // (privileged containers, host devices, network_mode, build).
 var ErrUnsupported = errors.New("not supported on swarm")
 
+// ErrSecretInSpec means a secret value would be visible in a service spec.
+var ErrSecretInSpec = errors.New("secret value in service spec: pass it through environment: instead")
+
+// minSecretLen keeps trivially short values (a "1", "no") from matching
+// unrelated spec text.
+const minSecretLen = 4
+
+// checkNoSecrets refuses a spec whose JSON contains any secret value, raw or
+// JSON-escaped. The error never includes the value.
+func checkNoSecrets(spec swarm.ServiceSpec, secretValues []string) error {
+	data, err := json.Marshal(spec)
+	if err != nil {
+		return err
+	}
+	for _, v := range secretValues {
+		if len(v) < minSecretLen {
+			continue
+		}
+		esc, _ := json.Marshal(v)
+		if bytes.Contains(data, []byte(v)) || bytes.Contains(data, esc[1:len(esc)-1]) {
+			return ErrSecretInSpec
+		}
+	}
+	return nil
+}
+
+// environment resolves a container's compose `environment:`. Entries
+// without a value (`- NAME`) take it from env, or are left out.
+func environment(svc types.ServiceConfig, env map[string]string) map[string]string {
+	out := map[string]string{}
+	for k, v := range svc.Environment {
+		if v != nil {
+			out[k] = *v
+		} else if e, ok := env[k]; ok {
+			out[k] = e
+		}
+	}
+	return out
+}
+
 // Label keys every translated service carries.
 const (
 	LabelNamespace = "com.docker.stack.namespace"
@@ -31,8 +73,8 @@ const (
 	LabelRole      = "homelab.role"
 )
 
-// Stack is one catalog service translated into Swarm objects. Nothing in it
-// is secret: the environment is attached later (WithEnv, Task 7).
+// Stack is one catalog service translated into Swarm objects. Only Env may
+// hold secrets; the specs never do.
 type Stack struct {
 	Name     string
 	Services []swarm.ServiceSpec
@@ -43,6 +85,10 @@ type Stack struct {
 	Configs []FileConfig
 	// Networks are the stack's own overlays (not home-services).
 	Networks []NetworkSpec
+	// Env is each container's resolved compose `environment:`, keyed by
+	// service spec name. It may hold secrets; Task 7 passes it through a
+	// Swarm secret, never the spec.
+	Env map[string]map[string]string
 }
 
 // FileConfig is a bind mount of a path under the service directory.
@@ -55,8 +101,12 @@ type FileConfig struct {
 
 // Translate loads <svcDir>/docker-compose.yml, interpolating env, and turns
 // each compose service into a Swarm service spec named <svc>_<compose key>.
-// env is only used for ${VAR} interpolation and never lands in the spec.
-func Translate(svcDir string, env map[string]string, cfg *config.Config, dbProvider bool) (Stack, error) {
+// env is used for ${VAR} interpolation and to resolve `environment:`, which
+// lands in Stack.Env, never in a spec. A spec containing any of secretValues
+// (those of 4+ bytes) is refused with ErrSecretInSpec: a secret interpolated
+// into command, labels or a healthcheck would show in `docker service
+// inspect`.
+func Translate(svcDir string, env map[string]string, secretValues []string, cfg *config.Config, dbProvider bool) (Stack, error) {
 	abs, err := filepath.Abs(svcDir)
 	if err != nil {
 		return Stack{}, err
@@ -68,13 +118,19 @@ func Translate(svcDir string, env map[string]string, cfg *config.Config, dbProvi
 	}
 
 	nets := planNetworks(name, proj)
-	st := Stack{Name: name, Networks: nets.specs}
+	st := Stack{Name: name, Networks: nets.specs, Env: map[string]map[string]string{}}
 	volumes := map[string]bool{}
 	for _, key := range slices.Sorted(maps.Keys(proj.Services)) {
 		svc := proj.Services[key]
 		spec, cfgs, vols, err := translateService(name, abs, proj, svc, nets, cfg, dbProvider)
 		if err != nil {
 			return Stack{}, err
+		}
+		if err := checkNoSecrets(spec, secretValues); err != nil {
+			return Stack{}, fmt.Errorf("%s/%s: %w", name, key, err)
+		}
+		if e := environment(svc, env); len(e) > 0 {
+			st.Env[spec.Name] = e
 		}
 		st.Services = append(st.Services, spec)
 		st.Configs = append(st.Configs, cfgs...)
@@ -127,6 +183,8 @@ func translateService(stack, dir string, proj *types.Project, svc types.ServiceC
 		return swarm.ServiceSpec{}, nil, nil, unsupported(stack, key, "network_mode")
 	case svc.Image == "":
 		return swarm.ServiceSpec{}, nil, nil, unsupported(stack, key, "build without image")
+	case len(svc.EnvFiles) > 0:
+		return swarm.ServiceSpec{}, nil, nil, unsupported(stack, key, "env_file")
 	}
 
 	specName := stack + "_" + key

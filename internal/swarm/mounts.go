@@ -27,6 +27,9 @@ func translateMounts(stack, dir, specName string, proj *types.Project, svc types
 		switch v.Type {
 		case types.VolumeTypeBind:
 			if rel, ok := under(dir, v.Source); ok {
+				if !v.ReadOnly { // a config is read-only; don't silently drop writes
+					return nil, nil, nil, unsupported(stack, svc.Name, "writable bind ./"+rel)
+				}
 				cfgs = append(cfgs, FileConfig{Service: specName, Target: v.Target, Source: rel, Mode: configMode})
 				continue
 			}

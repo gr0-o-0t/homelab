@@ -1,0 +1,7 @@
+# Fixture: a secret interpolated into command, which would show in
+# `docker service inspect`.
+services:
+  app:
+    image: example/app:1
+    restart: always
+    command: ["app", "--token", "${APP_TOKEN}"]

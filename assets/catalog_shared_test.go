@@ -99,7 +99,9 @@ func TestRedis_DatabaseCountMatchesAllocator(t *testing.T) {
 		} `yaml:"services"`
 	}
 	require.NoError(t, yaml.Unmarshal(data, &cf))
-	cmd := cf.Services["redis"].Command
+	// The command is a `sh -c` script (the password comes from the
+	// environment), so look at its words.
+	cmd := strings.Fields(strings.Join(cf.Services["redis"].Command, " "))
 	for i, arg := range cmd {
 		if arg == "--databases" && i+1 < len(cmd) {
 			assert.Equal(t, strconv.Itoa(config.RedisDBCount), cmd[i+1])
