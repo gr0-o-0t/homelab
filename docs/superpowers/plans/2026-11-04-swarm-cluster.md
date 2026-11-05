@@ -164,7 +164,8 @@ Swarm has no soft affinity (`spread` balances, it does not prefer), so "prefer w
 - Produces: `swarm.WithEnv(spec *swarm.ServiceSpec, secretName string, origEntrypoint, origCmd []string)` — sets `ContainerSpec.Command = ["/hl/homelab","envshim","--", <orig entrypoint+cmd>...]`, `Args = nil`, mounts volume `homelab-shim` read-only at `/hl`, adds `SecretReference{SecretName: secretName, File: {Name: "/run/secrets/homelab-env", Mode: 0444, UID: "0", GID: "0"}}`.
 - `homelab envshim -- argv…`: read `/run/secrets/homelab-env`, `Decode`, merge over `os.Environ()`, `syscall.Exec(argv[0] resolved via PATH, argv, env)`.
 - Secret naming: `hl_<svc>_env_<first 12 hex of sha256(content)>` (content-addressed so updates roll; old ones removed after update).
-- Entrypoint/cmd of an image comes from `ImageInspectWithRaw` after `ImagePull` on the leader (Task 8 calls it).
+- Entrypoint/cmd of an image comes from `ImageInspectWithRaw` after `ImagePull` on the leader (Task 8 calls it). Precedence (ruling R17): compose `entrypoint`/`command` already in the spec (`ContainerSpec.Command`/`Args` set by Translate) win; the image's Entrypoint/Cmd only fill whichever compose left unset. Test `TestWithEnv_ComposeCommandBeatsImage`.
+- The secret's content is exactly `Stack.Env[spec.Name]` (ruling R15: the container's resolved compose `environment:`), encoded with `Encode`.
 
 - [ ] **Step 1: Failing tests** `TestEnvShim_RoundTripsAwkwardValues` (values `a=b`, `line1\nline2`, `"q"`, `  lead`, empty), `TestWithEnv_SpecHasNoPlainEnv` (spec JSON lacks every value), `TestWithEnv_CommandWrapsOriginal`, `TestEnvshimCmd_ExecsWithMergedEnv` (exec a test helper binary via `os.Args[0]` re-exec pattern; assert it sees the decoded vars).
 - [ ] **Step 2–4:** FAIL → implement → PASS.
@@ -180,7 +181,7 @@ Swarm has no soft affinity (`spread` balances, it does not prefer), so "prefer w
 - Consumes: `API` (Task 5), `Translate`/`WithEnv` (Tasks 6–7), `config.BuildEnv` (unchanged signature, `sm` from `secrets.OpenVault`).
 - Produces: `type Deployer struct{ API API; Root string; SM *secrets.Manager }` with
   `EnsureNetwork(ctx) error` (Global Constraints values),
-  `Up(ctx, svc string) error` (pull images, translate, create/update services, replicas 1, ensure volumes+secrets+configs, prune stale secrets),
+  `Up(ctx, svc string) error` (pull images, translate with `secretValues` = the values BuildEnv took from the vault (ruling R16; extend BuildEnv or add a sibling that also reports which keys are secret-sourced), create/update services, env secret per container from `Stack.Env[spec.Name]` (R15), replicas 1, ensure networks (`Stack.Networks`)+volumes+secrets+configs, prune stale secrets),
   `Down(ctx, svc string) error` (replicas 0; spec and volumes kept),
   `Restart(ctx, svc string) error` (`ForceUpdate++`),
   `Pull(ctx, svc string) error`, `Update(ctx, svc string) error` (pull + Up),
