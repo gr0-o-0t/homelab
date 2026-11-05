@@ -282,8 +282,13 @@ func (a *Agent) shim() {
 
 // InstallShim makes dir/homelab a mode-0555 copy of src. It writes only when
 // the content differs, through a temp file renamed into place, so a
-// container starting from the volume never sees a partial binary.
+// container starting from the volume never sees a partial binary. dir must
+// already exist: it is the homelab-shim volume's mount, and creating it would
+// put the shim in the container's own layer, where no service sees it.
 func InstallShim(src, dir string) error {
+	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+		return fmt.Errorf("the homelab-shim volume is not mounted at %s (the agent container needs -v homelab-shim:%s)", dir, dir)
+	}
 	want, err := os.ReadFile(src) //nolint:gosec // our own executable
 	if err != nil {
 		return err
@@ -293,9 +298,6 @@ func InstallShim(src, dir string) error {
 		if fi, err := os.Stat(dst); err == nil && fi.Mode().Perm() == 0o555 {
 			return nil
 		}
-	}
-	if err := os.MkdirAll(dir, 0o755); err != nil { //nolint:gosec // the volume is read by every container
-		return err
 	}
 	tmp, err := os.CreateTemp(dir, "."+ShimName+".*")
 	if err != nil {
@@ -317,7 +319,16 @@ func InstallShim(src, dir string) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp.Name(), dst)
+	if err := os.Rename(tmp.Name(), dst); err != nil {
+		return err
+	}
+	// Make the rename itself durable, or a crash can bring back the old name.
+	d, err := os.Open(dir) //nolint:gosec // the shim dir
+	if err != nil {
+		return err
+	}
+	defer func() { _ = d.Close() }()
+	return d.Sync()
 }
 
 // LeaderSecrets are the root secrets the leader reads straight from the
@@ -370,8 +381,8 @@ func (a *Agent) runLeader(ctx context.Context, p agentstate.Paths, sm *secrets.M
 	a.shim()
 	// 3. edge
 	ed := a.edge(p, sm, env["TS_AUTHKEY"])
-	if err := ed.Start(ctx); err != nil {
-		return fmt.Errorf("starting the edge: %w", err)
+	if up, err := a.startEdge(ctx, ed); !up {
+		return err // another agent runs here, or cancelled while retrying (nil)
 	}
 	defer func() {
 		if err := ed.Stop(); err != nil {
@@ -424,6 +435,32 @@ func (a *Agent) runLeader(ctx context.Context, p agentstate.Paths, sm *secrets.M
 	return a.serve(ctx, ln, cfg)
 }
 
+// startEdge starts the edge, retrying with backoff while the tailnet node or
+// the admin socket fails. A config that does not load leaves the edge up
+// (admin only) and is logged loudly: the rest of startup — DNS, cloudflared,
+// services, the remote CLI that can repair it — must not hang on a routing
+// file. Another agent answering on the admin socket is fatal (err).
+func (a *Agent) startEdge(ctx context.Context, ed Edge) (up bool, err error) {
+	for attempt := 0; ; attempt++ {
+		err := ed.Start(ctx)
+		switch {
+		case err == nil:
+			return true, nil
+		case errors.Is(err, edge.ErrConfigNotLoaded):
+			a.logf("agent: ERROR: the edge is up but serves no sites — its config did not load: %v. "+
+				"Fix the file it names, then run `homelab reload` (or enable/disable) to load it.", err)
+			return true, nil
+		case errors.Is(err, edge.ErrAnotherAgent):
+			return false, fmt.Errorf("starting the edge: %w", err)
+		}
+		d := backoff(attempt)
+		a.logf("agent: starting the edge: %v — retrying in %s", err, d)
+		if !a.sleep(ctx, d) {
+			return false, nil
+		}
+	}
+}
+
 func (a *Agent) runWorker(ctx context.Context, p agentstate.Paths, sm *secrets.Manager, secret, hostname string) error {
 	a.shim()
 	if hostname == "" {
@@ -434,7 +471,11 @@ func (a *Agent) runWorker(ctx context.Context, p agentstate.Paths, sm *secrets.M
 		a.logf("agent: reading TS_AUTHKEY: %v", err)
 	}
 	if authKey == "" {
-		authKey = os.Getenv("TS_AUTHKEY")
+		// Stopgap until join stores it in the vault: an env var is visible
+		// to anyone who can `docker inspect` the agent container.
+		if authKey = os.Getenv("TS_AUTHKEY"); authKey != "" {
+			a.logf("agent: warning: TS_AUTHKEY taken from the environment; run homelab join to store it in the vault")
+		}
 	}
 	newNode := a.NewNode
 	if newNode == nil {

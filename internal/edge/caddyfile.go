@@ -152,8 +152,9 @@ var expandableVars = map[string]bool{
 }
 
 // unsafeValueChars would let a value change the Caddyfile's structure: end a
-// token or a block, start a comment, open a quoted string.
-const unsafeValueChars = "\n\r}#\" \t\v\f"
+// token, open or close a block or placeholder, start a comment, open a quoted
+// or backquoted string.
+const unsafeValueChars = "\n\r{}#\"` \t\v\f"
 
 // expandEnv replaces every {$VAR} from env before Caddy sees the text, so the
 // adapter never consults the process environment and secrets are never
@@ -181,7 +182,7 @@ func expandEnv(text string, env map[string]string) (string, error) {
 			v = sub[2]
 		}
 		if strings.ContainsAny(v, unsafeValueChars) {
-			fail(name, fmt.Errorf("the value of %s contains whitespace, a newline, '}', '#' or '\"'", name))
+			fail(name, fmt.Errorf("the value of %s contains whitespace, a newline, '{', '}', '#', '\"' or '`'", name))
 			return m
 		}
 		return v
@@ -214,9 +215,21 @@ func adaptText(text string, env map[string]string) ([]byte, error) {
 	}
 	cfg, _, err := adapter.Adapt([]byte(expanded), map[string]any{"filename": "Caddyfile"})
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrInvalidConfig, err)
+		// The adapter quotes the tokens it chokes on, which after expansion
+		// may be a secret's value.
+		return nil, fmt.Errorf("%w: %s", ErrInvalidConfig, redact(err.Error(), env))
 	}
 	return cfg, nil
+}
+
+// redact replaces the values of env's secret-named variables in msg.
+func redact(msg string, env map[string]string) string {
+	for k, v := range env {
+		if len(v) >= 4 && secrets.IsSecret(k) {
+			msg = strings.ReplaceAll(msg, v, "<"+k+">")
+		}
+	}
+	return msg
 }
 
 // DefaultEnv is the env the Caddyfile's placeholders are filled from: root

@@ -19,6 +19,7 @@ import (
 
 	"github.com/groot/homelab/internal/agentstate"
 	"github.com/groot/homelab/internal/desired"
+	"github.com/groot/homelab/internal/edge"
 	"github.com/groot/homelab/internal/remote"
 	"github.com/groot/homelab/internal/secrets"
 )
@@ -99,9 +100,21 @@ type fakeEdge struct {
 	shim    string
 	ip      netip.Addr
 	authKey string
+	// startErrs are returned by successive Starts; then nil.
+	startErrs []error
 }
 
 func (e *fakeEdge) Start(context.Context) error {
+	if len(e.startErrs) > 0 {
+		err := e.startErrs[0]
+		e.startErrs = e.startErrs[1:]
+		e.rec.add("edge-start-failed")
+		if !errors.Is(err, edge.ErrConfigNotLoaded) {
+			return err
+		}
+		e.rec.add("edge") // up, admin only
+		return err
+	}
 	if _, err := os.Stat(e.shim); err == nil {
 		e.rec.add("shim")
 	}
@@ -153,6 +166,7 @@ func newHarness(t *testing.T, role Role) *harness {
 	bin := filepath.Join(t.TempDir(), "homelab-bin")
 	require.NoError(t, os.WriteFile(bin, []byte("#!binary v1"), 0o755)) //nolint:gosec // test binary
 	shimDir := filepath.Join(t.TempDir(), "hl")
+	require.NoError(t, os.Mkdir(shimDir, 0o755)) //nolint:gosec // the mounted volume
 
 	rec := &recorder{}
 	h := &harness{t: t, rec: rec, sm: sm, paths: paths, serving: make(chan remote.ServerConfig, 1)}
@@ -444,6 +458,7 @@ func TestAgent_CancelWhileWaiting(t *testing.T) {
 
 func TestAgent_ShimVolumeHoldsBinary(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "hl")
+	require.NoError(t, os.Mkdir(dir, 0o755)) //nolint:gosec // the mounted volume
 	src := filepath.Join(t.TempDir(), "homelab")
 	require.NoError(t, os.WriteFile(src, []byte("v1"), 0o700))
 	dst := filepath.Join(dir, ShimName)
@@ -483,6 +498,90 @@ func TestAgent_ShimVolumeHoldsBinary(t *testing.T) {
 	entries, err := os.ReadDir(dir)
 	require.NoError(t, err)
 	require.Len(t, entries, 1, "no temp files left behind")
+}
+
+// A missing homelab-shim mount is an error naming it — never a shim quietly
+// written into the container's own layer.
+func TestInstallShim_RequiresTheMountedVolume(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "homelab")
+	require.NoError(t, os.WriteFile(src, []byte("v1"), 0o700))
+	dir := filepath.Join(t.TempDir(), "hl")
+	err := InstallShim(src, dir)
+	require.ErrorContains(t, err, "homelab-shim volume is not mounted at "+dir)
+	assert.NoDirExists(t, dir)
+}
+
+// A broken routing file at boot leaves the edge up on an admin-only config:
+// the leader logs it loudly and carries on, so DNS, cloudflared, services and
+// the remote CLI that can fix it all come up.
+func TestAgent_BrokenEdgeConfigDoesNotStopStartup(t *testing.T) {
+	h := newHarness(t, RoleLeader)
+	h.writeConfig(map[string]string{"DOMAIN": "example.test"})
+	require.NoError(t, h.sm.Set("", "CLOUDFLARE_API_TOKEN", "cftok"))
+	h.writeDesired(map[string]desired.State{"postgres": desired.Running, "alpha": desired.Running})
+	h.edge.startErrs = []error{fmt.Errorf("%w: %w: Caddyfile:40: unrecognized directive: no_such_directive",
+		edge.ErrConfigNotLoaded, edge.ErrInvalidConfig)}
+
+	_, stop := h.start()
+	require.NoError(t, stop())
+	calls := h.rec.Calls()
+	assert.Equal(t, 1, countOf(calls, "edge-start-failed"), "not retried: the edge is up")
+	assert.Subset(t, calls, []string{"dns cftok example.test *.home.example.test 100.101.102.103",
+		"remove-cloudflared", "up postgres", "up alpha", "rebalance", "serve", "edge-stop"})
+	assert.Contains(t, h.rec.Logs(), "ERROR: the edge is up but serves no sites")
+	assert.Contains(t, h.rec.Logs(), "no_such_directive", "the cause is named")
+	assert.NotContains(t, h.rec.Logs(), "cftok", "never a secret")
+}
+
+// The tailnet node or the admin socket failing is retried in-process, not by
+// crashing the container.
+func TestAgent_EdgeStartFailureIsRetried(t *testing.T) {
+	h := newHarness(t, RoleLeader)
+	h.edge.startErrs = []error{errors.New("starting tailnet node: context deadline exceeded"),
+		errors.New("checking admin socket: permission denied")}
+	_, stop := h.start()
+	require.NoError(t, stop())
+	calls := h.rec.Calls()
+	assert.Equal(t, []string{"network", "edge-start-failed", "sleep 1s", "edge-start-failed", "sleep 2s", "shim", "edge"}, calls[:7])
+	assert.Contains(t, calls, "serve")
+}
+
+// Another agent on the same state is the one case that is fatal.
+func TestAgent_AnotherAgentIsFatal(t *testing.T) {
+	h := newHarness(t, RoleLeader)
+	h.writeDesired(map[string]desired.State{"alpha": desired.Running})
+	h.edge.startErrs = []error{fmt.Errorf("%w: its Caddy admin API answers on /x", edge.ErrAnotherAgent)}
+	err := h.a.Run(context.Background())
+	require.ErrorIs(t, err, edge.ErrAnotherAgent)
+	assert.NotContains(t, h.rec.Calls(), "up alpha")
+	assert.NotContains(t, h.rec.Calls(), "serve")
+}
+
+// The worker's env fallback for TS_AUTHKEY works but says it should not be
+// used.
+func TestAgent_WorkerTSAuthKeyFromEnvWarns(t *testing.T) {
+	t.Setenv("TS_AUTHKEY", "tskey-env")
+	h := newHarness(t, RoleWorker)
+	var got string
+	h.a.NewNode = func(_ context.Context, hostname, _, authKey string) (Node, error) {
+		got = authKey
+		return &fakeNode{rec: h.rec, hostname: hostname}, nil
+	}
+	_, stop := h.start()
+	require.NoError(t, stop())
+	assert.Equal(t, "tskey-env", got)
+	assert.Contains(t, h.rec.Logs(), "TS_AUTHKEY taken from the environment; run homelab join to store it in the vault")
+	assert.NotContains(t, h.rec.Logs(), "tskey-env")
+}
+
+func countOf(s []string, v string) int {
+	n := 0
+	for _, x := range s {
+		if x == v {
+			n++
+		}
+	}
+	return n
 }
 
 // The leader copies its own resolved executable, not os.Args[0].

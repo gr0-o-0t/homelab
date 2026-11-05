@@ -193,7 +193,7 @@ func TestAdapt_UnknownPlaceholderIsRefused(t *testing.T) {
 // An allowed value that would change the Caddyfile's structure (a newline, a
 // brace, a comment, a quote, a space) is refused, and never echoed.
 func TestAdapt_UnsafeValueIsRefused(t *testing.T) {
-	for _, bad := range []string{"a\nb", "a}b", "a#b", `a"b`, "a b", "a\tb"} {
+	for _, bad := range []string{"a\nb", "a}b", "a{b", "a#b", `a"b`, "a`b", "a b", "a\tb"} {
 		env := map[string]string{}
 		for k, v := range testEnv {
 			env[k] = v
@@ -397,6 +397,7 @@ func TestEdge_StartRefusesWhileAnotherAgentAnswers(t *testing.T) {
 	}()
 
 	err = e.Start(context.Background())
+	require.ErrorIs(t, err, ErrAnotherAgent)
 	require.ErrorContains(t, err, "another agent is running")
 	assert.FileExists(t, sock, "the live agent's socket is left alone")
 }
@@ -417,6 +418,58 @@ func TestEdge_StartRemovesStaleSocket(t *testing.T) {
 
 	require.NoError(t, e.Start(context.Background()))
 	assert.Equal(t, "one", mustGet(t, fmt.Sprintf("http://127.0.0.1:%d/", port)))
+}
+
+// A broken routing file at boot must not take the edge down with it: the
+// tailnet node and the admin socket stay up on an admin-only config, so the
+// CLI can load a fixed config through the socket.
+func TestEdge_StartWithBrokenConfigKeepsAdminUp(t *testing.T) {
+	root := t.TempDir()
+	port := freePort(t)
+	writeFile(t, siteFile(root, "web"), httpSite(port, "fixed"))
+	writeFile(t, siteFile(root, "broken"), "http://:1 {\n\tno_such_directive\n}\n")
+	e := testEdge(t, root)
+
+	err := e.Start(context.Background())
+	require.ErrorIs(t, err, ErrConfigNotLoaded)
+	require.ErrorIs(t, err, ErrInvalidConfig)
+	assert.ErrorContains(t, err, "no_such_directive", "the cause is named")
+
+	sock := AdminSocket(root)
+	require.NoError(t, Reachable(sock), "the admin API answers")
+	active.Lock()
+	up := active.tcp != nil
+	active.Unlock()
+	assert.True(t, up, "the tailnet listeners stay registered")
+	_, err = get(t, fmt.Sprintf("http://127.0.0.1:%d/", port))
+	assert.Error(t, err, "no sites are served from a config that did not load")
+
+	require.NoError(t, os.Remove(siteFile(root, "broken")))
+	cfg, err := e.adapt()
+	require.NoError(t, err)
+	require.NoError(t, PostLoad(sock, cfg), "a fixed config loads over the admin socket")
+	assert.Equal(t, "fixed", mustGet(t, fmt.Sprintf("http://127.0.0.1:%d/", port)))
+	require.NoError(t, e.Reload(), "and in-process")
+}
+
+// An env the edge cannot build (malformed config.yaml, a vault read error)
+// is the same: up, admin only.
+func TestEdge_StartWithEnvErrorKeepsAdminUp(t *testing.T) {
+	root := t.TempDir()
+	e := testEdge(t, root)
+	e.Env = func() (map[string]string, error) { return nil, errors.New("parsing config.yaml: bad indent") }
+	err := e.Start(context.Background())
+	require.ErrorIs(t, err, ErrConfigNotLoaded)
+	assert.ErrorContains(t, err, "parsing config.yaml")
+	require.NoError(t, Reachable(AdminSocket(root)))
+}
+
+func TestRedact_SecretValuesNeverInErrors(t *testing.T) {
+	env := map[string]string{"CLOUDFLARE_API_TOKEN": "cf-secret-123", "DOMAIN": "example.test"}
+	got := redact(`Caddyfile:3: unrecognized option "cf-secret-123" for example.test`, env)
+	assert.NotContains(t, got, "cf-secret-123")
+	assert.Contains(t, got, "<CLOUDFLARE_API_TOKEN>")
+	assert.Contains(t, got, "example.test", "non-secret values are kept")
 }
 
 // The CLI reloads the agent's Caddy over the admin socket.

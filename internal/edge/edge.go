@@ -133,7 +133,9 @@ func newForTest(root string, tcp ListenTCP, udp ListenUDP) *Edge {
 }
 
 // Start brings the tailnet node up, waits for its IPv4, and loads the config
-// assembled from every service's routing files.
+// assembled from every service's routing files. A config that does not load
+// leaves the edge up on an admin-only config and returns ErrConfigNotLoaded;
+// any other error leaves nothing running (ErrAnotherAgent: do not retry).
 func (e *Edge) Start(ctx context.Context) error {
 	if err := claimAdminSocket(AdminSocket(e.Root)); err != nil {
 		return err
@@ -176,10 +178,39 @@ func (e *Edge) Start(ctx context.Context) error {
 	setListeners(tcp, udp)
 
 	if err := e.Reload(); err != nil {
-		_ = e.Stop()
-		return err
+		// The routing files (or the env they need) are broken. Stopping
+		// here would take the tailnet node and the admin socket with it —
+		// and with them every way to repair the config. Run Caddy with
+		// only its admin API instead; a reload of a fixed config (the
+		// CLI's, over the admin socket, or Reload) brings the sites up.
+		if lerr := e.loadAdminOnly(); lerr != nil {
+			_ = e.Stop()
+			return fmt.Errorf("%w; the admin-only fallback failed too: %w", err, lerr)
+		}
+		return fmt.Errorf("%w: %w", ErrConfigNotLoaded, err)
 	}
 	return nil
+}
+
+// ErrConfigNotLoaded is a Start whose edge is up — tailnet node, admin
+// socket — but whose routing config did not load: Caddy serves its admin API
+// only until a fixed config is loaded. Stop it as usual.
+var ErrConfigNotLoaded = errors.New("the edge is up but its config did not load")
+
+// ErrAnotherAgent is a Start refused because another agent's Caddy answers
+// on the admin socket. Retrying cannot help.
+var ErrAnotherAgent = errors.New("another agent is running")
+
+// loadAdminOnly runs Caddy with its admin API on the unix socket and no
+// apps.
+func (e *Edge) loadAdminOnly() error {
+	text := fmt.Sprintf("{\n\tadmin %q\n\tstorage file_system %q\n\tpersist_config off\n}\n",
+		"unix/"+AdminSocket(e.Root)+"|0600", DataDir(e.Root))
+	cfg, err := adaptText(text, nil)
+	if err != nil {
+		return err
+	}
+	return caddy.Load(cfg, true)
 }
 
 // claimAdminSocket makes sock free for this agent's Caddy. Something
@@ -192,7 +223,7 @@ func claimAdminSocket(sock string) error {
 	switch {
 	case err == nil:
 		_ = c.Close()
-		return fmt.Errorf("another agent is running: its Caddy admin API answers on %s", sock)
+		return fmt.Errorf("%w: its Caddy admin API answers on %s", ErrAnotherAgent, sock)
 	case errors.Is(err, syscall.ENOENT):
 		return nil
 	case errors.Is(err, syscall.ECONNREFUSED):

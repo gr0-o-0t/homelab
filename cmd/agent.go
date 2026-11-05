@@ -83,8 +83,8 @@ func nodeInfoFrom(s dswarm.Info, hostname string) agent.NodeInfo {
 // ensureWildcardA makes name an A record to ip, DNS only (not proxied — a
 // tailnet IP is useless behind Cloudflare's proxy), through the Cloudflare
 // API with the token Caddy uses for DNS-01. It writes only when the record
-// differs; other A records of that name (an old IP) are removed, and a
-// record of another type is not ours to replace.
+// differs; other A records of that name (an old IP) are removed, a CNAME
+// there is not ours to replace, and other types (AAAA, TXT) are left alone.
 func ensureWildcardA(_ context.Context, token, zone, name string, ip netip.Addr) error {
 	return ensureARecord(cfAPIBase, token, zone, name, ip.String())
 }
@@ -107,11 +107,18 @@ func ensureARecord(apiBase, token, zone, name, ip string) error {
 		"type": "A", "name": name, "content": ip, "proxied": false, "ttl": 1,
 		"comment": "homelab: tailnet services (agent)",
 	}
+	// Only a CNAME conflicts with an A record (it must stand alone); AAAA,
+	// TXT and the like coexist and are not ours, so they are left alone.
+	as := records[:0]
 	for _, r := range records {
-		if r.Type != "A" {
-			return fmt.Errorf("a %s record for %s already exists (→ %s); not replacing it", r.Type, name, r.Content)
+		switch r.Type {
+		case "A":
+			as = append(as, r)
+		case "CNAME":
+			return fmt.Errorf("a CNAME record for %s already exists (→ %s); not replacing it", name, r.Content)
 		}
 	}
+	records = as
 	// The record already right is kept; failing that the first is updated.
 	for i, r := range records {
 		if r.Content == ip && !r.Proxied {

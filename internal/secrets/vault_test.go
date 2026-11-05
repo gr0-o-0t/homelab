@@ -30,6 +30,26 @@ func TestOpenVault_ManagerNamespaces(t *testing.T) {
 	}
 }
 
+// A key the vault does not hold reads as ("", nil), like the keyring
+// backends: the agent reads optional secrets (CF_TUNNEL_TOKEN, TS_AUTHKEY) on
+// every reload, and an error there would fail each one.
+func TestOpenVault_MissingKeyIsEmptyNotError(t *testing.T) {
+	d := t.TempDir()
+	m, err := secrets.OpenVault(filepath.Join(d, "v.enc"), filepath.Join(d, "v.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ns := range []string{"", "gitea"} {
+		v, err := m.Get(ns, "MISSING")
+		if err != nil || v != "" {
+			t.Fatalf("Get(%q, MISSING) = %q, %v; want \"\", nil", ns, v, err)
+		}
+		if m.IsSet(ns, "MISSING") {
+			t.Fatalf("IsSet(%q, MISSING) = true", ns)
+		}
+	}
+}
+
 func TestOpen_UsesVaultWhenEnvSet(t *testing.T) {
 	d := t.TempDir()
 	data, key := filepath.Join(d, "v.enc"), filepath.Join(d, "v.key")

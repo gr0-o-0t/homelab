@@ -155,6 +155,23 @@ func TestEnsureARecord_OtherTypeIsNotReplaced(t *testing.T) {
 	assert.Empty(t, cf.Writes())
 }
 
+// An AAAA (or TXT) record at the wildcard name coexists with the A record:
+// it is neither replaced nor in the way.
+func TestEnsureARecord_AAAAIsIgnored(t *testing.T) {
+	cf := &fakeCF{records: []map[string]any{
+		{"id": "v6", "type": "AAAA", "name": "*.home.example.com", "content": "fd7a:115c::1", "proxied": false},
+		{"id": "txt", "type": "TXT", "name": "*.home.example.com", "content": "hello", "proxied": false},
+	}}
+	srv := cf.server(t)
+	require.NoError(t, ensureARecord(srv.URL, "tok", "example.com", "*.home.example.com", "100.64.0.1"))
+	assert.Equal(t, []string{"POST 100.64.0.1"}, cf.Writes())
+	require.Equal(t, 3, cf.count())
+
+	require.NoError(t, ensureARecord(srv.URL, "tok", "example.com", "*.home.example.com", "100.64.0.2"))
+	assert.Equal(t, []string{"POST 100.64.0.1", "PATCH r1 100.64.0.2"}, cf.Writes(), "only the A record moves")
+	assert.Equal(t, "fd7a:115c::1", cf.get(0, "content"))
+}
+
 func TestNodeInfoFrom(t *testing.T) {
 	assert.Equal(t, agent.NodeInfo{Role: agent.RoleLeader, Hostname: "minis"},
 		nodeInfoFrom(dswarm.Info{LocalNodeState: dswarm.LocalNodeStateActive, ControlAvailable: true}, "minis"))
