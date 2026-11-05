@@ -64,7 +64,8 @@ func init() {
 // forwarded to the agent (see rootPreRun).
 func migratePreRun(c *cobra.Command) {
 	switch {
-	case c == migrateCmd, c == serviceUpdateCmd, strings.HasPrefix(c.Name(), "__"),
+	// The agent works on its own state root, not the config dir.
+	case c == migrateCmd, c == serviceUpdateCmd, c == agentCmd, strings.HasPrefix(c.Name(), "__"),
 		c.Name() == "completion", c.Name() == "help":
 		return
 	}
