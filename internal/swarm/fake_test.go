@@ -31,7 +31,7 @@ func TestFake_ServiceCreateThenList(t *testing.T) {
 	if err != nil || len(list) != 1 || list[0].Spec.Name != "web" {
 		t.Fatalf("list: %v %+v", err, list)
 	}
-	if got := f.Calls; len(got) != 2 || got[0] != "ServiceCreate web" || got[1] != "ServiceList" {
+	if got := f.CallLog(); len(got) != 2 || got[0] != "ServiceCreate web" || got[1] != "ServiceList" {
 		t.Fatalf("calls = %v", got)
 	}
 }
