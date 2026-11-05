@@ -18,9 +18,9 @@ func (d *Deployer) findNetwork(ctx context.Context, name string) (network.Summar
 	if err != nil {
 		return network.Summary{}, false, err
 	}
-	for _, n := range list {
-		if n.Name == name {
-			return n, true, nil
+	for i := range list {
+		if list[i].Name == name {
+			return list[i], true, nil
 		}
 	}
 	return network.Summary{}, false, nil
@@ -97,17 +97,17 @@ func (d *Deployer) checkAliases(ctx context.Context, st Stack) error {
 		return err
 	}
 	owner := map[string]string{}
-	for _, s := range all {
-		other := s.Spec.Labels[LabelService]
+	for i := range all {
+		other := all[i].Spec.Labels[LabelService]
 		if other == st.Name {
 			continue
 		}
-		for _, alias := range sharedAliases(s.Spec, shared) {
+		for _, alias := range sharedAliases(&all[i].Spec, shared) {
 			owner[alias] = other
 		}
 	}
-	for _, spec := range st.Services {
-		for _, alias := range sharedAliases(spec, shared) {
+	for i := range st.Services {
+		for _, alias := range sharedAliases(&st.Services[i], shared) {
 			if other, taken := owner[alias]; taken {
 				return fmt.Errorf("%s: the name %q on %s is already used by service %s — "+
 					"rename the compose service or its container_name in one of them",
@@ -118,7 +118,7 @@ func (d *Deployer) checkAliases(ctx context.Context, st Stack) error {
 	return nil
 }
 
-func sharedAliases(spec swarm.ServiceSpec, shared []string) []string {
+func sharedAliases(spec *swarm.ServiceSpec, shared []string) []string {
 	var out []string
 	for _, a := range spec.TaskTemplate.Networks {
 		if slices.Contains(shared, a.Target) {

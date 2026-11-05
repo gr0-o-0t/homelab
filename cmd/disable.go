@@ -7,8 +7,8 @@ import (
 	"github.com/groot/homelab/internal/caddy"
 	"github.com/groot/homelab/internal/network"
 	"github.com/groot/homelab/internal/network/layers"
-	"github.com/groot/homelab/internal/run"
 	"github.com/groot/homelab/internal/session"
+	"github.com/groot/homelab/internal/swarm"
 	"github.com/groot/homelab/internal/tui/styles"
 	"github.com/spf13/cobra"
 )
@@ -121,7 +121,7 @@ func runDisable(cmd *cobra.Command, args []string) error {
 	if disableStop {
 		recordService(root, svcName, session.Stopped)
 		fmt.Printf("  %s  Stopping container…\n", styles.Muted.Render("→"))
-		if err := stopAndRemoveService(root, svcName); err != nil {
+		if err := stopService(root, svcName); err != nil {
 			return err
 		}
 	}
@@ -130,11 +130,7 @@ func runDisable(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// stopAndRemoveService stops and removes a service container via docker compose down.
-func stopAndRemoveService(root, name string) error {
-	return run.Default().DockerComposeEnv(
-		run.ServiceComposeFile(root, name),
-		buildEnv(root, name),
-		"down",
-	)
+// stopService takes a service down: its Swarm services scale to zero.
+func stopService(root, name string) error {
+	return deploy(root, name, (*swarm.Deployer).Down)
 }

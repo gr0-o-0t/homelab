@@ -8,6 +8,7 @@ import (
 	"github.com/groot/homelab/internal/exposure"
 	"github.com/groot/homelab/internal/routing"
 	"github.com/groot/homelab/internal/session"
+	"github.com/groot/homelab/internal/swarm"
 	"github.com/groot/homelab/internal/tui/styles"
 	"github.com/spf13/cobra"
 )
@@ -71,10 +72,11 @@ func deleteOne(root, svcName string) error {
 		return err
 	}
 
-	// 1. Containers first. If they cannot be taken down, stop here: with the
-	// compose file deleted, nothing could take them down afterwards.
+	// 1. Containers first: its Swarm services, env secrets and configs
+	// (volumes stay). If they cannot be removed, stop here: with the service
+	// directory deleted, nothing would know to remove them afterwards.
 	fmt.Printf("  %s  Removing containers…\n", styles.Muted.Render("→"))
-	if err := stopAndRemoveService(root, svcName); err != nil {
+	if err := deploy(root, svcName, (*swarm.Deployer).Remove); err != nil {
 		if !deleteFlags.force {
 			return fmt.Errorf("taking %s down failed (%w) — nothing was deleted; fix that or pass --force", svcName, err)
 		}

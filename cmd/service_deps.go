@@ -12,6 +12,7 @@ import (
 	"github.com/groot/homelab/internal/run"
 	"github.com/groot/homelab/internal/secrets"
 	"github.com/groot/homelab/internal/session"
+	"github.com/groot/homelab/internal/swarm"
 	"github.com/groot/homelab/internal/tui/styles"
 )
 
@@ -123,11 +124,7 @@ func startSharedDB(ctx context.Context, root string, dbType config.DBType, p *db
 	if err := ensureGeneratedSecrets(p, shared); err != nil {
 		return err
 	}
-	if err := run.Default().DockerComposeEnv(
-		composeFile,
-		buildEnv(root, shared),
-		"up", "-d",
-	); err != nil {
+	if err := deploy(root, shared, (*swarm.Deployer).Up); err != nil {
 		return fmt.Errorf("starting %s: %w", shared, err)
 	}
 

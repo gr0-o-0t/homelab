@@ -12,7 +12,8 @@ import (
 var downCmd = &cobra.Command{
 	Use:   "down [service...]",
 	Short: "Stop and remove containers; exposure is kept (no service: the core stack)",
-	Long: `Stop and remove service containers and networks (equivalent to 'docker compose down').
+	Long: `Stop and remove containers. The core stack runs 'docker compose down'; a
+service's Swarm services scale to zero, keeping their configuration and volumes.
 Network exposure is configuration and is kept: 'up' brings the service back
 exactly as it was. Use 'homelab disable' to remove exposure.
 

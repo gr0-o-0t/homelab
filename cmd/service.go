@@ -16,6 +16,7 @@ import (
 	"github.com/groot/homelab/internal/scaffold"
 	"github.com/groot/homelab/internal/service"
 	"github.com/groot/homelab/internal/session"
+	"github.com/groot/homelab/internal/swarm"
 	"github.com/groot/homelab/internal/tui/styles"
 	"github.com/spf13/cobra"
 )
@@ -116,20 +117,26 @@ func runServiceUp(_ *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	extra := []string{}
-	if upFlags.build {
-		extra = append(extra, "--build")
-	}
+	warnNoBuild(upFlags.build)
 	return forEachService(root, names, func(name string) error {
 		recordService(root, name, session.Running)
-		return upOne(root, name, extra...)
+		return upOne(root, name)
 	})
 }
 
-// upOne is `up` for one service: shared databases first, then compose up.
-// `update` goes through here too, so a pulled service gets the same database
-// provisioning as a started one.
-func upOne(root, name string, extraArgs ...string) error {
+// warnNoBuild notes that --build only applies to the core stack: services
+// run on Swarm, which deploys pulled images and never builds.
+func warnNoBuild(build bool) {
+	if build {
+		fmt.Fprintf(os.Stderr, "%s --build only applies to the core stack; services run pulled images\n",
+			styles.Warning.Render("!"))
+	}
+}
+
+// upOne is `up` for one service: shared databases first, then deploy it on
+// Swarm. `start`, `update` and `restart --build` go through here too, so
+// every path gets the same database provisioning.
+func upOne(root, name string) error {
 	// Auto-configure root databases section for shared DB services.
 	if err := config.EnsureRootDBConfig(rootConfigFile(), name); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: auto-configuring databases: %v\n", err)
@@ -139,10 +146,7 @@ func upOne(root, name string, extraArgs ...string) error {
 		return err
 	}
 	fmt.Printf("%s Starting %s…\n", styles.Primary.Render("→"), styles.Bold.Render(name))
-	composeFile := run.ServiceComposeFile(root, name)
-	env := buildEnv(root, name)
-	warnPortCollisions([]string{composeFile}, env, nil)
-	if err := run.Default().DockerComposeEnv(composeFile, env, append([]string{"up", "-d"}, extraArgs...)...); err != nil {
+	if err := deploy(root, name, (*swarm.Deployer).Up); err != nil {
 		return err
 	}
 	return bootstrapIfShared(ctx, root, name)
@@ -160,12 +164,8 @@ func runServiceDown(_ *cobra.Command, args []string) error {
 	}
 	return forEachService(root, names, func(name string) error {
 		recordService(root, name, session.Stopped)
-		fmt.Printf("%s Removing %s…\n", styles.Warning.Render("→"), styles.Bold.Render(name))
-		return run.Default().DockerComposeEnv(
-			run.ServiceComposeFile(root, name),
-			buildEnv(root, name),
-			"down",
-		)
+		fmt.Printf("%s Stopping %s…\n", styles.Warning.Render("→"), styles.Bold.Render(name))
+		return deploy(root, name, (*swarm.Deployer).Down)
 	})
 }
 
@@ -175,6 +175,7 @@ func runServiceRestart(_ *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	warnNoBuild(restartFlags.build)
 	return forEachService(root, names, func(name string) error {
 		recordService(root, name, session.Running)
 		// Same reasoning as `up`: restarting a service whose database is down
@@ -182,14 +183,8 @@ func runServiceRestart(_ *cobra.Command, args []string) error {
 		if err := ensureDBDependencies(context.Background(), root, name); err != nil {
 			return err
 		}
-		composeArgs := []string{"restart"}
-		verb := "Restarting"
-		if restartFlags.build {
-			composeArgs = []string{"up", "-d", "--build"}
-			verb = "Rebuilding and recreating"
-		}
-		fmt.Printf("%s %s %s…\n", styles.Primary.Render("→"), verb, styles.Bold.Render(name))
-		return run.Default().DockerComposeEnv(run.ServiceComposeFile(root, name), buildEnv(root, name), composeArgs...)
+		fmt.Printf("%s Restarting %s…\n", styles.Primary.Render("→"), styles.Bold.Render(name))
+		return deploy(root, name, (*swarm.Deployer).Restart)
 	})
 }
 

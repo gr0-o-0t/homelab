@@ -21,8 +21,9 @@ Use 'up' to create and start containers.
   homelab start -a           # every installed service
   homelab start --group media  # all services in the "media" group
 
-Note: This runs 'docker compose start' under the hood — containers must
-already exist. Use 'homelab up' to create and start.`,
+Note: for the core stack this runs 'docker compose start' — containers must
+already exist. Services run on Swarm, which keeps no stopped containers:
+for them start is the same as 'homelab up'.`,
 	Args:              cobra.ArbitraryArgs,
 	ValidArgsFunction: completeServiceNames,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -53,10 +54,10 @@ func runServiceStart(_ *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	// Swarm keeps no stopped containers to resume: start is up.
 	return forEachService(root, names, func(name string) error {
 		recordService(root, name, session.Running)
-		fmt.Printf("%s Starting %s…\n", styles.Primary.Render("→"), styles.Bold.Render(name))
-		return run.Default().DockerComposeEnv(run.ServiceComposeFile(root, name), buildEnv(root, name), "start")
+		return upOne(root, name)
 	})
 }
 

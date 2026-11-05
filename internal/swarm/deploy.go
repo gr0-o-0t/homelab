@@ -101,20 +101,21 @@ func (d *Deployer) Up(ctx context.Context, svc string) error {
 		return err
 	}
 	existing := map[string]swarm.Service{}
-	for _, s := range list {
-		existing[s.Spec.Name] = s
+	for i := range list {
+		existing[list[i].Spec.Name] = list[i]
 	}
 
 	keep := keepSet{secrets: map[string]bool{}, configs: map[string]bool{}}
 	pulled := map[string]bool{}
-	for _, spec := range st.Services {
+	for i := range st.Services {
+		spec := &st.Services[i]
 		if err := d.pull(ctx, spec.TaskTemplate.ContainerSpec.Image, pulled); err != nil {
 			return err
 		}
-		if err := d.withEnvSecret(ctx, svc, &spec, st.Env[spec.Name], keep); err != nil {
+		if err := d.withEnvSecret(ctx, svc, spec, st.Env[spec.Name], keep); err != nil {
 			return err
 		}
-		if err := d.withConfigs(ctx, svc, &spec, st.Configs, keep); err != nil {
+		if err := d.withConfigs(ctx, svc, spec, st.Configs, keep); err != nil {
 			return err
 		}
 		if c := Constraints(Role(spec.Labels[LabelRole]), workerReady); len(c) > 0 {
@@ -126,13 +127,13 @@ func (d *Deployer) Up(ctx context.Context, svc string) error {
 		if cur, ok := existing[spec.Name]; ok {
 			delete(existing, spec.Name)
 			spec.TaskTemplate.ForceUpdate = cur.Spec.TaskTemplate.ForceUpdate
-			if _, err := d.API.ServiceUpdate(ctx, cur.ID, cur.Version, spec,
+			if _, err := d.API.ServiceUpdate(ctx, cur.ID, cur.Version, *spec,
 				swarm.ServiceUpdateOptions{QueryRegistry: true}); err != nil {
 				return fmt.Errorf("updating %s: %w", spec.Name, err)
 			}
 			continue
 		}
-		if _, err := d.API.ServiceCreate(ctx, spec, swarm.ServiceCreateOptions{QueryRegistry: true}); err != nil {
+		if _, err := d.API.ServiceCreate(ctx, *spec, swarm.ServiceCreateOptions{QueryRegistry: true}); err != nil {
 			return fmt.Errorf("creating %s: %w", spec.Name, err)
 		}
 	}
@@ -171,7 +172,8 @@ func (d *Deployer) eachService(ctx context.Context, svc string, mustExist bool, 
 		return fmt.Errorf("%s is not deployed — run `homelab up %s`", svc, svc)
 	}
 	var errs []error
-	for _, s := range list {
+	for i := range list {
+		s := &list[i]
 		spec := s.Spec
 		change(&spec)
 		if _, err := d.API.ServiceUpdate(ctx, s.ID, s.Version, spec, swarm.ServiceUpdateOptions{}); err != nil {
@@ -189,8 +191,8 @@ func (d *Deployer) Pull(ctx context.Context, svc string) error {
 		return err
 	}
 	pulled := map[string]bool{}
-	for _, spec := range st.Services {
-		if err := d.pull(ctx, spec.TaskTemplate.ContainerSpec.Image, pulled); err != nil {
+	for i := range st.Services {
+		if err := d.pull(ctx, st.Services[i].TaskTemplate.ContainerSpec.Image, pulled); err != nil {
 			return err
 		}
 	}
@@ -209,9 +211,9 @@ func (d *Deployer) Remove(ctx context.Context, svc string) error {
 	if err != nil {
 		return err
 	}
-	for _, s := range list {
-		if err := d.API.ServiceRemove(ctx, s.ID); err != nil {
-			return fmt.Errorf("removing %s: %w", s.Spec.Name, err)
+	for i := range list {
+		if err := d.API.ServiceRemove(ctx, list[i].ID); err != nil {
+			return fmt.Errorf("removing %s: %w", list[i].Spec.Name, err)
 		}
 	}
 	return d.prune(ctx, svc, keepSet{})
@@ -228,17 +230,19 @@ func (d *Deployer) Status(ctx context.Context, svc string) ([]TaskStatus, error)
 		return nil, err
 	}
 	host := map[string]string{}
-	for _, n := range nodes {
-		host[n.ID] = n.Description.Hostname
+	for i := range nodes {
+		host[nodes[i].ID] = nodes[i].Description.Hostname
 	}
 	var out []TaskStatus
-	for _, s := range list {
+	for i := range list {
+		s := &list[i]
 		tasks, err := d.API.TaskList(ctx, swarm.TaskListOptions{Filters: filters.NewArgs(
 			filters.Arg("service", s.ID), filters.Arg("desired-state", string(swarm.TaskStateRunning)))})
 		if err != nil {
 			return nil, err
 		}
-		for _, t := range tasks {
+		for j := range tasks {
+			t := &tasks[j]
 			node := host[t.NodeID]
 			if node == "" {
 				node = t.NodeID

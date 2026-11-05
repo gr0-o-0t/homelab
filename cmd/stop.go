@@ -5,6 +5,7 @@ import (
 
 	"github.com/groot/homelab/internal/run"
 	"github.com/groot/homelab/internal/session"
+	"github.com/groot/homelab/internal/swarm"
 	"github.com/groot/homelab/internal/tui/styles"
 	"github.com/spf13/cobra"
 )
@@ -20,8 +21,10 @@ Use 'down' to stop and remove containers.
   homelab stop -a           # every installed service
   homelab stop --group media  # all services in the "media" group
 
-Note: This runs 'docker compose stop' under the hood — containers are
-stopped but not removed. Use 'homelab down' to stop and remove.`,
+Note: for the core stack this runs 'docker compose stop' — containers are
+stopped but not removed. Services run on Swarm, which keeps no stopped
+containers: for them stop is the same as 'homelab down' (scaled to zero,
+configuration and volumes kept).`,
 	Args:              cobra.ArbitraryArgs,
 	ValidArgsFunction: completeServiceNames,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -51,7 +54,8 @@ func runServiceStop(_ *cobra.Command, args []string) error {
 	return forEachService(root, names, func(name string) error {
 		recordService(root, name, session.Stopped)
 		fmt.Printf("%s Stopping %s…\n", styles.Warning.Render("→"), styles.Bold.Render(name))
-		return run.Default().DockerComposeEnv(run.ServiceComposeFile(root, name), buildEnv(root, name), "stop")
+		// Swarm has no stopped-but-kept container: stop is down.
+		return deploy(root, name, (*swarm.Deployer).Down)
 	})
 }
 

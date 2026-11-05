@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/groot/homelab/internal/run"
+	"github.com/groot/homelab/internal/swarm"
 	"github.com/groot/homelab/internal/tui/styles"
 	"github.com/spf13/cobra"
 )
@@ -38,7 +39,7 @@ Does NOT recreate containers — use 'homelab up' after pulling, or 'homelab upd
 
 func pullOneService(root, name string) error {
 	fmt.Printf("%s Pulling images for %s\n", styles.Primary.Render("→"), styles.Bold.Render(name))
-	return run.Default().DockerComposeEnv(run.ServiceComposeFile(root, name), buildEnv(root, name), "pull")
+	return deploy(root, name, (*swarm.Deployer).Pull)
 }
 
 func init() {

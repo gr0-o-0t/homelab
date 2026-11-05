@@ -38,10 +38,10 @@ func runServiceUpdate(_ *cobra.Command, args []string) error {
 	}
 	return forEachService(root, names, func(name string) error {
 		recordService(root, name, session.Running)
-		if err := pullOneService(root, name); err != nil {
-			return err
-		}
-		return upOne(root, name, "--remove-orphans")
+		// Up pulls, resolves each tag to its current digest and removes
+		// containers no longer in the compose file: it is the update.
+		fmt.Printf("%s Updating %s\n", styles.Primary.Render("→"), styles.Bold.Render(name))
+		return upOne(root, name)
 	})
 }
 

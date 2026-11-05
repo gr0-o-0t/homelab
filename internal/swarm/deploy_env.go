@@ -62,9 +62,9 @@ func (d *Deployer) ensureSecret(ctx context.Context, svc, name string, data []by
 	if err != nil {
 		return "", err
 	}
-	for _, s := range list {
-		if s.Spec.Name == name {
-			return s.ID, nil
+	for i := range list {
+		if list[i].Spec.Name == name {
+			return list[i].ID, nil
 		}
 	}
 	resp, err := d.API.SecretCreate(ctx, swarm.SecretSpec{
@@ -146,9 +146,9 @@ func (d *Deployer) ensureConfig(ctx context.Context, svc, name string, data []by
 	if err != nil {
 		return "", err
 	}
-	for _, c := range list {
-		if c.Spec.Name == name {
-			return c.ID, nil
+	for i := range list {
+		if list[i].Spec.Name == name {
+			return list[i].ID, nil
 		}
 	}
 	resp, err := d.API.ConfigCreate(ctx, swarm.ConfigSpec{
@@ -169,7 +169,8 @@ func (d *Deployer) prune(ctx context.Context, svc string, keep keepSet) error {
 	if err != nil {
 		return err
 	}
-	for _, s := range secs {
+	for i := range secs {
+		s := &secs[i]
 		if !keep.secrets[s.Spec.Name] {
 			if err := d.API.SecretRemove(ctx, s.ID); err != nil {
 				errs = append(errs, fmt.Errorf("removing secret %s: %w", s.Spec.Name, err))
@@ -180,7 +181,8 @@ func (d *Deployer) prune(ctx context.Context, svc string, keep keepSet) error {
 	if err != nil {
 		return err
 	}
-	for _, c := range cfgs {
+	for i := range cfgs {
+		c := &cfgs[i]
 		if !keep.configs[c.Spec.Name] {
 			if err := d.API.ConfigRemove(ctx, c.ID); err != nil {
 				errs = append(errs, fmt.Errorf("removing config %s: %w", c.Spec.Name, err))
