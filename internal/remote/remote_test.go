@@ -59,7 +59,7 @@ func helperMain(args []string) {
 		_, _ = buf.ReadFrom(os.Stdin)
 		fmt.Print("got:" + buf.String())
 		os.Exit(0)
-	case "up": // up <id> <sleep-ms>: records its interval in dir
+	case "up", "rm": // up|rm <id> <sleep-ms>: records its interval in dir
 		id := args[1]
 		ms, _ := strconv.Atoi(args[2])
 		_ = os.WriteFile(filepath.Join(dir, id+".pid"), []byte(strconv.Itoa(os.Getpid())), 0o600)
@@ -98,6 +98,23 @@ func (s *syncBuf) String() string {
 	return s.b.String()
 }
 
+// testResolve stands in for the agent's cobra tree: a few commands, and
+// `rm` as the alias of `delete`.
+func testResolve(argv []string) ([]string, bool) {
+	name := CommandName(argv)
+	if name == "" {
+		return nil, true
+	}
+	if name == "rm" {
+		name = "delete"
+	}
+	switch name {
+	case "status", "ls", "cat", "up", "delete", "session", "agent", "envshim", "version", "login", "join":
+		return []string{name}, true
+	}
+	return nil, false
+}
+
 func newTestServer(t *testing.T, mod func(*ServerConfig)) *testEnv {
 	t.Helper()
 	root := t.TempDir()
@@ -112,6 +129,7 @@ func newTestServer(t *testing.T, mod func(*ServerConfig)) *testEnv {
 		VaultKey:   filepath.Join(root, "vault.key"),
 		CaddyAdmin: "127.0.0.1:2019",
 		KillGrace:  2 * time.Second,
+		Resolve:    testResolve,
 		Logf:       logs.logf,
 	}
 	if mod != nil {

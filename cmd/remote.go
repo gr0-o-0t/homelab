@@ -71,6 +71,21 @@ func shouldForward(c *cobra.Command) bool {
 	return !remote.LocalOnly[name] && name != "help" && !strings.HasPrefix(name, "__")
 }
 
+// ResolveCommand is the agent's remote.Resolver: the canonical command path
+// argv invokes through the cobra tree, aliases resolved (`rm` → delete).
+// ok is false for an unknown command; an empty path is the root command.
+func ResolveCommand(argv []string) ([]string, bool) {
+	c, _, err := rootCmd.Find(argv)
+	if err != nil || c == nil {
+		return nil, false
+	}
+	var path []string
+	for ; c != nil && c != rootCmd; c = c.Parent() {
+		path = append([]string{c.Name()}, path...)
+	}
+	return path, true
+}
+
 // executeArgs runs the CLI with args, returning the process exit code.
 func executeArgs(args []string) int {
 	invokedArgs = args

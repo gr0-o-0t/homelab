@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -34,9 +35,18 @@ type ServerConfig struct {
 	// Path is the child's PATH (default: the agent's own).
 	Path string
 
+	// Resolve maps argv to its canonical command path through the cobra
+	// tree (cmd.ResolveCommand). Without it every command is refused.
+	Resolve Resolver
+
 	// KillGrace is how long a child gets between SIGTERM and SIGKILL once
 	// its client is gone (default 10s).
 	KillGrace time.Duration
+	// PingInterval is how often the client is pinged; a client silent for
+	// twice that (no frame, no pong) is gone (default 20s).
+	PingInterval time.Duration
+	// MaxSessions caps concurrent connections past auth (default 8).
+	MaxSessions int
 	// Logf logs connection events (default log.Printf). Never secrets.
 	Logf func(format string, args ...any)
 }
@@ -45,14 +55,15 @@ type ServerConfig struct {
 type Server struct {
 	cfg      ServerConfig
 	lock     chan struct{} // the one server-wide lock for Mutating commands
+	sessions chan struct{} // one slot per running session
 	upgrader websocket.Upgrader
 }
 
 const (
 	handshakeTimeout = 10 * time.Second
-	pingInterval     = 20 * time.Second
 	drainTimeout     = 2 * time.Second
 	maxFrame         = 1 << 20
+	stdinFrames      = 16
 )
 
 // NewServer returns a runner for cfg.
@@ -69,10 +80,20 @@ func NewServer(cfg ServerConfig) *Server {
 	if cfg.KillGrace <= 0 {
 		cfg.KillGrace = 10 * time.Second
 	}
+	if cfg.PingInterval <= 0 {
+		cfg.PingInterval = 20 * time.Second
+	}
+	if cfg.MaxSessions <= 0 {
+		cfg.MaxSessions = 8
+	}
+	if cfg.Resolve == nil {
+		cfg.Resolve = refuseAll
+	}
 	if cfg.Logf == nil {
 		cfg.Logf = log.Printf
 	}
-	return &Server{cfg: cfg, lock: make(chan struct{}, 1), upgrader: websocket.Upgrader{HandshakeTimeout: handshakeTimeout}}
+	return &Server{cfg: cfg, lock: make(chan struct{}, 1), sessions: make(chan struct{}, cfg.MaxSessions),
+		upgrader: websocket.Upgrader{HandshakeTimeout: handshakeTimeout}}
 }
 
 // Handler serves GET /v1/run.
@@ -93,11 +114,17 @@ func (s *Server) Serve(ln net.Listener) error {
 type session struct {
 	conn *websocket.Conn
 	mu   sync.Mutex
+	// writeWait bounds each write (0: none), so a client that stopped
+	// reading cannot wedge the session — and the lock — on a full socket.
+	writeWait time.Duration
 }
 
 func (ss *session) write(kind int, b []byte) error {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
+	if ss.writeWait > 0 {
+		_ = ss.conn.SetWriteDeadline(time.Now().Add(ss.writeWait))
+	}
 	return ss.conn.WriteMessage(kind, b)
 }
 
@@ -180,35 +207,49 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	}
 	conn, err := s.upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		s.cfg.Logf("remote: upgrade from %s: %v", r.RemoteAddr, err)
+		s.cfg.Logf("remote: upgrade from %s: %q", r.RemoteAddr, err.Error())
 		return
 	}
 	defer func() { _ = conn.Close() }()
 	conn.SetReadLimit(maxFrame)
-	ss := &session{conn: conn}
+	ss := &session{conn: conn, writeWait: 2 * s.cfg.PingInterval}
+
+	select {
+	case s.sessions <- struct{}{}:
+		defer func() { <-s.sessions }()
+	default:
+		s.cfg.Logf("remote: refused %s: %d sessions already running", r.RemoteAddr, s.cfg.MaxSessions)
+		ss.finish(2, fmt.Sprintf("the agent is busy: %d homelab commands are already running — try again shortly", s.cfg.MaxSessions))
+		return
+	}
 
 	_ = conn.SetReadDeadline(time.Now().Add(handshakeTimeout))
 	var h Handshake
 	if err := conn.ReadJSON(&h); err != nil {
-		s.cfg.Logf("remote: bad handshake from %s: %v", r.RemoteAddr, err)
+		s.cfg.Logf("remote: bad handshake from %s: %q", r.RemoteAddr, err.Error())
 		return
 	}
-	_ = conn.SetReadDeadline(time.Time{})
-	if code, err := validate(h, s.cfg.Version); err != nil {
-		s.cfg.Logf("remote: refused %q from %s: %v", CommandName(h.Argv), r.RemoteAddr, err)
+	name, code, err := validate(h, s.cfg.Version, s.cfg.Resolve)
+	if err != nil {
+		// Client-supplied strings are quoted: no forged log lines.
+		s.cfg.Logf("remote: refused %q from %s: %q", CommandName(h.Argv), r.RemoteAddr, err.Error())
 		ss.finish(code, err.Error())
 		return
 	}
-	name := CommandName(h.Argv)
 	// Only the command name: arguments can carry values (setup --set).
 	s.cfg.Logf("remote: %s runs %q", r.RemoteAddr, name)
 
+	// A client silent for two ping intervals — no frame, no pong — is gone.
+	alive := func() { _ = conn.SetReadDeadline(time.Now().Add(2 * s.cfg.PingInterval)) }
+	alive()
+	conn.SetPongHandler(func(string) error { alive(); return nil })
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	stdin := make(chan []byte, 256)
+	stdin := make(chan []byte, stdinFrames)
 	ch := &child{rows: h.Rows, cls: h.Cols}
-	go s.readLoop(ctx, conn, stdin, ch, cancel)
-	go keepAlive(ctx, ss, cancel)
+	go s.readLoop(ctx, conn, stdin, ch, cancel, alive)
+	go keepAlive(ctx, ss, s.cfg.PingInterval, cancel)
 
 	if Mutating[name] {
 		select {
@@ -224,7 +265,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		defer func() { <-s.lock }()
 	}
 
-	code, err := s.runChild(ctx, ss, h, ch, &chanReader{ch: stdin})
+	code, err = s.runChild(ctx, ss, h, ch, &chanReader{ch: stdin})
 	if ctx.Err() != nil {
 		s.cfg.Logf("remote: %s disconnected; %q stopped", r.RemoteAddr, name)
 		return
@@ -236,8 +277,10 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	ss.finish(code, msg)
 }
 
-// readLoop handles client frames until the connection fails, then cancels.
-func (s *Server) readLoop(ctx context.Context, conn *websocket.Conn, stdin chan<- []byte, ch *child, cancel context.CancelFunc) {
+// readLoop handles client frames until the connection fails or the client
+// falls silent (read deadline), then cancels — which stops the child.
+func (s *Server) readLoop(ctx context.Context, conn *websocket.Conn, stdin chan<- []byte, ch *child,
+	cancel context.CancelFunc, alive func()) {
 	defer cancel()
 	open := true
 	defer func() {
@@ -246,6 +289,9 @@ func (s *Server) readLoop(ctx context.Context, conn *websocket.Conn, stdin chan<
 		}
 	}()
 	for {
+		// Rearmed per frame, and after a wait on a full stdin queue, so time
+		// spent waiting on the child is not held against the client.
+		alive()
 		kind, b, err := conn.ReadMessage()
 		if err != nil {
 			return
@@ -277,15 +323,15 @@ func (s *Server) readLoop(ctx context.Context, conn *websocket.Conn, stdin chan<
 
 // keepAlive pings the client so a vanished one is noticed even while the
 // child is silent.
-func keepAlive(ctx context.Context, ss *session, cancel context.CancelFunc) {
-	t := time.NewTicker(pingInterval)
+func keepAlive(ctx context.Context, ss *session, every time.Duration, cancel context.CancelFunc) {
+	t := time.NewTicker(every)
 	defer t.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			if err := ss.conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(pingInterval)); err != nil {
+			if err := ss.conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(every)); err != nil {
 				cancel()
 				return
 			}
@@ -332,7 +378,9 @@ func (s *Server) runChild(ctx context.Context, ss *session, h Handshake, ch *chi
 	cmd.Env = s.childEnv(h)
 	cmd.Dir = s.cfg.StateRoot
 
-	var outDone chan struct{}
+	// outDone closes once the output is drained; closeOut stops the drain.
+	outDone := make(chan struct{})
+	var closeOut func()
 	if h.TTY {
 		ch.mu.Lock()
 		rows, cols := ch.rows, ch.cls
@@ -344,31 +392,59 @@ func (s *Server) runChild(ctx context.Context, ss *session, h Handshake, ch *chi
 		if err != nil {
 			return 1, err
 		}
-		defer func() { _ = ptmx.Close() }()
+		closeOut = func() { _ = ptmx.Close() }
+		defer closeOut()
 		ch.mu.Lock()
 		ch.ptmx = ptmx
 		ch.mu.Unlock()
 		go func() { _, _ = io.Copy(ptmx, stdin) }()
-		outDone = make(chan struct{})
 		go func() {
 			defer close(outDone)
 			_, _ = io.Copy(frameWriter{ss: ss}, ptmx)
 		}()
 	} else {
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-		cmd.Stdout = frameWriter{ss: ss}
-		cmd.Stderr = frameWriter{ss: ss, stderr: true}
-		cmd.WaitDelay = drainTimeout
-		in, err := cmd.StdinPipe()
+		// Own pipes rather than cmd.Stdout = writer, so Wait returns when
+		// the process exits, before its output is drained: lingering
+		// grandchildren holding the pipes are killed first.
+		outR, outW, err := os.Pipe()
 		if err != nil {
 			return 1, err
 		}
-		if err := cmd.Start(); err != nil {
+		errR, errW, err := os.Pipe()
+		if err != nil {
+			_ = outR.Close()
+			_ = outW.Close()
+			return 1, err
+		}
+		closeOut = func() { _ = outR.Close(); _ = errR.Close() }
+		defer closeOut()
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		cmd.Stdout, cmd.Stderr = outW, errW
+		in, err := cmd.StdinPipe()
+		if err != nil {
+			_ = outW.Close()
+			_ = errW.Close()
+			return 1, err
+		}
+		err = cmd.Start()
+		_ = outW.Close()
+		_ = errW.Close()
+		if err != nil {
 			return 1, err
 		}
 		go func() {
 			_, _ = io.Copy(in, stdin)
 			_ = in.Close()
+		}()
+		errDone := make(chan struct{})
+		go func() {
+			defer close(errDone)
+			_, _ = io.Copy(frameWriter{ss: ss, stderr: true}, errR)
+		}()
+		go func() {
+			defer close(outDone)
+			_, _ = io.Copy(frameWriter{ss: ss}, outR)
+			<-errDone
 		}()
 	}
 
@@ -388,13 +464,15 @@ func (s *Server) runChild(ctx context.Context, ss *session, h Handshake, ch *chi
 	}()
 	err := cmd.Wait()
 	close(exited)
-	if outDone != nil {
-		// The pty reads EIO once every holder of its tty is gone; a
-		// background grandchild keeping it open must not hold the exit.
-		select {
-		case <-outDone:
-		case <-time.After(drainTimeout):
-		}
+	// Nothing the command started outlives it, nor keeps running once the
+	// lock it held is released.
+	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	// Output ends (EOF, or EIO on a pty) once every holder is gone; one that
+	// escaped the process group must not hold the exit.
+	select {
+	case <-outDone:
+	case <-time.After(drainTimeout):
+		closeOut() // not waited on: the drain may be stuck writing to a dead client
 	}
 	var ee *exec.ExitError
 	switch {

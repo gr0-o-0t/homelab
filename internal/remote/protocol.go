@@ -16,13 +16,34 @@ var LocalOnly = map[string]bool{
 	"completion": true, "agent": true, "envshim": true, "edit": true,
 }
 
-// Mutating commands hold the server-wide lock for their whole run; every
-// other command runs without waiting on it.
+// Internal commands are plumbing the agent runs itself, never for a client:
+// `session run` would start a second supervisor whose SIGTERM path stops
+// every service.
+var Internal = map[string]bool{"agent": true, "envshim": true, "session": true}
+
+// Mutating commands (canonical top-level names) hold the server-wide lock
+// for their whole run; every other command runs without waiting on it.
 var Mutating = map[string]bool{
 	"add": true, "setup": true, "up": true, "down": true, "start": true, "stop": true,
 	"restart": true, "pull": true, "update": true, "delete": true, "enable": true,
-	"disable": true, "reload": true, "backup": true, "restore": true, "prune": true, "edit": true,
+	"disable": true, "reload": true, "backup": true, "restore": true, "prune": true,
+	"ext": true, "cf": true, "migrate": true, "new": true, "session": true,
 }
+
+// refusedFlags may not appear anywhere in a forwarded argv: the first two
+// would choose the agent's state, --no-record would hide changes from the
+// desired state the supervisor keeps.
+var refusedFlags = []string{"--config-dir", "--config", "--no-record"}
+
+// Resolver maps argv to the canonical command path it invokes (aliases
+// resolved, e.g. ["rm","x"] → ["delete"]); ok is false for an unknown
+// command. An empty path is the root command.
+type Resolver func(argv []string) (path []string, ok bool)
+
+// refuseAll is the resolver of a server configured without one: failing
+// closed, since taking the first word at face value would let aliases
+// (`rm` for `delete`) past the lock.
+func refuseAll([]string) ([]string, bool) { return nil, false }
 
 // Handshake is the client's first frame.
 type Handshake struct {
@@ -60,29 +81,37 @@ func CommandName(argv []string) string {
 	return ""
 }
 
-// validate refuses a handshake before anything runs.
-func validate(h Handshake, agentVersion string) (int, error) {
+// validate refuses a handshake before anything runs, and otherwise returns
+// the canonical top-level command name.
+func validate(h Handshake, agentVersion string, resolve Resolver) (string, int, error) {
 	if majorMinor(h.Version) != majorMinor(agentVersion) {
-		return 2, fmt.Errorf("homelab CLI %s and agent %s differ — run `homelab upgrade`", h.Version, agentVersion)
+		return "", 2, fmt.Errorf("homelab CLI %s and agent %s differ — run `homelab upgrade`", h.Version, agentVersion)
 	}
 	if len(h.Argv) == 0 {
-		return 2, fmt.Errorf("no command given")
+		return "", 2, fmt.Errorf("no command given")
 	}
 	for _, a := range h.Argv {
-		for _, f := range []string{"--config-dir", "--config"} {
+		for _, f := range refusedFlags {
 			if a == f || strings.HasPrefix(a, f+"=") {
-				return 2, fmt.Errorf("%s cannot be passed to the agent: it runs against its own state", f)
+				return "", 2, fmt.Errorf("%s cannot be passed to the agent", f)
 			}
 		}
 	}
-	name := CommandName(h.Argv)
-	if name == "" {
-		return 2, fmt.Errorf("the root command runs on the local machine, not the agent")
+	path, ok := resolve(h.Argv)
+	if !ok {
+		return "", 2, fmt.Errorf("unknown command %q", CommandName(h.Argv))
 	}
+	if len(path) == 0 {
+		return "", 2, fmt.Errorf("the root command runs on the local machine, not the agent")
+	}
+	name := path[0]
 	if LocalOnly[name] {
-		return 2, fmt.Errorf("`homelab %s` runs on the local machine, not the agent", name)
+		return "", 2, fmt.Errorf("`homelab %s` runs on the local machine, not the agent", name)
 	}
-	return 0, nil
+	if Internal[name] {
+		return "", 2, fmt.Errorf("`homelab %s` is internal to the agent and cannot be run remotely", name)
+	}
+	return name, 0, nil
 }
 
 // majorMinor is "1.4" for "v1.4.2"; a version with fewer than two parts
