@@ -3,9 +3,11 @@ package vault
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
+	"sync"
 	"testing"
 
 	"github.com/99designs/keyring"
@@ -106,5 +108,71 @@ func TestVault_BadKeySizeFails(t *testing.T) {
 	}
 	if _, err := Open(data, key); err == nil {
 		t.Fatal("expected error for wrong-size key file")
+	}
+}
+
+func TestVault_ConcurrentSetsAcrossInstancesKeepAll(t *testing.T) {
+	data, key := paths(t)
+	a, err := Open(data, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := Open(data, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const n = 20
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		for j, v := range []*Vault{a, b} {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				k := fmt.Sprintf("k-%d-%d", j, i)
+				if err := v.Set(keyring.Item{Key: k, Data: []byte(k)}); err != nil {
+					t.Error(err)
+				}
+			}()
+		}
+	}
+	wg.Wait()
+	c, err := Open(data, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, err := c.Keys()
+	if err != nil || len(keys) != 2*n {
+		t.Fatalf("keys = %d, want %d (err %v)", len(keys), 2*n, err)
+	}
+}
+
+func TestVault_ConcurrentFirstOpenAgreesOnKey(t *testing.T) {
+	data, key := paths(t)
+	const n = 8
+	vs := make([]*Vault, n)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			v, err := Open(data, key)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			vs[i] = v
+			if err := v.Set(keyring.Item{Key: fmt.Sprint(i), Data: []byte("x")}); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	if t.Failed() {
+		return
+	}
+	for _, v := range vs {
+		if keys, err := v.Keys(); err != nil || len(keys) != n {
+			t.Fatalf("keys = %v, %v", keys, err)
+		}
 	}
 }

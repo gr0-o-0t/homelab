@@ -24,8 +24,12 @@ func OpenVault(path, keyFile string) (*Manager, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open vault: %w", err)
 	}
-	return &Manager{ring: v, Backend: keyring.FileBackend}, nil
+	return &Manager{ring: v, Backend: VaultBackend}, nil
 }
+
+// VaultBackend marks a Manager over the agent's file vault. It is not one of
+// the keyring library's backends, so fallbackWarning never fires for it.
+const VaultBackend keyring.BackendType = "homelab-vault"
 
 // secretNamePatterns — if any of these substrings appear in an uppercased
 // variable name, the value is considered sensitive.

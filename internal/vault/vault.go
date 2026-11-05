@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/99designs/keyring"
@@ -29,7 +30,8 @@ type entry struct {
 	Modified time.Time    `json:"modified"`
 }
 
-// Vault implements keyring.Keyring over an encrypted file.
+// Vault implements keyring.Keyring over an encrypted file. Safe for use by
+// several goroutines and several processes (flock on <path>.lock).
 type Vault struct {
 	mu   sync.Mutex
 	path string
@@ -55,6 +57,11 @@ func Open(path, keyFile string) (*Vault, error) {
 		return nil, err
 	}
 	v := &Vault{path: path, aead: aead}
+	unlock, err := v.lock(true)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
 		if err := v.save(map[string]entry{}); err != nil {
 			return nil, err
@@ -67,25 +74,44 @@ func Open(path, keyFile string) (*Vault, error) {
 	return v, nil
 }
 
-func loadKey(keyFile string) ([]byte, error) {
-	if err := os.MkdirAll(filepath.Dir(keyFile), 0o700); err != nil {
+// lock takes the in-process mutex plus an advisory flock on <path>.lock, so
+// separate Vault instances (the agent and the processes it spawns) serialize.
+func (v *Vault) lock(exclusive bool) (func(), error) {
+	v.mu.Lock()
+	if err := os.MkdirAll(filepath.Dir(v.path), 0o700); err != nil {
+		v.mu.Unlock()
 		return nil, err
 	}
-	f, err := os.OpenFile(keyFile, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o400)
-	if err == nil {
-		key := make([]byte, keySize)
-		if _, err := io.ReadFull(rand.Reader, key); err != nil {
-			f.Close()
-			return nil, err
-		}
-		if _, err := f.Write(key); err != nil {
-			f.Close()
-			return nil, err
-		}
-		return key, f.Close()
+	f, err := os.OpenFile(v.path+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		v.mu.Unlock()
+		return nil, err
 	}
-	if !errors.Is(err, os.ErrExist) {
-		return nil, fmt.Errorf("create vault key: %w", err)
+	how := syscall.LOCK_SH
+	if exclusive {
+		how = syscall.LOCK_EX
+	}
+	if err := syscall.Flock(int(f.Fd()), how); err != nil {
+		f.Close()
+		v.mu.Unlock()
+		return nil, err
+	}
+	return func() {
+		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		f.Close()
+		v.mu.Unlock()
+	}, nil
+}
+
+func loadKey(keyFile string) ([]byte, error) {
+	dir := filepath.Dir(keyFile)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	if _, err := os.Stat(keyFile); errors.Is(err, os.ErrNotExist) {
+		if err := createKey(dir, keyFile); err != nil {
+			return nil, err
+		}
 	}
 	key, err := os.ReadFile(keyFile)
 	if err != nil {
@@ -95,6 +121,41 @@ func loadKey(keyFile string) ([]byte, error) {
 		return nil, fmt.Errorf("vault key %s: size %d, want %d", keyFile, len(key), keySize)
 	}
 	return key, nil
+}
+
+// createKey writes a complete 0400 key to a temp file and links it into place,
+// so the key file is never visible empty; losing the race (EEXIST) is fine,
+// the winner's key is then read.
+func createKey(dir, keyFile string) error {
+	tmp, err := os.CreateTemp(dir, ".vault-key-*")
+	if err != nil {
+		return fmt.Errorf("create vault key: %w", err)
+	}
+	defer os.Remove(tmp.Name())
+	key := make([]byte, keySize)
+	if _, err := io.ReadFull(rand.Reader, key); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(key); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(0o400); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Link(tmp.Name(), keyFile); err != nil && !errors.Is(err, os.ErrExist) {
+		return fmt.Errorf("create vault key: %w", err)
+	}
+	return nil
 }
 
 func (v *Vault) load() (map[string]entry, error) {
@@ -127,9 +188,6 @@ func (v *Vault) save(m map[string]entry) error {
 	}
 	out := v.aead.Seal(nonce, nonce, plain, nil)
 
-	if err := os.MkdirAll(filepath.Dir(v.path), 0o700); err != nil {
-		return err
-	}
 	tmp, err := os.CreateTemp(filepath.Dir(v.path), ".vault-*")
 	if err != nil {
 		return err
@@ -155,8 +213,11 @@ func (v *Vault) save(m map[string]entry) error {
 
 // Get returns the item for key or keyring.ErrKeyNotFound.
 func (v *Vault) Get(key string) (keyring.Item, error) {
-	v.mu.Lock()
-	defer v.mu.Unlock()
+	unlock, err := v.lock(false)
+	if err != nil {
+		return keyring.Item{}, err
+	}
+	defer unlock()
 	m, err := v.load()
 	if err != nil {
 		return keyring.Item{}, err
@@ -170,8 +231,11 @@ func (v *Vault) Get(key string) (keyring.Item, error) {
 
 // GetMetadata returns the non-secret parts of an item.
 func (v *Vault) GetMetadata(key string) (keyring.Metadata, error) {
-	v.mu.Lock()
-	defer v.mu.Unlock()
+	unlock, err := v.lock(false)
+	if err != nil {
+		return keyring.Metadata{}, err
+	}
+	defer unlock()
 	m, err := v.load()
 	if err != nil {
 		return keyring.Metadata{}, err
@@ -187,8 +251,11 @@ func (v *Vault) GetMetadata(key string) (keyring.Metadata, error) {
 
 // Set stores an item.
 func (v *Vault) Set(item keyring.Item) error {
-	v.mu.Lock()
-	defer v.mu.Unlock()
+	unlock, err := v.lock(true)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	m, err := v.load()
 	if err != nil {
 		return err
@@ -199,8 +266,11 @@ func (v *Vault) Set(item keyring.Item) error {
 
 // Remove deletes an item; keyring.ErrKeyNotFound when absent.
 func (v *Vault) Remove(key string) error {
-	v.mu.Lock()
-	defer v.mu.Unlock()
+	unlock, err := v.lock(true)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	m, err := v.load()
 	if err != nil {
 		return err
@@ -214,8 +284,11 @@ func (v *Vault) Remove(key string) error {
 
 // Keys lists every stored key.
 func (v *Vault) Keys() ([]string, error) {
-	v.mu.Lock()
-	defer v.mu.Unlock()
+	unlock, err := v.lock(false)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	m, err := v.load()
 	if err != nil {
 		return nil, err
