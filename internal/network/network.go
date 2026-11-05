@@ -35,7 +35,10 @@ type PortSelection struct {
 	Port      int    // container port traffic is forwarded to
 	Listen    int    // site port clients connect on; 0 = the layer's default
 	Subdomain string // replaces the service name in the site address; "" = service name
-	Protocol  string // "tcp" or "udp"
+	Protocol  string // "tcp" or "udp": the one an HTTP site would use
+	// Protocols is every protocol the declaration carries ("tcp", "udp" or
+	// both). A raw port's layer4 listeners bind each one.
+	Protocols []string
 }
 
 // RoutableByCaddy reports whether this port can be served as a Caddy site.
@@ -158,12 +161,13 @@ type HostTemplate struct {
 
 // Sites implements NetworkLayer.Sites for a Host-routed layer.
 //
-// UDP gets no site: Caddy speaks HTTP. Nor does a port with an explicit listen
-// port (forgejo's 22:22): such a port is a raw TCP service published by
-// compose, not HTTP. Wrapping it in a site block produced an HTTPS
-// reverse_proxy on :22 (private) that no ssh client can speak, a plain-HTTP
-// listener on :22 (cf) that cloudflared never routes to, and an eepsite block
-// i2pd — which delivers only to :80 — could never reach.
+// UDP gets no site: a site speaks HTTP. Nor does a port with an explicit
+// listen port (forgejo's 22:2222): such a port is raw TCP/UDP, which the
+// tailnet layer proxies with a caddy-l4 listener instead (configgen.RenderL4).
+// Wrapping it in a site block produced an HTTPS reverse_proxy on :22 (private)
+// that no ssh client can speak, a plain-HTTP listener on :22 (cf) that
+// cloudflared never routes to, and an eepsite block i2pd — which delivers only
+// to :80 — could never reach.
 func (h HostTemplate) Sites(_, host string, ports []PortSelection) ([]Site, error) {
 	var sites []Site
 	for _, p := range ports {

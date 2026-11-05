@@ -20,3 +20,4 @@ databases:
         database: GI_DB_NAME
 ports:
   - 3000
+  - 2222:2222/tcp

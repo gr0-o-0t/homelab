@@ -88,6 +88,23 @@ func (e PortEntry) HasTCP() bool {
 	return false
 }
 
+// ProtocolList is every protocol the entry carries, lower-cased: Protocols,
+// else the legacy Protocol, else both.
+func (e PortEntry) ProtocolList() []string {
+	ps := e.Protocols
+	if len(ps) == 0 && e.Protocol != "" {
+		ps = []string{e.Protocol}
+	}
+	if len(ps) == 0 {
+		return []string{"tcp", "udp"}
+	}
+	out := make([]string, len(ps))
+	for i, p := range ps {
+		out[i] = strings.ToLower(p)
+	}
+	return out
+}
+
 // PortEntries accepts ports config in both the legacy mapping format and the
 // list-of-strings format described on PortEntry. Internal representation is
 // always a map keyed by the token left of the colon ("default" when bare), so

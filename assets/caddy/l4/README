@@ -1,0 +1,8 @@
+# caddy-l4 servers, one file per service: <service>.conf proxies each port the
+# service declares with an explicit listen port (`22:2222` → Caddy listens on
+# :22 in the tailnet namespace and pipes the connection to <service>:2222;
+# a udp declaration gets a udp/ listener). Imported inside the Caddyfile's
+# global `layer4 { }` option, so files hold bare server blocks.
+# Rendered by `homelab enable|disable` for services on the tailnet layer;
+# removed when there is nothing to proxy. Do not edit by hand —
+# `homelab reload <service>` re-renders it.

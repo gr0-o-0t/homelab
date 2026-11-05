@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 
 	"github.com/groot/homelab/internal/configgen"
 	"github.com/groot/homelab/internal/exposure"
@@ -88,17 +89,98 @@ func Sync(root string, reg *network.Registry, svc string) error {
 	if err != nil {
 		return err
 	}
-	path := configgen.SitesFile(root, svc)
+	// Raw ports ride the tailnet only: cf and i2p carry HTTP alone, tor and
+	// ygg forward raw ports through their own daemons.
+	l4 := ""
+	if st.On("ts") {
+		if err := checkL4Free(root, svc, e); err != nil {
+			return err
+		}
+		l4 = configgen.RenderL4(e)
+	}
+	if err := writeOrRemove(configgen.SitesFile(root, svc), content); err != nil {
+		return err
+	}
+	return writeOrRemove(configgen.L4File(root, svc), l4)
+}
+
+// reservedL4 are the listeners Caddy's HTTP sites already hold in the tailnet
+// namespace (the admin API is on localhost:2019).
+var reservedL4 = []string{"tcp/:80", "tcp/:443", "tcp/:8081", "tcp/:2019"}
+
+// l4Listeners is every "<proto>/:<port>" a resolved exposure's raw ports bind.
+func l4Listeners(e configgen.Exposure) []string {
+	var out []string
+	for _, p := range e.Ports {
+		if p.Listen == 0 {
+			continue
+		}
+		for _, proto := range p.Protocols {
+			out = append(out, fmt.Sprintf("%s/:%d", proto, p.Listen))
+		}
+	}
+	return out
+}
+
+// checkL4Free fails when a raw listen port of svc is an HTTP listener or is
+// already bound by another tailnet service. A listen port has no Host to route
+// on, and caddy-l4 accepts two servers on one address without complaint —
+// `caddy validate` passes and one service silently gets the other's traffic.
+func checkL4Free(root, svc string, e configgen.Exposure) error {
+	mine := l4Listeners(e)
+	for _, l := range mine {
+		if slices.Contains(reservedL4, l) {
+			return fmt.Errorf("%s: listen port %s is Caddy's own; pick another in its config.yaml", svc, l)
+		}
+	}
+	if len(mine) == 0 {
+		return nil
+	}
+	matches, err := filepath.Glob(filepath.Join(root, "services", "*", exposure.FileName))
+	if err != nil {
+		return err
+	}
+	for _, m := range matches {
+		other := filepath.Base(filepath.Dir(m))
+		if other == svc {
+			continue
+		}
+		st, err := exposure.Load(root, other)
+		if err != nil || !st.On("ts") {
+			continue
+		}
+		oe, err := Resolve(root, other, st)
+		if err != nil {
+			continue // a broken neighbour must not block this service
+		}
+		for _, l := range l4Listeners(oe) {
+			if slices.Contains(mine, l) {
+				return fmt.Errorf("%s: listen port %s is already used by %s; change one of their config.yaml ports", svc, l, other)
+			}
+		}
+	}
+	return nil
+}
+
+// writeOrRemove writes content to path, or removes path when content is empty.
+func writeOrRemove(path, content string) error {
+	if content == "" {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("removing %s: %w", filepath.Base(path), err)
+		}
+		return nil
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return err
 	}
 	return os.WriteFile(path, []byte(content), 0o600)
 }
 
-// RemoveSites removes a service's sites file. An absent file is not an error.
+// RemoveSites removes a service's sites file and layer4 file. An absent file
+// is not an error.
 func RemoveSites(root, svc string) error {
-	if err := os.Remove(configgen.SitesFile(root, svc)); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("removing sites file: %w", err)
-	}
-	return nil
+	return errors.Join(
+		writeOrRemove(configgen.SitesFile(root, svc), ""),
+		writeOrRemove(configgen.L4File(root, svc), ""),
+	)
 }

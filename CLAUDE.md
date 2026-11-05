@@ -227,12 +227,13 @@ Client (on tailnet)
 
 ### Core Stack (`assets/core/`)
 
-Tailscale and Caddy run as a pair. Caddy uses `network_mode: service:tailscale`, sharing Tailscale's network namespace and listening on the Tailscale IP directly. Caddy is a custom build (`core/Dockerfile.caddy`) compiled with xcaddy including `caddy-dns/cloudflare` for DNS-01 cert issuance.
+Tailscale and Caddy run as a pair. Caddy uses `network_mode: service:tailscale`, sharing Tailscale's network namespace and listening on the Tailscale IP directly. Caddy is a custom build (`core/Dockerfile.caddy`) compiled with xcaddy including `caddy-dns/cloudflare` for DNS-01 cert issuance and `mholt/caddy-l4` for raw TCP/UDP ports.
 
 ### Service Routing (`assets/caddy/`)
 
 - `caddy/Caddyfile` — global config: ACME settings, Cloudflare DNS-01, wildcard TLS snippet, imports `sites/*.conf` (and the legacy `conf.d*/*.conf`, empty once migrated)
 - `caddy/sites/<svc>.conf` — **one generated file per service** holding the site blocks of every layer it is on, in registry order (ts, cf, tor, i2p, ygg), each layer's blocks in port order
+- `caddy/l4/<svc>.conf` — generated caddy-l4 servers for the service's raw ports (tailnet layer only), imported inside the Caddyfile's global `layer4 { }` option
 - Catch-all `http://:80` and `http://:8081` sites abort unmatched hosts on the tunnel listeners
 
 **Exposure is stored state**, `services/<svc>/exposure.yaml` (`internal/exposure`),
@@ -285,16 +286,22 @@ Each service directory contains:
 ```yaml
 ports:
   - 3000          # forgejo.home.<domain>          → container :3000
-  - 22:22         # forgejo.home.<domain>:22       → container :22
+  - 22:2222/tcp   # forgejo.home.<domain>:22       → container :2222 (raw TCP)
   - vault:80      # vault.home.<domain>            → container :80
   - 53:53/udp     # protocol suffix; both tcp+udp when omitted
 ```
 
 The token left of the colon decides the form: all digits means "listen on this
 port", anything else names a subdomain, and a subdomain *replaces* the service
-name rather than prefixing it. Caddy only serves the tcp half — a udp
-declaration is recorded for compose but gets no site block, because nothing in
-this stack proxies datagrams.
+name rather than prefixing it.
+
+A port with a listen port is **raw**, not HTTP: it gets no site block but a
+caddy-l4 server in `caddy/l4/<svc>.conf` (`:22 → forgejo:2222`, plus
+`udp/:53 → udp/svc:53` per udp protocol), on the tailnet layer only. A listen
+port has no Host header to route on, so it is global: `enable` refuses one that
+another tailnet service already binds, or one of Caddy's own (80, 443, 8081,
+2019) — caddy-l4 itself would accept the duplicate silently. Declare `/tcp`
+unless the protocol really needs udp, or a pointless udp listener is bound.
 
 From these, `homelab enable` generates the site blocks for every layer. Most
 services need nothing else. One override exists:

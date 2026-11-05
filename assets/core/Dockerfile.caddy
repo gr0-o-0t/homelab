@@ -8,8 +8,11 @@
 
 FROM caddy:2-builder AS builder
 
+# caddy-l4 proxies the raw TCP/UDP ports services declare with an explicit
+# listen port (gitea's ssh, 22:2222) — see caddy/l4/README.
 RUN xcaddy build \
-  --with github.com/caddy-dns/cloudflare
+  --with github.com/caddy-dns/cloudflare \
+  --with github.com/mholt/caddy-l4
 
 # ── Final image ──────────────────────────────────────────────────────────────
 FROM caddy:2

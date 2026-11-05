@@ -32,6 +32,14 @@
 	# answer a tunnel client with that private hostname. Tailnet clients use
 	# https:// directly; unmatched plain-HTTP hosts hit the catch-alls below.
 	auto_https disable_redirects
+
+	# Raw TCP/UDP listeners (caddy-l4): one file per service with a port
+	# declared as <listen>:<port>, e.g. gitea's ssh on :22 → gitea:2222.
+	# Rendered by `homelab enable` alongside caddy/sites. A layer4 server binds
+	# every interface of the tailscale netns, like the HTTP sites do.
+	layer4 {
+		import /homelab/caddy/l4/*.conf
+	}
 }
 
 # ── Wildcard TLS snippet ──────────────────────────────────────────────────────

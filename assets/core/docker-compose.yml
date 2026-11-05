@@ -128,6 +128,8 @@ services:
       # Caddy treats an import glob that matches nothing as a no-op, so the
       # layer just never routes.
       - ../caddy/sites:/homelab/caddy/sites:ro
+      # Raw TCP/UDP listeners (caddy-l4), imported in the global options.
+      - ../caddy/l4:/homelab/caddy/l4:ro
       # Legacy per-layer dirs: empty once `homelab update` has migrated them.
       - ../caddy/conf.d:/homelab/caddy/conf.d:ro
       - ../caddy/conf.d-cf:/homelab/caddy/conf.d-cf:ro

@@ -76,6 +76,48 @@ func TestSync_NoLayersRemovesFile(t *testing.T) {
 	assert.NoFileExists(t, exposure.Path(root, "gitea"), "a service on no layer has no state file")
 }
 
+// A raw listen port gets a caddy-l4 server on the tailnet, one per protocol,
+// and nothing on an HTTP-only layer; leaving the tailnet removes it.
+func TestSync_RawPortsGetL4OnTailnetOnly(t *testing.T) {
+	root := t.TempDir()
+	writeSvc(t, root, "gitea", map[string]string{"config.yaml": "ports:\n  - 3000\n  - 22:2222/tcp\n  - 53:53\n"})
+	require.NoError(t, exposure.Save(root, "gitea", exposure.State{Layers: []string{"ts", "cf"}}))
+	reg := layers.New(root, nil, nil)
+
+	require.NoError(t, routing.Sync(root, reg, "gitea"))
+	got := read(t, configgen.L4File(root, "gitea"))
+	assert.Contains(t, got, ":22 {\n\troute {\n\t\tproxy gitea:2222\n\t}\n}\n")
+	assert.Contains(t, got, "\n:53 {\n\troute {\n\t\tproxy gitea:53\n")
+	assert.Contains(t, got, "udp/:53 {\n\troute {\n\t\tproxy udp/gitea:53\n")
+	assert.NotContains(t, got, "udp/:22")
+	assert.NotContains(t, read(t, configgen.SitesFile(root, "gitea")), ":22")
+
+	require.NoError(t, routing.Apply(root, reg, "gitea", func(s *exposure.State) { s.Set("ts", false) }))
+	assert.NoFileExists(t, configgen.L4File(root, "gitea"), "cf alone carries no raw ports")
+	assert.FileExists(t, configgen.SitesFile(root, "gitea"))
+}
+
+// caddy-l4 accepts two servers on one address, so a second tailnet service
+// claiming a taken listen port, or Caddy's own, is refused before writing.
+func TestSync_RawPortConflictsAreRefused(t *testing.T) {
+	root := t.TempDir()
+	reg := layers.New(root, nil, nil)
+	for _, svc := range []string{"gitea", "forgejo"} {
+		writeSvc(t, root, svc, map[string]string{"config.yaml": "ports:\n  - 3000\n  - 22:2222/tcp\n"})
+		require.NoError(t, exposure.Save(root, svc, exposure.State{Layers: []string{"ts"}}))
+		if svc == "gitea" {
+			require.NoError(t, routing.Sync(root, reg, "gitea"))
+		}
+	}
+	err := routing.Sync(root, reg, "forgejo")
+	require.ErrorContains(t, err, "tcp/:22 is already used by gitea")
+	assert.NoFileExists(t, configgen.L4File(root, "forgejo"))
+
+	writeSvc(t, root, "web", map[string]string{"config.yaml": "ports:\n  - 443:8443/tcp\n"})
+	require.NoError(t, exposure.Save(root, "web", exposure.State{Layers: []string{"ts"}}))
+	require.ErrorContains(t, routing.Sync(root, reg, "web"), "tcp/:443 is Caddy's own")
+}
+
 // A service with no ports and no routes cannot be routed, and says so instead
 // of writing an empty block.
 func TestSync_HeadlessServiceIsAnError(t *testing.T) {

@@ -16,9 +16,9 @@ import (
 // down with it.
 var ErrInvalidConfig = errors.New("caddy validate failed")
 
-// Snapshot is a service's routing files at one point in time — its sites file
-// and its exposure.yaml — so a change that produced an invalid config can be
-// undone. Those two files are everything enable/disable/reload write for
+// Snapshot is a service's routing files at one point in time — its sites file,
+// its layer4 file and its exposure.yaml — so a change that produced an invalid config can be
+// undone. Those files are everything enable/disable/reload write for
 // Caddy; a layer's daemon side is undone by tearing the layer down.
 type Snapshot struct {
 	files map[string]*entry // path → content; nil = did not exist
@@ -33,7 +33,7 @@ type entry struct {
 // call ReloadOrRestore instead of Reload.
 func (m *Manager) Snapshot(svc string) (*Snapshot, error) {
 	s := &Snapshot{files: map[string]*entry{}}
-	for _, path := range []string{configgen.SitesFile(m.RepoRoot, svc), exposure.Path(m.RepoRoot, svc)} {
+	for _, path := range []string{configgen.SitesFile(m.RepoRoot, svc), configgen.L4File(m.RepoRoot, svc), exposure.Path(m.RepoRoot, svc)} {
 		fi, err := os.Stat(path)
 		if errors.Is(err, os.ErrNotExist) {
 			s.files[path] = nil
