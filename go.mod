@@ -13,7 +13,9 @@ require (
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/compose-spec/compose-go/v2 v2.16.2
 	github.com/containerd/errdefs v1.0.0
+	github.com/creack/pty v1.1.24
 	github.com/docker/docker v28.5.2+incompatible
+	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
 	github.com/mattn/go-isatty v0.0.24
 	github.com/mholt/caddy-l4 v0.1.2
 	github.com/moby/docker-image-spec v1.3.1

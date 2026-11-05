@@ -58,15 +58,17 @@ func init() {
 	migrateCmd.Flags().BoolVar(&migrateFlags.force, "force", false,
 		"Migrate even if the installed core does not serve caddy/sites yet")
 	rootCmd.AddCommand(migrateCmd)
+}
 
-	rootCmd.PersistentPreRun = func(c *cobra.Command, _ []string) {
-		switch {
-		case c == migrateCmd, c == serviceUpdateCmd, strings.HasPrefix(c.Name(), "__"),
-			c.Name() == "completion", c.Name() == "help":
-			return
-		}
-		ensureMigrated(configDir())
+// migratePreRun runs before every command that runs here rather than being
+// forwarded to the agent (see rootPreRun).
+func migratePreRun(c *cobra.Command) {
+	switch {
+	case c == migrateCmd, c == serviceUpdateCmd, strings.HasPrefix(c.Name(), "__"),
+		c.Name() == "completion", c.Name() == "help":
+		return
 	}
+	ensureMigrated(configDir())
 }
 
 // runMigration migrates every pending service, reporting to w, and returns

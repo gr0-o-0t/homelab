@@ -23,6 +23,8 @@ var parityExcludedCommands = map[string]string{
 	"":           "the root command is the dashboard / GUI itself",
 	"help":       "cobra's help; front ends show Action.Help",
 	"completion": "emits a shell completion script — meaningless outside a shell",
+	"agent":      "the agent's own process, run by its container — not a user action",
+	"envshim":    "container plumbing exec'd inside Swarm tasks — not a user action",
 }
 
 // parityExcludedFlags are flags no action passes.

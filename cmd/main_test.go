@@ -21,6 +21,9 @@ import (
 func TestMain(m *testing.M) {
 	envshimTestMain()
 	_ = os.Setenv("DOCKER_HOST", "unix:///nonexistent/homelab-test-docker.sock")
+	// Commands under test run in-process, as inside the agent: without this
+	// every one would be forwarded to a leader (remote_test.go clears it).
+	_ = os.Setenv("HOMELAB_AGENT", "1")
 	// Nor systemd: session mode's systemctl calls and unit path are fakes.
 	tmp, err := os.MkdirTemp("", "homelab-test-systemd-")
 	if err != nil {

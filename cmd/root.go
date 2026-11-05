@@ -56,9 +56,8 @@ Run without arguments to open the interactive service browser.`,
 
 // Execute is the entry point called from main.
 func Execute() {
-	if err := rootCmd.Execute(); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %s\n", err.Error())
-		os.Exit(1)
+	if code := executeArgs(os.Args[1:]); code != 0 {
+		os.Exit(code)
 	}
 }
 
