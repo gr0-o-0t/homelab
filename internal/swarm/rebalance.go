@@ -2,6 +2,7 @@ package swarm
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"slices"
@@ -19,6 +20,9 @@ const (
 	DefaultUpDebounce   = 2 * time.Minute
 	DownDebounce        = 20 * time.Second
 	eventsRetryInterval = 5 * time.Second
+	// ReconcileDelay is how soon a node event showing no transition re-applies
+	// the current state.
+	ReconcileDelay = 5 * time.Second
 )
 
 // Rebalancer moves worker-role services onto the worker PCs when the first
@@ -66,30 +70,21 @@ func (r *Rebalancer) sleep(ctx context.Context, d time.Duration) bool {
 // Run rebalances until ctx is cancelled, then returns nil. It places the
 // worker services for the cluster as it finds it, then follows node events.
 // A lost event stream is resubscribed after a pause.
+//
+// What was last applied only chooses the debounce; it is never trusted to
+// mean the services are placed right. A deploy during a pending wait, or an
+// apply that failed part-way, can leave services off the state, so a node
+// event that shows no transition still schedules a reconcile (the
+// idempotent apply of the current state) after ReconcileDelay.
 func (r *Rebalancer) Run(ctx context.Context) error {
 	d := &Deployer{API: r.API}
 
-	var applied bool
-	for {
-		ready, err := d.anyWorkerReady(ctx)
-		if err == nil {
-			if err = r.apply(ctx, d, ready); err == nil {
-				applied = ready
-				break
-			}
-		}
-		r.logf("rebalancer: initial placement: %v", err)
-		if !r.sleep(ctx, eventsRetryInterval) {
-			return nil
-		}
-	}
-
 	var (
-		pending bool
-		timer   <-chan time.Time // nil: no transition pending
+		applied bool             // last state applied in full; picks the debounce
+		target  bool             // state the pending timer will apply
+		timer   <-chan time.Time // nil: nothing pending
 	)
-	// observe re-reads the nodes and starts, keeps or cancels the wait for
-	// the transition they show.
+	// observe re-reads the nodes and schedules applying what they show.
 	observe := func() {
 		ready, err := d.anyWorkerReady(ctx)
 		if err != nil {
@@ -98,9 +93,10 @@ func (r *Rebalancer) Run(ctx context.Context) error {
 		}
 		switch {
 		case ready == applied:
-			timer = nil // flapped back: nothing to do
-		case timer == nil || ready != pending:
-			pending = ready
+			// No transition (or a flap back): reconcile soon, replacing any
+			// pending transition.
+			target, timer = ready, r.after(ReconcileDelay)
+		case timer == nil || ready != target:
 			wait := DownDebounce
 			if ready {
 				wait = r.Debounce
@@ -108,27 +104,56 @@ func (r *Rebalancer) Run(ctx context.Context) error {
 					wait = DefaultUpDebounce
 				}
 			}
-			timer = r.after(wait)
+			target, timer = ready, r.after(wait)
 		}
+		// else: this transition's wait is already running.
+	}
+	fire := func() {
+		if err := r.apply(ctx, d, target); err != nil {
+			r.logf("rebalancer: %v", err)
+			timer = r.after(eventsRetryInterval) // try again
+			return
+		}
+		applied = target
 	}
 
-	for {
+	for first := true; ; first = false {
 		subCtx, cancel := context.WithCancel(ctx)
 		msgs, errs := r.API.Events(subCtx, events.ListOptions{
 			Filters: filters.NewArgs(filters.Arg("type", string(events.NodeEventType))),
 		})
-		observe() // catch up on anything missed while unsubscribed
-		lost := r.follow(ctx, msgs, errs, observe, &timer, func() {
-			if err := r.apply(ctx, d, pending); err != nil {
-				r.logf("rebalancer: %v", err)
-				timer = r.after(eventsRetryInterval) // try again
-				return
+		if first {
+			// Subscribed first, so no change after this read is missed.
+			ok := r.initial(ctx, d, &applied)
+			if !ok {
+				cancel()
+				return nil
 			}
-			applied = pending
-		})
+		} else {
+			observe() // catch up on anything missed while unsubscribed
+		}
+		lost := r.follow(ctx, msgs, errs, observe, &timer, fire)
 		cancel()
 		if !lost || !r.sleep(ctx, eventsRetryInterval) {
 			return nil
+		}
+	}
+}
+
+// initial places the worker services for the cluster as Run finds it,
+// retrying until it succeeds or ctx is done (false).
+func (r *Rebalancer) initial(ctx context.Context, d *Deployer, applied *bool) bool {
+	for {
+		ready, err := d.anyWorkerReady(ctx)
+		if err == nil {
+			if err = r.apply(ctx, d, ready); err == nil {
+				*applied = ready
+				return true
+			}
+		}
+		r.logf("rebalancer: initial placement: %v", err)
+		if !r.sleep(ctx, eventsRetryInterval) {
+			return false
 		}
 	}
 }
@@ -163,7 +188,8 @@ func (r *Rebalancer) follow(ctx context.Context, msgs <-chan events.Message, err
 }
 
 // apply sets every worker-role service's constraints for workerReady,
-// updating only those that differ.
+// updating only those that differ. A failed service does not stop the rest:
+// the errors are joined and the caller retries the whole (idempotent) apply.
 func (r *Rebalancer) apply(ctx context.Context, d *Deployer, workerReady bool) error {
 	list, err := r.API.ServiceList(ctx, swarm.ServiceListOptions{
 		Filters: filters.NewArgs(filters.Arg("label", LabelRole+"="+string(RoleWorker))),
@@ -172,6 +198,7 @@ func (r *Rebalancer) apply(ctx context.Context, d *Deployer, workerReady bool) e
 		return fmt.Errorf("listing worker services: %w", err)
 	}
 	want := Constraints(RoleWorker, workerReady)
+	var errs []error
 	for i := range list {
 		s := &list[i]
 		if s.Spec.Labels[LabelRole] != string(RoleWorker) || slices.Equal(constraintsOf(&s.Spec), want) {
@@ -188,10 +215,10 @@ func (r *Rebalancer) apply(ctx context.Context, d *Deployer, workerReady bool) e
 			return next
 		})
 		if err != nil {
-			return fmt.Errorf("placing %s: %w", s.Spec.Name, err)
+			errs = append(errs, fmt.Errorf("placing %s: %w", s.Spec.Name, err))
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 func constraintsOf(spec *swarm.ServiceSpec) []string {

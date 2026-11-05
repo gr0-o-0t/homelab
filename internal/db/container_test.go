@@ -100,6 +100,25 @@ func TestProvisioner_ProviderComposeKeyIsItsName(t *testing.T) {
 	}
 }
 
+// During a rolling update the old task can still be running beside its
+// replacement: exec into the newest.
+func TestProvisioner_PicksNewestRunningTask(t *testing.T) {
+	older := taskContainer("pgold", "postgres_postgres", "running")
+	older.Created = 100
+	newer := taskContainer("pgnew", "postgres_postgres", "running")
+	newer.Created = 200
+	f := swarmtest.New()
+	f.SetContainers([]container.Summary{older, newer})
+	p := &Provisioner{API: f}
+	if got, err := p.Container(config.DBPostgres); err != nil || got != "pgnew" {
+		t.Errorf("Container = %q, %v; want the newest task pgnew", got, err)
+	}
+	f.SetContainers([]container.Summary{newer, older})
+	if got, _ := p.Container(config.DBPostgres); got != "pgnew" {
+		t.Errorf("Container = %q with the newest listed first; want pgnew", got)
+	}
+}
+
 func TestProvisioner_NoDockerAPI(t *testing.T) {
 	p := &Provisioner{}
 	if _, err := p.Container(config.DBPostgres); err == nil {

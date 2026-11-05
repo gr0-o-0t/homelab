@@ -50,6 +50,7 @@ type Fake struct {
 	secrets    []swarm.Secret
 	configs    []swarm.Config
 	seq        int
+	failUpdate map[string]error // service ID → error for its next ServiceUpdate
 }
 
 // New returns an empty Fake.
@@ -245,6 +246,10 @@ func (f *Fake) ServiceUpdate(_ context.Context, id string, version swarm.Version
 	}
 	if version.Index != s.Version.Index {
 		return swarm.ServiceUpdateResponse{}, errors.New("swarmtest: update out of sequence")
+	}
+	if err, ok := f.failUpdate[s.ID]; ok {
+		delete(f.failUpdate, s.ID)
+		return swarm.ServiceUpdateResponse{}, err
 	}
 	prev := s.Spec
 	s.PreviousSpec = &prev
@@ -587,4 +592,15 @@ func (f *Fake) ContainerExecAttach(_ context.Context, id string, _ container.Exe
 	defer f.mu.Unlock()
 	f.rec("ContainerExecAttach", id)
 	return types.HijackedResponse{}, nyi("ContainerExecAttach")
+}
+
+// FailServiceUpdateOnce makes the next ServiceUpdate of service id fail
+// with err; later updates succeed.
+func (f *Fake) FailServiceUpdateOnce(id string, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.failUpdate == nil {
+		f.failUpdate = map[string]error{}
+	}
+	f.failUpdate[id] = err
 }

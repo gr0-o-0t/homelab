@@ -8,9 +8,11 @@
 package db
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"time"
 
@@ -251,7 +253,10 @@ func (p *Provisioner) taskContainer(dbType config.DBType) (string, error) {
 	if len(list) == 0 {
 		return "", fmt.Errorf("%s is not running on this node", provider)
 	}
-	return list[0].ID, nil
+	// During a rolling update the old task can still be running beside its
+	// replacement; the newest is the one that stays.
+	newest := slices.MaxFunc(list, func(a, b container.Summary) int { return cmp.Compare(a.Created, b.Created) })
+	return newest.ID, nil
 }
 
 func (p *Provisioner) ensurePassword(svcName string) (string, error) {

@@ -68,9 +68,9 @@ func generateSecret(kind string) (string, error) {
 // service is about to be handed.
 //
 // The check matters because the password lives in two places — the keyring,
-// and the arguments homelab-redis was created with. A container created before
-// the password existed (or resumed with `docker start`) runs without auth, and
-// every client then fails on AUTH with an error that names neither cause.
+// and the env secret the redis service was deployed with. A service deployed
+// before the password existed runs without auth, and every client then
+// fails on AUTH with an error that names neither cause.
 func (p *Provisioner) provisionRedis(svcName string, decl config.ServiceDBDecl) error {
 	n, fresh, err := config.AllocateRedisDB(p.ConfigDir, svcName, decl.Name)
 	if err != nil {
@@ -107,8 +107,8 @@ func (p *Provisioner) provisionRedis(svcName string, decl config.ServiceDBDecl) 
 		ok = ok && r == "OK"
 	}
 	if !ok {
-		return fmt.Errorf("homelab-redis rejected the shared password (%s)\n"+
-			"  It was probably created before REDIS_PASSWORD existed: recreate it with `homelab up redis`",
+		return fmt.Errorf("the redis service rejected the shared password (%s)\n"+
+			"  It was probably deployed before REDIS_PASSWORD existed: redeploy it with `homelab up redis`",
 			firstLine(out))
 	}
 	return nil

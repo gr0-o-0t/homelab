@@ -140,7 +140,10 @@ func TestProvisionRedis_RejectsUnauthenticatedInstance(t *testing.T) {
 	}
 	err := p.Provision(context.Background(), config.DBRedis, "searxng", config.ServiceDBDecl{})
 	if err == nil || !strings.Contains(err.Error(), "homelab up redis") {
-		t.Fatalf("want a recreate-redis error, got %v", err)
+		t.Fatalf("want a redeploy-redis error, got %v", err)
+	}
+	if strings.Contains(err.Error(), "homelab-redis") {
+		t.Errorf("error names the Compose-era container: %v", err)
 	}
 }
 

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -229,24 +230,31 @@ func releaseDBDependencies(ctx context.Context, root, name string) []error {
 	if err != nil {
 		return []error{err}
 	}
-	sm, err := secrets.Open()
-	if err != nil {
-		return []error{fmt.Errorf("opening keyring: %w", err)}
+	// Only the garage key needs the keyring and Docker; the redis numbers
+	// are a file here, released even when neither is available.
+	p := db.New(root, nil)
+	var garageErr error
+	if sm, err := openSecrets(); err != nil {
+		garageErr = fmt.Errorf("opening keyring: %w", err)
+	} else {
+		p.SM = sm
 	}
-	p := db.New(root, sm)
-	closeAPI, err := attachDocker(p) // no Deployer: deleting never starts garage
-	if err != nil {
-		return []error{err}
+	if closeAPI, err := attachDocker(p); err != nil { // no Deployer: deleting never starts garage
+		garageErr = errors.Join(garageErr, err)
+	} else {
+		defer closeAPI()
 	}
-	defer closeAPI()
 	var errs []error
 	for i := range svcDB {
 		entry := &svcDB[i]
 		switch entry.Type {
 		case config.DBRedis:
 		case config.DBS3:
-			if err := p.EnsureRunning(ctx, entry.Type); err != nil {
-				errs = append(errs, fmt.Errorf("garage key for %s not deleted: %w", name, err))
+			if garageErr == nil {
+				garageErr = p.EnsureRunning(ctx, entry.Type)
+			}
+			if garageErr != nil {
+				errs = append(errs, fmt.Errorf("garage key for %s not deleted: %w", name, garageErr))
 				continue
 			}
 		default:
