@@ -7,8 +7,14 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/docker/docker/api/types/image"
+	dswarm "github.com/docker/docker/api/types/swarm"
+	dockerspec "github.com/moby/docker-image-spec/specs-go/v1"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/groot/homelab/internal/swarm"
 )
 
 // `cf route rm` used to run `cloudflared tunnel route dns --overwrite-dns`,
@@ -113,4 +119,26 @@ func TestTunnelIDFromToken(t *testing.T) {
 	assert.Error(t, err)
 	_, err = tunnelIDFromToken(base64.StdEncoding.EncodeToString([]byte(`{"a":"acct"}`)))
 	assert.Error(t, err)
+}
+
+// cloudflared is a Swarm service: start deploys it with the token from the
+// environment, stop removes it, and no token is an error, not a no-op.
+func TestStartStopCloudflared_UsesSwarm(t *testing.T) {
+	f := fakeSwarm(t)
+	f.SetImage(swarm.CloudflaredImage, image.InspectResponse{Config: &dockerspec.DockerOCIImageConfig{
+		ImageConfig: ocispec.ImageConfig{Entrypoint: []string{"cloudflared", "--no-autoupdate"}},
+	}})
+	root := t.TempDir()
+
+	require.Error(t, startCloudflared(root, map[string]string{}))
+	require.NoError(t, startCloudflared(root, map[string]string{"CF_TUNNEL_TOKEN": "tok"}))
+	svcs, err := f.ServiceList(t.Context(), dswarm.ServiceListOptions{})
+	require.NoError(t, err)
+	require.Len(t, svcs, 1)
+	assert.Equal(t, swarm.CloudflaredService, svcs[0].Spec.Name)
+
+	require.NoError(t, stopCloudflared(root))
+	svcs, err = f.ServiceList(t.Context(), dswarm.ServiceListOptions{})
+	require.NoError(t, err)
+	assert.Empty(t, svcs)
 }

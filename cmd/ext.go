@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/groot/homelab/internal/config"
@@ -234,6 +235,23 @@ func runExtStartStop(args []string, stop bool, build bool) error {
 	}
 	if len(targets) == 0 {
 		return fmt.Errorf("no extensions enabled or specified")
+	}
+
+	// cloudflared is a Swarm service, not a compose container.
+	cfTarget := slices.ContainsFunc(targets, func(l network.NetworkLayer) bool { return l.Name() == cloudflaredLayer })
+	if cfTarget {
+		targets = slices.DeleteFunc(targets, func(l network.NetworkLayer) bool { return l.Name() == cloudflaredLayer })
+		verb, do := "Starting", func() error { return startCloudflared(dir, env) }
+		if stop {
+			verb, do = "Stopping", func() error { return stopCloudflared(dir) }
+		}
+		fmt.Printf("%s %s cloudflared…\n", styles.Primary.Render("→"), verb)
+		if err := do(); err != nil {
+			return err
+		}
+	}
+	if len(targets) == 0 {
+		return nil
 	}
 
 	if stop {

@@ -1,9 +1,12 @@
 // Package cf implements the NetworkLayer interface for Cloudflare Tunnel
-// (cloudflared). Manages cloudflared container lifecycle and public DNS
-// route management for exposing services via Cloudflare's edge network.
+// (cloudflared). cloudflared runs as a Swarm service (swarm.Deployer); the
+// tunnel's ingress points at http://homelab-edge:80, the agent's plain-HTTP
+// listener.
 package cf
 
 import (
+	"context"
+	"errors"
 	"fmt"
 
 	"github.com/groot/homelab/internal/configgen"
@@ -23,6 +26,7 @@ type Layer struct {
 	repoRoot string
 	runner   *run.Commander
 	envFn    network.EnvFunc
+	tunnel   Tunnel
 }
 
 // New creates a new Cloudflare layer.
@@ -41,16 +45,31 @@ func (l *Layer) ContainerName() string { return containerName }
 func (l *Layer) Profile() string       { return "tunnel" }
 func (l *Layer) Flag() string          { return "cf" }
 
+// Tunnel runs and removes the cloudflared Swarm service; *swarm.Deployer
+// satisfies it.
+type Tunnel interface {
+	EnsureCloudflared(ctx context.Context, token string) error
+	RemoveCloudflared(ctx context.Context) error
+}
+
+// WithTunnel sets what Start and Stop drive: cloudflared is a Swarm service,
+// not a compose container.
+func (l *Layer) WithTunnel(t Tunnel) *Layer { l.tunnel = t; return l }
+
+var errNoTunnel = errors.New("cloudflare: no Swarm deployer configured")
+
 func (l *Layer) Start() error {
-	return l.runner.DockerComposeEnv(
-		run.CoreComposeFile(l.repoRoot), l.env(),
-		"--profile", "tunnel", "up", "-d")
+	if l.tunnel == nil {
+		return errNoTunnel
+	}
+	return l.tunnel.EnsureCloudflared(context.Background(), l.env()["CF_TUNNEL_TOKEN"])
 }
 
 func (l *Layer) Stop() error {
-	return l.runner.DockerComposeEnv(
-		run.CoreComposeFile(l.repoRoot), l.env(),
-		"stop", containerName)
+	if l.tunnel == nil {
+		return errNoTunnel
+	}
+	return l.tunnel.RemoveCloudflared(context.Background())
 }
 
 func (l *Layer) Status() network.Status {

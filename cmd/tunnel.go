@@ -2,22 +2,62 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	neturl "net/url"
+	"os"
+	"os/exec"
 	"strings"
 	"time"
 
 	"github.com/groot/homelab/internal/configgen"
-	"github.com/groot/homelab/internal/run"
+	"github.com/groot/homelab/internal/swarm"
 	"github.com/groot/homelab/internal/tui/styles"
 	"github.com/spf13/cobra"
 )
 
-const cloudflaredContainer = "cloudflared"
+// cloudflaredLayer is the extension name of the Cloudflare Tunnel layer.
+const cloudflaredLayer = "cf"
+
+// startCloudflared deploys cloudflared as a Swarm service with the tunnel
+// token from the environment (it reaches the container only through the env
+// shim secret). Without a token there is nothing to run.
+func startCloudflared(root string, env map[string]string) error {
+	if env["CF_TUNNEL_TOKEN"] == "" {
+		return fmt.Errorf("CF_TUNNEL_TOKEN not configured — run %s", styles.Primary.Render("homelab setup"))
+	}
+	return withDeployer(root, true, func(ctx context.Context, d *swarm.Deployer) error {
+		return d.EnsureCloudflared(ctx, env["CF_TUNNEL_TOKEN"])
+	})
+}
+
+// stopCloudflared removes the cloudflared Swarm service; Swarm has no
+// stopped-but-kept service, and the token stays in the keyring.
+func stopCloudflared(root string) error {
+	return withDeployer(root, false, func(ctx context.Context, d *swarm.Deployer) error {
+		return d.RemoveCloudflared(ctx)
+	})
+}
+
+// cloudflaredState reports the state of cloudflared's task.
+func cloudflaredState(root string) string {
+	state := "not found"
+	_ = withDeployer(root, false, func(ctx context.Context, d *swarm.Deployer) error {
+		tasks, err := d.Status(ctx, swarm.CloudflaredLabel)
+		if err != nil {
+			return err
+		}
+		if len(tasks) > 0 {
+			state = tasks[0].State
+		}
+		return nil
+	})
+	return state
+}
 
 var cfCmd = &cobra.Command{
 	Use:   "cf",
@@ -51,12 +91,12 @@ var tunnelStatusCmd = &cobra.Command{
 			return nil
 		}
 
-		state := containerStatus(cloudflaredContainer)
+		state := cloudflaredState(root)
 		if state == containerStateRunning {
 			fmt.Printf("  %s  cloudflared  %s\n", styles.Success.Render("✓"), styles.StateTag(state))
 		} else {
 			fmt.Printf("  %s  cloudflared  %s\n", styles.Err.Render("✗"), styles.StateTag(state))
-			fmt.Printf("\n  Start with: %s\n\n", styles.Primary.Render("homelab start"))
+			fmt.Printf("\n  Start with: %s\n\n", styles.Primary.Render("homelab ext start cf"))
 			return nil
 		}
 
@@ -64,20 +104,24 @@ var tunnelStatusCmd = &cobra.Command{
 			fmt.Printf("  %s  tunnel name  %s\n", styles.Muted.Render("↳"), styles.Bold.Render(tunnelName))
 		}
 
-		fmt.Printf("\n  %s\n", styles.Bold.Render("Active connections"))
-		if err := run.Default().DockerExec(cloudflaredContainer, "cloudflared", "tunnel", "info"); err != nil {
-			fmt.Printf("  %s  (run %s for details)\n",
-				styles.Muted.Render("!"), styles.Primary.Render("homelab cf logs"))
-		}
-		fmt.Println()
+		// cloudflared runs as a Swarm task, possibly on another node: there
+		// is no local container to exec `tunnel info` in.
+		fmt.Printf("\n  %s\n\n", styles.Muted.Render("Connections: homelab cf logs"))
 		return nil
 	},
 }
 
 // ── logs ──────────────────────────────────────────────────────────────────────
 
-var tunnelLogsCmd = layerLogsCmd("cf",
-	"Stream cloudflared logs")
+var tunnelLogsCmd = &cobra.Command{
+	Use:   "logs",
+	Short: "Stream cloudflared logs",
+	RunE: func(_ *cobra.Command, _ []string) error {
+		c := exec.Command("docker", "service", "logs", "-f", swarm.CloudflaredService) // #nosec G204 -- constant service name
+		c.Stdout, c.Stderr = os.Stdout, os.Stderr
+		return c.Run()
+	},
+}
 
 // ── route ─────────────────────────────────────────────────────────────────────
 
