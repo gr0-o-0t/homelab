@@ -47,6 +47,29 @@ func loadCatalog(t *testing.T) map[string]auditComposeFile {
 	return out
 }
 
+// TestCatalogServices_PlacementKeysExist keeps the placement and cache_volumes
+// markers honest: a typo would silently pin nothing.
+func TestCatalogServices_PlacementKeysExist(t *testing.T) {
+	for name, cf := range loadCatalog(t) {
+		data, err := assets.CatalogFS.ReadFile("services/" + name + "/config.yaml")
+		if err != nil {
+			continue
+		}
+		var cfg struct {
+			Placement    map[string]string `yaml:"placement"`
+			CacheVolumes []string          `yaml:"cache_volumes"`
+		}
+		require.NoError(t, yaml.Unmarshal(data, &cfg), "service %q config must parse", name)
+		for svc, role := range cfg.Placement {
+			assert.Contains(t, cf.Services, svc, "%s: placement key %q is not a compose service", name, svc)
+			assert.Contains(t, []string{"core", "worker", "any"}, role, "%s: placement %q", name, svc)
+		}
+		for _, v := range cfg.CacheVolumes {
+			assert.Contains(t, cf.Volumes, v, "%s: cache_volumes entry %q is not a compose volume", name, v)
+		}
+	}
+}
+
 // Two services binding the same host port cannot run at once — the second fails
 // to start with "port is already allocated". Most of the catalog publishes
 // nothing (Caddy fronts everything), so the few that do are worth pinning:

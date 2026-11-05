@@ -374,6 +374,24 @@ type Config struct {
 	Databases  yaml.Node              `yaml:"databases,omitempty"`
 	Extensions []string               `yaml:"extensions,omitempty"`
 	Ports      PortEntries            `yaml:"ports,omitempty"`
+	// Placement (service config only) maps a compose service name to the
+	// machine role it may run on: core, worker or any.
+	Placement map[string]string `yaml:"placement,omitempty"`
+	// CacheVolumes (service config only) lists compose volume keys that are
+	// re-creatable, so they need no pinning to the core.
+	CacheVolumes []string `yaml:"cache_volumes,omitempty"`
+}
+
+// validate checks the values yaml cannot: placement roles.
+func (cfg *Config) validate() error {
+	for svc, role := range cfg.Placement {
+		switch role {
+		case "core", "worker", "any":
+		default:
+			return fmt.Errorf("placement for %q: unknown role %q (want core, worker or any)", svc, role)
+		}
+	}
+	return nil
 }
 
 // extensionAliases maps config.yaml extension names to registry (canonical) names.
@@ -650,6 +668,9 @@ func Load(path string) (*Config, error) {
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parsing %s: %w", path, err)
+	}
+	if err := cfg.validate(); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	// A file without a vars:/secrets: section is valid; callers write into
 	// these maps, so they must never be nil.

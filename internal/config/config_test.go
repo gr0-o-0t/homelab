@@ -83,6 +83,29 @@ func TestLoad_InvalidYAML(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestServiceConfig_PlacementAndCache(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "config.yaml", `
+placement:
+  ml: worker
+  db: core
+  web: any
+cache_volumes: [model-cache]
+`)
+	cfg, err := config.Load(filepath.Join(dir, "config.yaml"))
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"ml": "worker", "db": "core", "web": "any"}, cfg.Placement)
+	assert.Equal(t, []string{"model-cache"}, cfg.CacheVolumes)
+}
+
+func TestServiceConfig_PlacementRejectsUnknown(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "config.yaml", "placement: {x: gpu}\n")
+	_, err := config.Load(filepath.Join(dir, "config.yaml"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "gpu")
+}
+
 // ── Save ──────────────────────────────────────────────────────────────────────
 
 func TestSave_Roundtrip(t *testing.T) {
