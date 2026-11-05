@@ -25,9 +25,9 @@ By default the service is exposed on your private tailnet
 with extension flags:
 
   --cf    expose via Cloudflare Tunnel (public internet)
-  --i2p   expose as I2P eepsite (.i2p)
-  --tor   expose as Tor onion service (.onion)
-  --ygg   expose on Yggdrasil IPv6 mesh
+
+Tor, I2P and Yggdrasil (--tor, --i2p, --ygg) are not available in cluster
+mode yet.
 
 Port selection defaults to all ports declared in the service's config.yaml.
 Use --ports to expose specific named ports only. --name and --ports are
@@ -38,7 +38,6 @@ port resets them.
 Examples:
   homelab enable gitea                      # private tailnet only
   homelab enable gitea --cf                 # private + Cloudflare
-  homelab enable gitea --cf --i2p           # private + CF + I2P
   homelab enable gitea --ports=web,ssh --cf # specific ports + CF
   homelab enable gitea --name=dev-gitea     # custom display name`,
 	Args:              cobra.ExactArgs(1),
@@ -49,6 +48,7 @@ Examples:
 var (
 	enableLayerFlags = map[string]*bool{} // layer name → its --<flag>
 	enableAllExts    bool
+	enableUnavail    map[string]*bool // flags of layers not registered in cluster mode
 
 	enableName  string
 	enablePorts []string
@@ -60,6 +60,7 @@ func init() {
 			enableLayerFlags[l.Name()] = enableCmd.Flags().Bool(l.Flag(), false, "Expose via "+l.Label())
 		}
 	}
+	enableUnavail = addUnavailableFlags(enableCmd)
 	enableCmd.Flags().BoolVar(&enableAllExts, "all", false, "Enable all available extensions")
 	enableCmd.Flags().StringVar(&enableName, "name", "", "Custom display name (subdomain)")
 	enableCmd.Flags().StringSliceVar(&enablePorts, "ports", nil, "Specific named ports to expose (comma-separated)")
@@ -69,6 +70,9 @@ func init() {
 func runEnable(cmd *cobra.Command, args []string) error {
 	svcName := args[0]
 	root := configDir()
+	if err := refuseUnavailable(enableUnavail); err != nil {
+		return err
+	}
 	if err := validName(svcName); err != nil {
 		return err
 	}

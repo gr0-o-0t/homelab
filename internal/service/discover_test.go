@@ -58,9 +58,6 @@ func expose(t *testing.T, repo, name, layer string) {
 
 func enablePrivate(t *testing.T, repo, name string) { expose(t, repo, name, "ts") }
 func enablePublic(t *testing.T, repo, name string)  { expose(t, repo, name, "cf") }
-func enableTor(t *testing.T, repo, name string)     { expose(t, repo, name, "tor") }
-func enableI2P(t *testing.T, repo, name string)     { expose(t, repo, name, "i2p") }
-func enableYgg(t *testing.T, repo, name string)     { expose(t, repo, name, "ygg") }
 
 // ── Discover ──────────────────────────────────────────────────────────────────
 
@@ -173,71 +170,18 @@ func TestDiscover_FilesWithoutStateDoNotCount(t *testing.T) {
 }
 
 // Layers come back in registry order, whatever order the file lists them in.
+// Layers not registered in cluster mode (tor, i2p, ygg) are not reported.
 func TestDiscover_LayersInRegistryOrder(t *testing.T) {
 	repo := newRepo(t)
 	addService(t, repo, "myapp")
-	require.NoError(t, exposure.Save(repo, "myapp", exposure.State{Layers: []string{"ygg", "cf", "ts", "bogus"}}))
+	require.NoError(t, exposure.Save(repo, "myapp", exposure.State{Layers: []string{"ygg", "tor", "cf", "ts", "bogus"}}))
 
 	svcs, err := service.Discover(repo)
 	require.NoError(t, err)
-	assert.Equal(t, []string{"ts", "cf", "ygg"}, svcs[0].ActiveLayers())
+	assert.Equal(t, []string{"ts", "cf"}, svcs[0].ActiveLayers())
 }
 
 // ── Network extension layer detection ─────────────────────────────────────────
-
-func TestDiscover_TorLayer(t *testing.T) {
-	repo := newRepo(t)
-	addService(t, repo, "myapp")
-	enableTor(t, repo, "myapp")
-
-	svcs, err := service.Discover(repo)
-	require.NoError(t, err)
-	require.Len(t, svcs, 1)
-	assert.True(t, svcs[0].On("tor"), "tor in exposure.yaml")
-	assert.False(t, svcs[0].On("i2p"))
-	assert.False(t, svcs[0].On("ygg"))
-}
-
-func TestDiscover_I2PLayer(t *testing.T) {
-	repo := newRepo(t)
-	addService(t, repo, "myapp")
-	enableI2P(t, repo, "myapp")
-
-	svcs, err := service.Discover(repo)
-	require.NoError(t, err)
-	require.Len(t, svcs, 1)
-	assert.True(t, svcs[0].On("i2p"), "i2p in exposure.yaml")
-	assert.False(t, svcs[0].On("tor"))
-	assert.False(t, svcs[0].On("ygg"))
-}
-
-func TestDiscover_YggLayer(t *testing.T) {
-	repo := newRepo(t)
-	addService(t, repo, "myapp")
-	enableYgg(t, repo, "myapp")
-
-	svcs, err := service.Discover(repo)
-	require.NoError(t, err)
-	require.Len(t, svcs, 1)
-	assert.True(t, svcs[0].On("ygg"), "ygg in exposure.yaml")
-	assert.False(t, svcs[0].On("tor"))
-	assert.False(t, svcs[0].On("i2p"))
-}
-
-func TestDiscover_AllExtensionLayers(t *testing.T) {
-	repo := newRepo(t)
-	addService(t, repo, "myapp")
-	enableTor(t, repo, "myapp")
-	enableI2P(t, repo, "myapp")
-	enableYgg(t, repo, "myapp")
-
-	svcs, err := service.Discover(repo)
-	require.NoError(t, err)
-	require.Len(t, svcs, 1)
-	assert.True(t, svcs[0].On("tor"))
-	assert.True(t, svcs[0].On("i2p"))
-	assert.True(t, svcs[0].On("ygg"))
-}
 
 func TestDiscover_ExtensionLayerWithoutService(t *testing.T) {
 	repo := newRepo(t)

@@ -13,17 +13,27 @@ import (
 	"github.com/groot/homelab/internal/run"
 )
 
-// New returns every layer, in display order, rooted at the given config dir.
-// runner and env may be nil for callers that only read identity or routing
-// (names, site templates) and never start a container.
+// New returns every available layer, in display order, rooted at the given
+// config dir. In cluster mode that is the tailnet and Cloudflare; tor, i2p and
+// ygg stay out of the registry (see Unavailable) until a later plan brings them
+// back. runner and env may be nil for callers that only read identity or
+// routing (names, site templates) and never start a container.
 func New(root string, runner *run.Commander, env network.EnvFunc) *network.Registry {
 	r := network.NewRegistry()
 	r.Register(tailscale.New(root, runner, env)) // the private layer: always first
 	r.Register(cf.New(root, runner, env))
-	r.Register(tor.New(root, runner, env))
-	r.Register(i2p.New(root, runner, env))
-	r.Register(ygg.New(root, runner, env))
 	return r
+}
+
+// Unavailable returns the layers that exist as packages but are not registered
+// in cluster mode, for identity only (name, flag, label). enable and disable
+// use it to refuse their flags with a clear message instead of "unknown flag".
+func Unavailable() []network.NetworkLayer {
+	return []network.NetworkLayer{
+		tor.New("", nil, nil),
+		i2p.New("", nil, nil),
+		ygg.New("", nil, nil),
+	}
 }
 
 // Static returns the layers for identity only — name, label, flag —

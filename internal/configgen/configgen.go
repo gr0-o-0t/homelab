@@ -186,6 +186,9 @@ func Render(l network.NetworkLayer, e Exposure) ([]CaddyBlock, error) {
 		var b strings.Builder
 		b.WriteString(s.Comment)
 		b.WriteString(s.Address + " {\n")
+		if s.Bind != "" {
+			b.WriteString("\tbind " + s.Bind + "\n")
+		}
 		if s.TLS {
 			b.WriteString("\timport wildcard_tls\n")
 		}
@@ -430,7 +433,7 @@ func L4File(root, svcName string) string {
 
 // RenderL4 renders a service's layer4 servers, or "" when it has no raw port.
 // A port with an explicit listen port (gitea's 22:2222) is not HTTP: Caddy
-// listens on it in the tailnet namespace and pipes bytes (or datagrams) to the
+// listens on the tailnet node (network.TailnetBind) and pipes bytes (or datagrams) to the
 // container. A listen port is global, not per host, so two services cannot
 // share one; `caddy validate` rejects the duplicate and enable rolls back.
 func RenderL4(e Exposure) string {
@@ -444,7 +447,9 @@ func RenderL4(e Exposure) string {
 			if proto == protoUDP {
 				prefix = "udp/"
 			}
-			fmt.Fprintf(&b, "\n%s:%d {\n\troute {\n\t\tproxy %s%s:%d\n\t}\n}\n", prefix, p.Listen, prefix, e.Service, p.Port)
+			// NOTE: udp on the custom hl-ts network is not verified against
+			// caddy-l4's address grammar (spike S1 covered tcp only).
+			fmt.Fprintf(&b, "\n%s%s:%d {\n\troute {\n\t\tproxy %s%s:%d\n\t}\n}\n", prefix, network.TailnetBind, p.Listen, prefix, e.Service, p.Port)
 		}
 	}
 	if b.Len() == 0 {

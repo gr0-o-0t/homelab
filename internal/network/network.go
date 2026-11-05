@@ -10,6 +10,12 @@ import (
 	"time"
 )
 
+// TailnetBind is the Caddy network address of the agent's tailnet node: the
+// in-process network "hl-ts" (caddy.RegisterNetwork) and the tsnet hostname
+// "homelab". Tailnet sites `bind` to it and raw-port (caddy-l4) listeners
+// listen on it, so tailnet traffic never touches the host's own interfaces.
+const TailnetBind = "hl-ts/homelab"
+
 // Status represents the current operational state of a network layer.
 type Status struct {
 	ContainerState string // "running", "stopped", "not found"
@@ -56,6 +62,7 @@ type Site struct {
 	Address  string // Caddy site address, e.g. "http://gitea.{$DOMAIN}" or ":9000"
 	Port     int    // upstream container port a generated reverse_proxy targets
 	TLS      bool   // import the wildcard_tls snippet (tailnet only)
+	Bind     string // bind directive written first in the block; "" = none
 	Comment  string // header written above the block, newline-terminated; may be empty
 	// AllowFrom, when set, limits the site to these client address ranges;
 	// any other client has its connection closed. For listeners that are
@@ -157,6 +164,7 @@ type HostRouted interface {
 type HostTemplate struct {
 	Prefix, Suffix string
 	TLS            bool
+	Bind           string // Caddy network address the sites bind to; "" = Caddy's default listeners
 }
 
 // Sites implements NetworkLayer.Sites for a Host-routed layer.
@@ -179,7 +187,7 @@ func (h HostTemplate) Sites(_, host string, ports []PortSelection) ([]Site, erro
 			label = p.Subdomain // replaces the service name, never prefixes it
 		}
 		sites = append(sites, Site{
-			PortName: p.Name, Address: h.Prefix + label + h.Suffix, Port: p.Port, TLS: h.TLS,
+			PortName: p.Name, Address: h.Prefix + label + h.Suffix, Port: p.Port, TLS: h.TLS, Bind: h.Bind,
 		})
 	}
 	return sites, nil

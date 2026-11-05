@@ -56,13 +56,13 @@ func TestColors_MatchTerminalPalette(t *testing.T) {
 
 // ── surfaces, grouping, filtering ─────────────────────────────────────────────
 
-var allLayers = []string{"ts", "cf", "tor", "i2p", "ygg"}
+var allLayers = []string{"ts", "cf"}
 
 func fixtureServices() []service.Service {
 	return []service.Service{
 		{Name: "web", Installed: true, Running: 1, Total: 1, Layers: []service.LayerName{"ts"},
 			Containers: []docker.ContainerDetail{{}}},
-		{Name: "db", Installed: true, Running: 1, Total: 2, Layers: []service.LayerName{"ts", "tor"}},
+		{Name: "db", Installed: true, Running: 1, Total: 2, Layers: []service.LayerName{"ts", "cf"}},
 		{Name: "idle", Installed: true},
 		{Name: "gone", Installed: true, Total: 1},
 		{Name: "everywhere", Installed: true, Running: 1, Total: 1,
@@ -158,19 +158,22 @@ func TestMultiTarget_OffersOnlyMultiActions(t *testing.T) {
 }
 
 func TestLayerToggle_FindsEnableAndDisable(t *testing.T) {
-	svc := fixtureServices()[1] // db: ts + tor
+	svc := fixtureServices()[1] // db: ts + cf
 	tgt := actions.ServiceTarget(svc, allLayers)
-	on, act := layerToggle(tgt, "tor")
+	on, act := layerToggle(tgt, "cf")
 	assert.True(t, on)
 	require.NotNil(t, act)
-	assert.Equal(t, []string{"disable", "--tor", "db"}, act.Build(tgt, nil))
+	assert.Equal(t, []string{"disable", "--cf", "db"}, act.Build(tgt, nil))
 
-	on, act = layerToggle(tgt, "cf")
+	on, act = layerToggle(actions.ServiceTarget(fixtureServices()[0], allLayers), "cf")
 	assert.False(t, on)
 	require.NotNil(t, act)
-	assert.Equal(t, []string{"enable", "--cf", "db"}, act.Build(tgt, nil))
+	assert.Equal(t, []string{"enable", "--cf", "web"}, act.Build(actions.ServiceTarget(fixtureServices()[0], allLayers), nil))
 
-	_, act = layerToggle(actions.ServiceTarget(svc, []string{"ts"}), "cf")
+	_, act = layerToggle(tgt, "tor")
+	assert.Nil(t, act, "tor is not available in cluster mode")
+
+	_, act = layerToggle(actions.ServiceTarget(fixtureServices()[0], []string{"ts"}), "cf")
 	assert.Nil(t, act, "cf is not offered when the extension is off")
 
 	for _, id := range layerToggleIDs(allLayers) {
@@ -201,8 +204,8 @@ func TestServiceState(t *testing.T) {
 	assert.Equal(t, "not created", stateLabel(s[2]))
 	assert.Equal(t, "stopped", stateLabel(s[3]))
 	assert.Equal(t, "available", stateLabel(s[5]))
-	assert.True(t, matchesFilter(s[1], "db tor"))
-	assert.False(t, matchesFilter(s[1], "db cf"))
+	assert.True(t, matchesFilter(s[1], "db cf"))
+	assert.False(t, matchesFilter(s[1], "db tor"))
 	assert.True(t, matchesFilter(s[1], ""))
 }
 

@@ -22,6 +22,19 @@ func TestStatic_OrderAndIdentity(t *testing.T) {
 			flags[l.Flag()] = true
 		}
 	}
-	assert.Equal(t, []string{"ts", "cf", "tor", "i2p", "ygg"}, names)
+	assert.Equal(t, []string{"ts", "cf"}, names)
 	assert.Len(t, flags, len(names)-1, "only the private layer has no flag")
+}
+
+// tor, i2p and ygg exist as packages but are not registered until a later plan.
+func TestNew_RegistersOnlyClusterLayers(t *testing.T) {
+	reg := layers.New("", nil, nil)
+	for _, n := range []string{"tor", "i2p", "ygg"} {
+		assert.False(t, reg.Has(n), n)
+	}
+	var un []string
+	for _, l := range layers.Unavailable() {
+		un = append(un, l.Name())
+	}
+	assert.Equal(t, []string{"tor", "i2p", "ygg"}, un)
 }

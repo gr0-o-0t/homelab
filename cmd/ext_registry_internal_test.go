@@ -27,8 +27,8 @@ func TestExtRegistry_NotBuiltUntilFirstAccess(t *testing.T) {
 	rootFlags.configDir = t.TempDir()
 	reg1 := extRegistry()
 	require.NotNil(t, reg1)
-	_, ok := reg1.Get("tor")
-	assert.True(t, ok, "expected tor layer to be registered")
+	_, ok := reg1.Get("cf")
+	assert.True(t, ok, "expected cf layer to be registered")
 
 	// A later call must reuse the same instance rather than rebuilding
 	// against whatever configDir() now resolves to.

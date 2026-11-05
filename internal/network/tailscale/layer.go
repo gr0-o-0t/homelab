@@ -33,7 +33,7 @@ type Layer struct {
 // New creates a new Tailscale layer.
 func New(repoRoot string, runner *run.Commander, envFn network.EnvFunc) *Layer {
 	return &Layer{
-		HostTemplate: network.HostTemplate{Suffix: ".{$HOME_SUBDOMAIN}.{$DOMAIN}", TLS: true},
+		HostTemplate: network.HostTemplate{Suffix: ".{$HOME_SUBDOMAIN}.{$DOMAIN}", TLS: true, Bind: network.TailnetBind},
 		repoRoot:     repoRoot, runner: runner, envFn: envFn,
 	}
 }

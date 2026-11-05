@@ -21,9 +21,9 @@ var disableCmd = &cobra.Command{
 Select which layers to remove with extension flags:
 
   --cf    remove Cloudflare Tunnel config
-  --i2p   remove I2P eepsite config
-  --tor   remove Tor onion service config
-  --ygg   remove Yggdrasil mesh config
+
+Tor, I2P and Yggdrasil (--tor, --i2p, --ygg) are not available in cluster
+mode yet.
 
 Without flags, only the private tailnet config is removed.
 -a/--all removes every layer, private included. The container keeps running;
@@ -32,7 +32,6 @@ add --stop to also stop and remove it.
 Examples:
   homelab disable gitea                  # private only
   homelab disable gitea --cf             # remove CF exposure
-  homelab disable gitea --cf --i2p       # CF + I2P
   homelab disable gitea -a               # every layer
   homelab disable gitea -a --stop        # every layer, then down`,
 	Args:              cobra.ExactArgs(1),
@@ -44,6 +43,7 @@ var (
 	disableLayerFlags = map[string]*bool{} // layer name → its --<flag>
 	disableAll        bool                 // -a: every layer, private included
 	disableStop       bool                 // --stop: additionally take the service down
+	disableUnavail    map[string]*bool     // flags of layers not registered in cluster mode
 )
 
 func init() {
@@ -52,6 +52,7 @@ func init() {
 			disableLayerFlags[l.Name()] = disableCmd.Flags().Bool(l.Flag(), false, "Remove "+l.Label()+" config")
 		}
 	}
+	disableUnavail = addUnavailableFlags(disableCmd)
 	disableCmd.Flags().BoolVarP(&disableAll, "all", "a", false, "Remove every layer, private included")
 	disableCmd.Flags().BoolVar(&disableStop, "stop", false, "Also stop and remove the service containers")
 	rootCmd.AddCommand(disableCmd)
@@ -60,6 +61,9 @@ func init() {
 func runDisable(cmd *cobra.Command, args []string) error {
 	svcName := args[0]
 	root := configDir()
+	if err := refuseUnavailable(disableUnavail); err != nil {
+		return err
+	}
 	// Only the name is checked: disable must still clean up the routes of a
 	// service whose directory is already gone.
 	if err := validName(svcName); err != nil {

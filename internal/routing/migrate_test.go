@@ -11,7 +11,11 @@ import (
 	"github.com/groot/homelab/internal/configgen"
 	"github.com/groot/homelab/internal/exposure"
 	"github.com/groot/homelab/internal/network"
-	"github.com/groot/homelab/internal/network/layers"
+	"github.com/groot/homelab/internal/network/cf"
+	"github.com/groot/homelab/internal/network/i2p"
+	"github.com/groot/homelab/internal/network/tailscale"
+	"github.com/groot/homelab/internal/network/tor"
+	"github.com/groot/homelab/internal/network/ygg"
 	"github.com/groot/homelab/internal/routing"
 )
 
@@ -48,7 +52,7 @@ func writeFile(t *testing.T, path, content string) {
 //   - onion: tor only.
 func legacyTree(t *testing.T) (root string, legacyFiles []string) {
 	root = t.TempDir()
-	reg := layers.New(root, nil, nil)
+	reg := legacyRegistry(root)
 	get := func(n string) network.NetworkLayer { l, _ := reg.Get(n); return l }
 
 	writeSvc(t, root, "app", map[string]string{"config.yaml": "ports:\n  - 3000\n"})
@@ -79,7 +83,7 @@ func legacyTree(t *testing.T) (root string, legacyFiles []string) {
 
 func TestMigrate_LegacyTree(t *testing.T) {
 	root, legacyFiles := legacyTree(t)
-	reg := layers.New(root, nil, nil)
+	reg := legacyRegistry(root)
 
 	pending, err := routing.Pending(root, reg)
 	require.NoError(t, err)
@@ -134,7 +138,7 @@ func TestMigrate_LegacyTree(t *testing.T) {
 // A second run finds nothing to do and changes nothing.
 func TestMigrate_Idempotent(t *testing.T) {
 	root, _ := legacyTree(t)
-	reg := layers.New(root, nil, nil)
+	reg := legacyRegistry(root)
 	_, err := routing.Migrate(root, reg)
 	require.NoError(t, err)
 	sites := read(t, configgen.SitesFile(root, "multi"))
@@ -154,7 +158,7 @@ func TestMigrate_Idempotent(t *testing.T) {
 // and the next run resumes from the state it wrote.
 func TestMigrate_FailureKeepsLegacyAndResumes(t *testing.T) {
 	root := t.TempDir()
-	reg := layers.New(root, nil, nil)
+	reg := legacyRegistry(root)
 	writeSvc(t, root, "hidden", map[string]string{"config.yaml": "ports:\n  - 80\n"})
 	torBlock := filepath.Join(root, "caddy", "conf.d-tor", "hidden.conf")
 	// No onion anywhere: not in the block, no hostname file, no tor running.
@@ -181,7 +185,7 @@ func TestMigrate_FailureKeepsLegacyAndResumes(t *testing.T) {
 // port is fine — it simply has no mesh port for it.
 func TestMigrate_PerLayerPortsMismatch(t *testing.T) {
 	root := t.TempDir()
-	reg := layers.New(root, nil, nil)
+	reg := legacyRegistry(root)
 	ts, _ := reg.Get("ts")
 	cfl, _ := reg.Get("cf")
 	writeSvc(t, root, "gitea", map[string]string{"config.yaml": "ports:\n  - 3000\n  - admin:9000\n"})
@@ -206,4 +210,17 @@ func TestMigrate_PerLayerPortsMismatch(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, exposure.State{Layers: []string{"ts", "cf", "ygg"}, Ports: []string{"default"}, YggPorts: map[string]int{"default": 9002}}, st)
 	assert.Contains(t, read(t, configgen.SitesFile(root, "gitea")), ":9002 {")
+}
+
+// legacyRegistry holds all five layers, as the registry did before cluster
+// mode: the trees migration reads were written when tor, i2p and ygg existed,
+// and the migration code still handles them.
+func legacyRegistry(root string) *network.Registry {
+	r := network.NewRegistry()
+	r.Register(tailscale.New(root, nil, nil))
+	r.Register(cf.New(root, nil, nil))
+	r.Register(tor.New(root, nil, nil))
+	r.Register(i2p.New(root, nil, nil))
+	r.Register(ygg.New(root, nil, nil))
+	return r
 }

@@ -86,10 +86,10 @@ func TestSync_RawPortsGetL4OnTailnetOnly(t *testing.T) {
 
 	require.NoError(t, routing.Sync(root, reg, "gitea"))
 	got := read(t, configgen.L4File(root, "gitea"))
-	assert.Contains(t, got, ":22 {\n\troute {\n\t\tproxy gitea:2222\n\t}\n}\n")
-	assert.Contains(t, got, "\n:53 {\n\troute {\n\t\tproxy gitea:53\n")
-	assert.Contains(t, got, "udp/:53 {\n\troute {\n\t\tproxy udp/gitea:53\n")
-	assert.NotContains(t, got, "udp/:22")
+	assert.Contains(t, got, "hl-ts/homelab:22 {\n\troute {\n\t\tproxy gitea:2222\n\t}\n}\n")
+	assert.Contains(t, got, "\nhl-ts/homelab:53 {\n\troute {\n\t\tproxy gitea:53\n")
+	assert.Contains(t, got, "udp/hl-ts/homelab:53 {\n\troute {\n\t\tproxy udp/gitea:53\n")
+	assert.NotContains(t, got, "udp/hl-ts/homelab:22")
 	assert.NotContains(t, read(t, configgen.SitesFile(root, "gitea")), ":22")
 
 	require.NoError(t, routing.Apply(root, reg, "gitea", func(s *exposure.State) { s.Set("ts", false) }))

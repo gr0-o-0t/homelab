@@ -34,6 +34,29 @@ func extRegistry() *network.Registry {
 	return extRegistryInstance
 }
 
+// addUnavailableFlags registers a hidden --<flag> on c for every layer that is
+// not registered in cluster mode, so using one fails with a clear message
+// (refuseUnavailable) rather than cobra's "unknown flag". Hidden keeps them out
+// of --help and the actions parity check.
+func addUnavailableFlags(c *cobra.Command) map[string]*bool {
+	flags := map[string]*bool{}
+	for _, l := range layers.Unavailable() {
+		flags[l.Name()] = c.Flags().Bool(l.Flag(), false, l.Label()+" (not available in cluster mode yet)")
+		_ = c.Flags().MarkHidden(l.Flag())
+	}
+	return flags
+}
+
+// refuseUnavailable errors when any unavailable layer's flag was given.
+func refuseUnavailable(flags map[string]*bool) error {
+	for _, l := range layers.Unavailable() {
+		if *flags[l.Name()] {
+			return fmt.Errorf("%s is not available in cluster mode yet", l.Name())
+		}
+	}
+	return nil
+}
+
 // layerByName returns a registered layer, accepting config.yaml aliases
 // ("yggdrasil" for ygg).
 func layerByName(name string) (network.NetworkLayer, error) {
