@@ -1,0 +1,31 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Service: Glance (self-hosted dashboard with widgets and feeds)
+# https://github.com/glanceapp/glance
+# ─────────────────────────────────────────────────────────────────────────────
+
+networks:
+  home-services:
+    name: home-services
+    external: true
+
+services:
+  glance:
+    image: glanceapp/glance:latest
+    container_name: glance
+    user: "${PUID:-1000}:${PGID:-1000}"
+    restart: always
+    volumes:
+      # glance.yml lives in config/ next to this file; edits hot-reload.
+      - ./config:/app/config:ro
+    networks:
+      - home-services
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q --spider http://localhost:8080 2>/dev/null || exit 1",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s

@@ -1,0 +1,6 @@
+# Fixture: a privileged container, which Swarm services cannot run.
+services:
+  miner:
+    image: example/miner:1
+    restart: always
+    privileged: true

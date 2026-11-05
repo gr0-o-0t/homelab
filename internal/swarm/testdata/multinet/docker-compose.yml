@@ -1,0 +1,15 @@
+# Fixture: two internal networks, plus a service left on compose's default.
+networks:
+  front:
+    internal: true
+  back:
+    internal: true
+
+services:
+  a:
+    image: example/a:1
+    restart: always
+    networks: [front, back]
+  b:
+    image: example/b:1
+    restart: always

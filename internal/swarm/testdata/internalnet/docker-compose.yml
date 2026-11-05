@@ -1,0 +1,47 @@
+# Fixture: one databases-only internal network next to home-services.
+networks:
+  home-services:
+    name: home-services
+    external: true
+  backend:
+    internal: true
+
+services:
+  web:
+    image: example/web:${WEB_VERSION:-1}
+    container_name: internalnet-web
+    restart: unless-stopped
+    entrypoint: ["/bin/run"]
+    command: ["--port", "8080"]
+    cap_add: [NET_ADMIN]
+    labels:
+      example.label: "yes"
+    ports:
+      - "8080:8080"
+    networks:
+      home-services:
+        aliases: [web-extra]
+      backend:
+    volumes:
+      - data:/data
+      - cache:/cache
+
+  worker:
+    image: example/worker:1
+    restart: on-failure:3
+    depends_on: [web]
+    networks:
+      - backend
+
+  job:
+    image: example/job:1
+    restart: "no"
+    tmpfs:
+      - /scratch
+    networks:
+      - backend
+
+volumes:
+  data: {}
+  cache:
+    name: shared_cache
