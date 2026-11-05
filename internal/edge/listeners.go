@@ -28,6 +28,15 @@ func (p *pool) listener(key string, open func() (net.Listener, error)) (net.List
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	s := p.streams[key]
+	if s != nil && closed(s.dead) {
+		// The socket failed under the running config. Sharing it would
+		// hand the next config a listener that never accepts again; evict
+		// it (its remaining handles keep reporting the failure) and open a
+		// new one. Closing it frees the port for that.
+		delete(p.streams, key)
+		_ = s.ln.Close()
+		s = nil
+	}
 	if s == nil {
 		ln, err := open()
 		if err != nil {
@@ -39,6 +48,16 @@ func (p *pool) listener(key string, open func() (net.Listener, error)) (net.List
 	}
 	s.refs++
 	return &listenerHandle{s: s, closed: make(chan struct{}), release: func() { p.release(key, s) }}, nil
+}
+
+// closed reports whether ch is closed, without blocking.
+func closed(ch chan struct{}) bool {
+	select {
+	case <-ch:
+		return true
+	default:
+		return false
+	}
 }
 
 func (p *pool) release(key string, s *sharedListener) {
@@ -115,6 +134,11 @@ func (p *pool) packetConn(key string, open func() (net.PacketConn, error)) (net.
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	s := p.packets[key]
+	if s != nil && closed(s.dead) {
+		delete(p.packets, key) // failed socket: see listener
+		_ = s.pc.Close()
+		s = nil
+	}
 	if s == nil {
 		pc, err := open()
 		if err != nil {

@@ -166,13 +166,45 @@ func TestAssemble_AdminSocketOverride(t *testing.T) {
 func TestAdapt_ExpandsPlaceholdersInMemory(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("DOMAIN", "wrong.example")
-	writeFile(t, siteFile(root, "a"), "a.{$HOME_SUBDOMAIN}.{$DOMAIN} {\n\trespond {$MISSING:fallback}\n}\n")
+	writeFile(t, siteFile(root, "a"), "a.{$HOME_SUBDOMAIN}.{$DOMAIN} {\n\trespond {$ACME_EMAIL}\n}\n")
 	cfg, err := Adapt(root, testEnv)
 	require.NoError(t, err)
 	assert.Contains(t, string(cfg), "a.home.example.test")
-	assert.Contains(t, string(cfg), "fallback")
+	assert.Contains(t, string(cfg), "admin@example.test")
 	assert.Contains(t, string(cfg), testEnv["CLOUDFLARE_API_TOKEN"])
 	assert.NotContains(t, string(cfg), "wrong.example")
+}
+
+// Only the four variables the Caddyfile is built on are expanded: a routes
+// file must not pull an arbitrary root var or secret into the config.
+func TestAdapt_UnknownPlaceholderIsRefused(t *testing.T) {
+	root := t.TempDir()
+	env := map[string]string{"TS_AUTHKEY": "tskey-secret"}
+	for k, v := range testEnv {
+		env[k] = v
+	}
+	writeFile(t, siteFile(root, "a"), "a.{$HOME_SUBDOMAIN}.{$DOMAIN} {\n\trespond {$TS_AUTHKEY:x}\n}\n")
+	_, err := Adapt(root, env)
+	require.ErrorIs(t, err, ErrInvalidConfig)
+	assert.ErrorContains(t, err, "TS_AUTHKEY")
+	assert.NotContains(t, err.Error(), "tskey-secret")
+}
+
+// An allowed value that would change the Caddyfile's structure (a newline, a
+// brace, a comment, a quote, a space) is refused, and never echoed.
+func TestAdapt_UnsafeValueIsRefused(t *testing.T) {
+	for _, bad := range []string{"a\nb", "a}b", "a#b", `a"b`, "a b", "a\tb"} {
+		env := map[string]string{}
+		for k, v := range testEnv {
+			env[k] = v
+		}
+		env["CLOUDFLARE_API_TOKEN"] = "tok" + bad + "en"
+		root := t.TempDir()
+		_, err := Adapt(root, env)
+		require.Error(t, err, "%q", bad)
+		assert.ErrorContains(t, err, "CLOUDFLARE_API_TOKEN")
+		assert.NotContains(t, err.Error(), env["CLOUDFLARE_API_TOKEN"])
+	}
 }
 
 func TestAdapt_BrokenSiteIsInvalidConfig(t *testing.T) {
@@ -343,6 +375,48 @@ func TestEdge_UDPThroughTailnetL4(t *testing.T) {
 	n, err = c.Read(buf)
 	require.NoError(t, err)
 	assert.Equal(t, "echo:again", string(buf[:n]))
+}
+
+// A second agent on the same state must not take over the first one's admin
+// socket (it would unlink it and leave the running Caddy unreachable).
+func TestEdge_StartRefusesWhileAnotherAgentAnswers(t *testing.T) {
+	root := t.TempDir()
+	e := testEdge(t, root)
+	sock := AdminSocket(root)
+	ln, err := net.Listen("unix", sock)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			_ = c.Close()
+		}
+	}()
+
+	err = e.Start(context.Background())
+	require.ErrorContains(t, err, "another agent is running")
+	assert.FileExists(t, sock, "the live agent's socket is left alone")
+}
+
+// A socket left by an agent that died answers nothing (ECONNREFUSED): it is
+// removed and the edge starts.
+func TestEdge_StartRemovesStaleSocket(t *testing.T) {
+	root := t.TempDir()
+	port := freePort(t)
+	writeFile(t, siteFile(root, "one"), httpSite(port, "one"))
+	e := testEdge(t, root)
+	sock := AdminSocket(root)
+	ln, err := net.ListenUnix("unix", &net.UnixAddr{Name: sock, Net: "unix"})
+	require.NoError(t, err)
+	ln.SetUnlinkOnClose(false)
+	require.NoError(t, ln.Close())
+	require.FileExists(t, sock)
+
+	require.NoError(t, e.Start(context.Background()))
+	assert.Equal(t, "one", mustGet(t, fmt.Sprintf("http://127.0.0.1:%d/", port)))
 }
 
 // The CLI reloads the agent's Caddy over the admin socket.

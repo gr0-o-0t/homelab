@@ -138,8 +138,9 @@ func Sync(root string, reg *network.Registry, svc string) error {
 }
 
 // reservedL4 are the listeners Caddy's HTTP sites already hold in the tailnet
-// namespace (the admin API is on localhost:2019).
-var reservedL4 = []string{"tcp/:80", "tcp/:443", "tcp/:8081", "tcp/:2019"}
+// namespace (the admin API is on localhost:2019). udp/:443 is HTTP/3: every
+// HTTPS site on the tailnet also listens for QUIC there.
+var reservedL4 = []string{"tcp/:80", "tcp/:443", "tcp/:8081", "tcp/:2019", "udp/:443"}
 
 // l4Listeners is every "<proto>/:<port>" a resolved exposure's raw ports bind.
 func l4Listeners(e configgen.Exposure) []string {

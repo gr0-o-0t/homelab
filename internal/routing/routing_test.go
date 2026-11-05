@@ -118,6 +118,17 @@ func TestSync_RawPortConflictsAreRefused(t *testing.T) {
 	require.ErrorContains(t, routing.Sync(root, reg, "web"), "tcp/:443 is Caddy's own")
 }
 
+// HTTPS sites on the tailnet also listen for HTTP/3 on udp/443, so a raw udp
+// port there would take the edge's QUIC listener.
+func TestSync_UDP443IsCaddysOwn(t *testing.T) {
+	root := t.TempDir()
+	reg := layers.New(root, nil, nil)
+	writeSvc(t, root, "quic", map[string]string{"config.yaml": "ports:\n  - 443:8443/udp\n"})
+	require.NoError(t, exposure.Save(root, "quic", exposure.State{Layers: []string{"ts"}}))
+	require.ErrorContains(t, routing.Sync(root, reg, "quic"), "udp/:443 is Caddy's own")
+	assert.NoFileExists(t, configgen.L4File(root, "quic"))
+}
+
 // A service with no ports and no routes cannot be routed, and says so instead
 // of writing an empty block.
 func TestSync_HeadlessServiceIsAnError(t *testing.T) {

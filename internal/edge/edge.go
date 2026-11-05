@@ -18,18 +18,21 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
+	"time"
 
+	_ "github.com/caddy-dns/cloudflare"
 	"github.com/caddyserver/caddy/v2"
 	_ "github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"     // Caddyfile lexer/parser
 	_ "github.com/caddyserver/caddy/v2/caddyconfig/httpcaddyfile" // the "caddyfile" adapter
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
 	_ "github.com/caddyserver/caddy/v2/modules/standard"
-	_ "github.com/caddy-dns/cloudflare"
 	_ "github.com/mholt/caddy-l4"
 	"tailscale.com/tsnet"
 )
@@ -132,6 +135,9 @@ func newForTest(root string, tcp ListenTCP, udp ListenUDP) *Edge {
 // Start brings the tailnet node up, waits for its IPv4, and loads the config
 // assembled from every service's routing files.
 func (e *Edge) Start(ctx context.Context) error {
+	if err := claimAdminSocket(AdminSocket(e.Root)); err != nil {
+		return err
+	}
 	tcp, udp := e.listenTCP, e.listenUDP
 	if tcp == nil {
 		dir := e.TSStateDir
@@ -169,17 +175,58 @@ func (e *Edge) Start(ctx context.Context) error {
 	}
 	setListeners(tcp, udp)
 
-	// A socket left by an agent that died would make the admin listener fail.
-	if sock := AdminSocket(e.Root); sock != "" {
-		if fi, err := os.Lstat(sock); err == nil && fi.Mode()&os.ModeSocket != 0 {
-			_ = os.Remove(sock)
-		}
-	}
 	if err := e.Reload(); err != nil {
 		_ = e.Stop()
 		return err
 	}
 	return nil
+}
+
+// claimAdminSocket makes sock free for this agent's Caddy. Something
+// answering on it is another agent on the same state: refuse rather than
+// unlink its socket. A socket nobody answers on (ECONNREFUSED) was left by
+// an agent that died and is removed; with no file (ENOENT) there is nothing
+// to do. Any other failure leaves the file alone.
+func claimAdminSocket(sock string) error {
+	c, err := net.DialTimeout("unix", sock, 2*time.Second)
+	switch {
+	case err == nil:
+		_ = c.Close()
+		return fmt.Errorf("another agent is running: its Caddy admin API answers on %s", sock)
+	case errors.Is(err, syscall.ENOENT):
+		return nil
+	case errors.Is(err, syscall.ECONNREFUSED):
+		if fi, err := os.Lstat(sock); err != nil || fi.Mode()&os.ModeSocket == 0 {
+			return fmt.Errorf("%s exists and is not a socket", sock)
+		}
+		if err := os.Remove(sock); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("removing stale admin socket %s: %w", sock, err)
+		}
+		return nil
+	default:
+		return fmt.Errorf("checking admin socket %s: %w", sock, err)
+	}
+}
+
+// Tailnet is the edge's tsnet node (nil before Start, or in tests): the
+// agent serves the remote CLI on it too, so the leader is one tailnet node.
+func (e *Edge) Tailnet() *tsnet.Server { return e.ts }
+
+// TailnetIPv4 is the tailnet node's IPv4 (invalid before Start, or in tests).
+func (e *Edge) TailnetIPv4() netip.Addr {
+	if e.ts == nil {
+		return netip.Addr{}
+	}
+	ip4, _ := e.ts.TailscaleIPs()
+	return ip4
+}
+
+// ListenTLS listens on the tailnet node with its *.ts.net certificate.
+func (e *Edge) ListenTLS(network, addr string) (net.Listener, error) {
+	if e.ts == nil {
+		return nil, errors.New("the tailnet node is not up")
+	}
+	return e.ts.ListenTLS(network, addr)
 }
 
 func (e *Edge) adapt() ([]byte, error) {

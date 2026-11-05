@@ -143,17 +143,53 @@ func indent(s, prefix string) string {
 // {$VAR:default}.
 var envPlaceholder = regexp.MustCompile(`\{\$([A-Za-z0-9_]+)(?::([^}]*))?\}`)
 
+// expandableVars are the only placeholders expanded: what the embedded
+// Caddyfile and the generated site files are built on. Any other {$VAR} — a
+// routes file naming a root var or another secret — is refused rather than
+// pulled into the config.
+var expandableVars = map[string]bool{
+	"DOMAIN": true, "HOME_SUBDOMAIN": true, "ACME_EMAIL": true, "CLOUDFLARE_API_TOKEN": true,
+}
+
+// unsafeValueChars would let a value change the Caddyfile's structure: end a
+// token or a block, start a comment, open a quoted string.
+const unsafeValueChars = "\n\r}#\" \t\v\f"
+
 // expandEnv replaces every {$VAR} from env before Caddy sees the text, so the
 // adapter never consults the process environment and secrets are never
-// exported into it. An unset VAR becomes its default, or "".
-func expandEnv(text string, env map[string]string) string {
-	return envPlaceholder.ReplaceAllStringFunc(text, func(m string) string {
-		sub := envPlaceholder.FindStringSubmatch(m)
-		if v, ok := env[sub[1]]; ok {
-			return v
+// exported into it. An unset VAR becomes its default, or "". A VAR outside
+// expandableVars, or a value that could break out of its token, is an error;
+// the error names the variable, never its value.
+func expandEnv(text string, env map[string]string) (string, error) {
+	var errs []error
+	seen := map[string]bool{}
+	fail := func(name string, err error) {
+		if !seen[name] {
+			seen[name] = true
+			errs = append(errs, err)
 		}
-		return sub[2]
+	}
+	out := envPlaceholder.ReplaceAllStringFunc(text, func(m string) string {
+		sub := envPlaceholder.FindStringSubmatch(m)
+		name := sub[1]
+		if !expandableVars[name] {
+			fail(name, fmt.Errorf("placeholder {$%s} is not allowed (only DOMAIN, HOME_SUBDOMAIN, ACME_EMAIL, CLOUDFLARE_API_TOKEN)", name))
+			return m
+		}
+		v, ok := env[name]
+		if !ok {
+			v = sub[2]
+		}
+		if strings.ContainsAny(v, unsafeValueChars) {
+			fail(name, fmt.Errorf("the value of %s contains whitespace, a newline, '}', '#' or '\"'", name))
+			return m
+		}
+		return v
 	})
+	if len(errs) > 0 {
+		return "", errors.Join(errs...)
+	}
+	return out, nil
 }
 
 // Adapt assembles root's Caddyfile, expands its env placeholders from env in
@@ -172,7 +208,11 @@ func adaptText(text string, env map[string]string) ([]byte, error) {
 	if adapter == nil {
 		return nil, errors.New("caddyfile adapter not registered")
 	}
-	cfg, _, err := adapter.Adapt([]byte(expandEnv(text, env)), map[string]any{"filename": "Caddyfile"})
+	expanded, err := expandEnv(text, env)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalidConfig, err)
+	}
+	cfg, _, err := adapter.Adapt([]byte(expanded), map[string]any{"filename": "Caddyfile"})
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidConfig, err)
 	}
