@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/groot/homelab/internal/desired"
 	"github.com/groot/homelab/internal/docker"
 	"github.com/groot/homelab/internal/session"
 )
@@ -32,14 +33,14 @@ func desiredFixture(t *testing.T) string {
 	require.NoError(t, os.WriteFile(filepath.Join(root, "config.yaml"),
 		[]byte("vars:\n  DOMAIN:\n    value: example.com\ngroups:\n  media: [alpha, beta]\n"), 0o644))
 	old := desiredBootstrap
-	desiredBootstrap = func(string) (*session.Desired, error) { return &session.Desired{Core: session.Stopped}, nil }
+	desiredBootstrap = func(string) (*desired.Desired, error) { return &desired.Desired{Core: desired.Stopped}, nil }
 	t.Cleanup(func() { desiredBootstrap = old })
 	return root
 }
 
-func loadDesired(t *testing.T, root string) *session.Desired {
+func loadDesired(t *testing.T, root string) *desired.Desired {
 	t.Helper()
-	d, exists, err := session.LoadDesired(root)
+	d, exists, err := desired.LoadDesired(root)
 	require.NoError(t, err)
 	require.True(t, exists, "desired.yaml written")
 	return d
@@ -49,23 +50,23 @@ func TestDesiredState_LifecycleTransitions(t *testing.T) {
 	root := desiredFixture(t)
 	steps := []struct {
 		argv        []string
-		core        session.State
-		alpha, beta session.State
+		core        desired.State
+		alpha, beta desired.State
 	}{
-		{[]string{"start", "alpha"}, session.Stopped, session.Running, ""},
-		{[]string{"up", "-a"}, session.Stopped, session.Running, session.Running},
-		{[]string{"stop", "--group", "media"}, session.Stopped, session.Stopped, session.Stopped},
-		{[]string{"restart", "beta"}, session.Stopped, session.Stopped, session.Running},
-		{[]string{"up"}, session.Running, session.Stopped, session.Running},
-		{[]string{"down", "beta"}, session.Running, session.Stopped, session.Stopped},
-		{[]string{"update", "alpha", "beta"}, session.Running, session.Running, session.Running},
-		{[]string{"stop"}, session.Stopped, session.Running, session.Running},
-		{[]string{"start"}, session.Running, session.Running, session.Running},
-		{[]string{"down"}, session.Stopped, session.Running, session.Running},
-		{[]string{"restart"}, session.Running, session.Running, session.Running},
-		{[]string{"down", "-a"}, session.Running, session.Stopped, session.Stopped},
-		{[]string{"update"}, session.Running, session.Stopped, session.Stopped},
-		{[]string{"prune", "--keep-volumes", "--yes", "alpha"}, session.Running, "", session.Stopped},
+		{[]string{"start", "alpha"}, desired.Stopped, desired.Running, ""},
+		{[]string{"up", "-a"}, desired.Stopped, desired.Running, desired.Running},
+		{[]string{"stop", "--group", "media"}, desired.Stopped, desired.Stopped, desired.Stopped},
+		{[]string{"restart", "beta"}, desired.Stopped, desired.Stopped, desired.Running},
+		{[]string{"up"}, desired.Running, desired.Stopped, desired.Running},
+		{[]string{"down", "beta"}, desired.Running, desired.Stopped, desired.Stopped},
+		{[]string{"update", "alpha", "beta"}, desired.Running, desired.Running, desired.Running},
+		{[]string{"stop"}, desired.Stopped, desired.Running, desired.Running},
+		{[]string{"start"}, desired.Running, desired.Running, desired.Running},
+		{[]string{"down"}, desired.Stopped, desired.Running, desired.Running},
+		{[]string{"restart"}, desired.Running, desired.Running, desired.Running},
+		{[]string{"down", "-a"}, desired.Running, desired.Stopped, desired.Stopped},
+		{[]string{"update"}, desired.Running, desired.Stopped, desired.Stopped},
+		{[]string{"prune", "--keep-volumes", "--yes", "alpha"}, desired.Running, "", desired.Stopped},
 	}
 	for _, s := range steps {
 		runCLI(t, root, s.argv...)
@@ -84,13 +85,13 @@ func TestDesiredState_DeleteForgetsService(t *testing.T) {
 	d := loadDesired(t, root)
 	_, ok := d.Services["alpha"]
 	assert.False(t, ok, "deleted services leave the desired state")
-	assert.Equal(t, session.Running, d.Services["beta"])
+	assert.Equal(t, desired.Running, d.Services["beta"])
 }
 
 func TestDesiredState_UnknownServiceNotRecorded(t *testing.T) {
 	root := desiredFixture(t)
 	runCLI(t, root, "up", "nosuch")
-	_, exists, err := session.LoadDesired(root)
+	_, exists, err := desired.LoadDesired(root)
 	require.NoError(t, err)
 	assert.False(t, exists)
 }
@@ -98,15 +99,15 @@ func TestDesiredState_UnknownServiceNotRecorded(t *testing.T) {
 func TestDesiredState_NoRecordFlag(t *testing.T) {
 	root := desiredFixture(t)
 	runCLI(t, root, "--no-record", "stop", "alpha")
-	_, exists, _ := session.LoadDesired(root)
+	_, exists, _ := desired.LoadDesired(root)
 	assert.False(t, exists, "the supervisor's own calls leave the desired state alone")
 }
 
 func TestDesiredState_NoDockerNoFile(t *testing.T) {
 	root := desiredFixture(t)
-	desiredBootstrap = func(string) (*session.Desired, error) { return nil, os.ErrNotExist }
+	desiredBootstrap = func(string) (*desired.Desired, error) { return nil, os.ErrNotExist }
 	runCLI(t, root, "stop", "alpha")
-	_, exists, _ := session.LoadDesired(root)
+	_, exists, _ := desired.LoadDesired(root)
 	assert.False(t, exists, "no file claiming everything else stopped")
 }
 

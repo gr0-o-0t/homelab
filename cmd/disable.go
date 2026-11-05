@@ -6,11 +6,11 @@ import (
 	"slices"
 
 	"github.com/groot/homelab/internal/caddy"
+	"github.com/groot/homelab/internal/desired"
 	"github.com/groot/homelab/internal/exposure"
 	"github.com/groot/homelab/internal/network"
 	"github.com/groot/homelab/internal/network/layers"
 	"github.com/groot/homelab/internal/run"
-	"github.com/groot/homelab/internal/session"
 	"github.com/groot/homelab/internal/swarm"
 	"github.com/groot/homelab/internal/tui/styles"
 	"github.com/spf13/cobra"
@@ -142,7 +142,7 @@ func runDisable(cmd *cobra.Command, args []string) error {
 	}
 
 	if disableStop {
-		recordService(root, svcName, session.Stopped)
+		recordService(root, svcName, desired.Stopped)
 		fmt.Printf("  %s  Stopping container…\n", styles.Muted.Render("→"))
 		if err := stopService(root, svcName); err != nil {
 			return err

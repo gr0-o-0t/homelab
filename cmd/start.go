@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/groot/homelab/internal/desired"
 	"github.com/groot/homelab/internal/run"
-	"github.com/groot/homelab/internal/session"
 	"github.com/groot/homelab/internal/tui/styles"
 	"github.com/spf13/cobra"
 )
@@ -36,7 +36,7 @@ for them start is the same as 'homelab up'.`,
 		if _, err := os.Stat(composeFile); err != nil {
 			return err
 		}
-		recordCore(dir, session.Running)
+		recordCore(dir, desired.Running)
 		fmt.Printf("%s Starting core stack…\n", styles.Primary.Render("→"))
 		return run.Default().DockerComposeEnv(
 			composeFile,
@@ -56,7 +56,7 @@ func runServiceStart(_ *cobra.Command, args []string) error {
 	}
 	// Swarm keeps no stopped containers to resume: start is up.
 	return forEachService(root, names, func(name string) error {
-		recordService(root, name, session.Running)
+		recordService(root, name, desired.Running)
 		return upOne(root, name)
 	})
 }

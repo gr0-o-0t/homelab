@@ -11,11 +11,11 @@ import (
 	"strings"
 
 	"github.com/groot/homelab/internal/config"
+	"github.com/groot/homelab/internal/desired"
 	"github.com/groot/homelab/internal/docker"
 	"github.com/groot/homelab/internal/run"
 	"github.com/groot/homelab/internal/scaffold"
 	"github.com/groot/homelab/internal/service"
-	"github.com/groot/homelab/internal/session"
 	"github.com/groot/homelab/internal/swarm"
 	"github.com/groot/homelab/internal/tui/styles"
 	"github.com/spf13/cobra"
@@ -119,7 +119,7 @@ func runServiceUp(_ *cobra.Command, args []string) error {
 	}
 	warnNoBuild(upFlags.build)
 	return forEachService(root, names, func(name string) error {
-		recordService(root, name, session.Running)
+		recordService(root, name, desired.Running)
 		return upOne(root, name)
 	})
 }
@@ -163,7 +163,7 @@ func runServiceDown(_ *cobra.Command, args []string) error {
 		return err
 	}
 	return forEachService(root, names, func(name string) error {
-		recordService(root, name, session.Stopped)
+		recordService(root, name, desired.Stopped)
 		fmt.Printf("%s Stopping %s…\n", styles.Warning.Render("→"), styles.Bold.Render(name))
 		return deploy(root, name, (*swarm.Deployer).Down)
 	})
@@ -177,7 +177,7 @@ func runServiceRestart(_ *cobra.Command, args []string) error {
 	}
 	warnNoBuild(restartFlags.build)
 	return forEachService(root, names, func(name string) error {
-		recordService(root, name, session.Running)
+		recordService(root, name, desired.Running)
 		// Same reasoning as `up`: restarting a service whose database is down
 		// just produces connection errors.
 		if err := ensureDBDependencies(context.Background(), root, name); err != nil {

@@ -17,8 +17,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/groot/homelab/internal/desired"
 	"github.com/groot/homelab/internal/secrets"
-	"github.com/groot/homelab/internal/session"
 	"github.com/groot/homelab/internal/swarm"
 	"github.com/groot/homelab/internal/swarm/swarmtest"
 )
@@ -121,7 +121,7 @@ func TestLifecycle_RestartAfterStopRuns(t *testing.T) {
 	require.Equal(t, uint64(0), replicasOf(alphaServices(t, f)[0]))
 	runCLI(t, root, "restart", "alpha")
 	assert.Equal(t, uint64(1), replicasOf(alphaServices(t, f)[0]), "restart after stop runs the service")
-	assert.Equal(t, session.Running, loadDesired(t, root).Services["alpha"])
+	assert.Equal(t, desired.Running, loadDesired(t, root).Services["alpha"])
 }
 
 // R23: without the secrets manager, verbs that start containers refuse;

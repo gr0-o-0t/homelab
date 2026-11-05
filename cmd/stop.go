@@ -3,8 +3,8 @@ package cmd
 import (
 	"fmt"
 
+	"github.com/groot/homelab/internal/desired"
 	"github.com/groot/homelab/internal/run"
-	"github.com/groot/homelab/internal/session"
 	"github.com/groot/homelab/internal/swarm"
 	"github.com/groot/homelab/internal/tui/styles"
 	"github.com/spf13/cobra"
@@ -33,7 +33,7 @@ configuration and volumes kept).`,
 			return runServiceStop(cmd, args)
 		}
 		env := buildEnv(dir, "")
-		recordCore(dir, session.Stopped)
+		recordCore(dir, desired.Stopped)
 		fmt.Printf("%s Stopping core stack…\n", styles.Warning.Render("→"))
 		return run.Default().DockerComposeEnv(
 			run.CoreComposeFile(dir),
@@ -52,7 +52,7 @@ func runServiceStop(_ *cobra.Command, args []string) error {
 		return err
 	}
 	return forEachService(root, names, func(name string) error {
-		recordService(root, name, session.Stopped)
+		recordService(root, name, desired.Stopped)
 		fmt.Printf("%s Stopping %s…\n", styles.Warning.Render("→"), styles.Bold.Render(name))
 		// Swarm has no stopped-but-kept container: stop is down.
 		return deploy(root, name, (*swarm.Deployer).Down)

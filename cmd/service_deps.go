@@ -11,9 +11,9 @@ import (
 
 	"github.com/groot/homelab/internal/config"
 	"github.com/groot/homelab/internal/db"
+	"github.com/groot/homelab/internal/desired"
 	"github.com/groot/homelab/internal/run"
 	"github.com/groot/homelab/internal/secrets"
-	"github.com/groot/homelab/internal/session"
 	"github.com/groot/homelab/internal/swarm"
 	"github.com/groot/homelab/internal/tui/styles"
 )
@@ -78,7 +78,7 @@ func ensureDBDependencies(ctx context.Context, root, name string) error {
 		// A service desired running needs its shared database running too:
 		// recorded, the login restore starts it and the supervisor restarts
 		// it after a crash like any other service.
-		recordService(root, config.SharedDBName(dbType), session.Running)
+		recordService(root, config.SharedDBName(dbType), desired.Running)
 		_, notRunning := p.Container(dbType)
 		if notRunning != nil {
 			if err := prepareSharedDB(root, dbType, p); err != nil {

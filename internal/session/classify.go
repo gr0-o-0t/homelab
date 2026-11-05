@@ -233,7 +233,7 @@ func (p Policies) Save(root string) error {
 	}
 	header := "# Written by homelab session: each container's restart policy before session\n" +
 		"# mode set it to \"no\". `homelab session uninstall` puts these back.\n"
-	return writeAtomic(PolicyFile(root), append([]byte(header), data...))
+	return WriteAtomic(PolicyFile(root), append([]byte(header), data...))
 }
 
 // Observe notes a container's current policy and reports whether it must be

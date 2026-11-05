@@ -15,6 +15,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/groot/homelab/internal/desired"
 	"github.com/groot/homelab/internal/docker"
 	"github.com/groot/homelab/internal/session"
 	"github.com/groot/homelab/internal/tui/styles"
@@ -268,13 +269,13 @@ func orDash(s string) string {
 	return s
 }
 
-func desiredSummary(d *session.Desired, exists bool) string {
+func desiredSummary(d *desired.Desired, exists bool) string {
 	if !exists || d == nil {
 		return styles.Muted.Render("not recorded yet (recorded by the next lifecycle command or session install)")
 	}
 	running, stopped := 0, 0
 	for _, s := range d.Services {
-		if s == session.Running {
+		if s == desired.Running {
 			running++
 		} else {
 			stopped++
@@ -337,17 +338,17 @@ func bootStartingCount(root string) int {
 // state/desired.yaml, before it runs: the intent is what the next login should
 // restore, and a die event caused by a stop must already read "stopped".
 // Failures only warn — the state file never blocks a lifecycle command.
-func recordCore(root string, st session.State) {
-	updateDesired(root, func(d *session.Desired) { d.SetCore(st) })
+func recordCore(root string, st desired.State) {
+	updateDesired(root, func(d *desired.Desired) { d.SetCore(st) })
 }
 
-func recordService(root, name string, st session.State) {
-	updateDesired(root, func(d *session.Desired) { d.SetService(name, st) })
+func recordService(root, name string, st desired.State) {
+	updateDesired(root, func(d *desired.Desired) { d.SetService(name, st) })
 }
 
 // desiredBootstrap lists the containers to infer a first desired state from;
 // replaced in tests.
-var desiredBootstrap = func(root string) (*session.Desired, error) {
+var desiredBootstrap = func(root string) (*desired.Desired, error) {
 	dc, closeFn := sessionDocker()
 	defer closeFn()
 	if dc == nil {
@@ -362,11 +363,11 @@ var desiredBootstrap = func(root string) (*session.Desired, error) {
 	return session.Bootstrap(session.NewScope(root), cs), nil
 }
 
-func updateDesired(root string, fn func(*session.Desired)) {
+func updateDesired(root string, fn func(*desired.Desired)) {
 	if rootFlags.noRecord {
 		return
 	}
-	d, exists, err := session.LoadDesired(root)
+	d, exists, err := desired.LoadDesired(root)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: desired state: %v\n", err)
 		return

@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/groot/homelab/internal/desired"
 	"github.com/groot/homelab/internal/run"
-	"github.com/groot/homelab/internal/session"
 	"github.com/groot/homelab/internal/tui/styles"
 	"github.com/spf13/cobra"
 )
@@ -37,7 +37,7 @@ func runServiceUpdate(_ *cobra.Command, args []string) error {
 		return err
 	}
 	return forEachService(root, names, func(name string) error {
-		recordService(root, name, session.Running)
+		recordService(root, name, desired.Running)
 		// Up pulls, resolves each tag to its current digest and removes
 		// containers no longer in the compose file: it is the update.
 		fmt.Printf("%s Updating %s\n", styles.Primary.Render("→"), styles.Bold.Render(name))
@@ -58,7 +58,7 @@ func updateCoreStack(root string) error {
 	if err := installAssets(root); err != nil {
 		return fmt.Errorf("refreshing core files: %w", err)
 	}
-	recordCore(root, session.Running)
+	recordCore(root, desired.Running)
 	env := buildEnv(root, "")
 	composeFile := run.CoreComposeFile(root)
 	// withProfiles: the extension containers are profile-gated, and without
