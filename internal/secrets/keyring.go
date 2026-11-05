@@ -13,7 +13,19 @@ import (
 	"strings"
 
 	"github.com/99designs/keyring"
+
+	"github.com/groot/homelab/internal/vault"
 )
+
+// OpenVault returns a Manager over the AES-256-GCM file vault at path, keyed by
+// keyFile. Namespaces (root:/svc:) match the OS-keyring backends.
+func OpenVault(path, keyFile string) (*Manager, error) {
+	v, err := vault.Open(path, keyFile)
+	if err != nil {
+		return nil, fmt.Errorf("open vault: %w", err)
+	}
+	return &Manager{ring: v, Backend: keyring.FileBackend}, nil
+}
 
 // secretNamePatterns — if any of these substrings appear in an uppercased
 // variable name, the value is considered sensitive.
@@ -78,6 +90,10 @@ var defaultBackends = []keyring.BackendType{
 // one that ends up being used, so a silent downgrade (e.g. no dbus session
 // in a plain SSH session) is at least visible.
 func Open() (*Manager, error) {
+	// Agent mode: no desktop keyring, so both env vars select the file vault.
+	if vp, kp := os.Getenv("HOMELAB_VAULT"), os.Getenv("HOMELAB_VAULT_KEY"); vp != "" && kp != "" {
+		return OpenVault(vp, kp)
+	}
 	pass, _ := machinePassphrase()
 	m, err := openBackends(defaultBackends, ExpandHome("~/.config/homelab/secrets"), pass)
 	if err != nil {
