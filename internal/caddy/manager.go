@@ -13,6 +13,7 @@ import (
 	"slices"
 
 	"github.com/groot/homelab/internal/configgen"
+	"github.com/groot/homelab/internal/edge"
 	"github.com/groot/homelab/internal/exposure"
 	"github.com/groot/homelab/internal/network"
 	"github.com/groot/homelab/internal/network/layers"
@@ -20,22 +21,18 @@ import (
 	"github.com/groot/homelab/internal/run"
 )
 
-const (
-	caddyContainer = "caddy"
-	caddyFile      = "/etc/caddy/Caddyfile"
-	caddyAdapter   = "caddyfile"
-)
-
 // Manager performs caddy routing operations for a given repo root.
 type Manager struct {
 	RepoRoot string
 	runner   *run.Commander
 	// reloadFn, if non-nil, replaces the default Reload() implementation.
-	// Inject a no-op in tests to avoid requiring a live Docker/Caddy instance.
+	// Inject a no-op in tests to avoid requiring a live agent.
 	reloadFn func() error
+	// envFn, if non-nil, replaces edge.DefaultEnv (config.yaml + keyring).
+	envFn func() (map[string]string, error)
 }
 
-// New returns a Manager that streams docker output to the terminal.
+// New returns a Manager that streams layer output to the terminal.
 func New(repoRoot string) *Manager {
 	return &Manager{RepoRoot: repoRoot, runner: run.Default()}
 }
@@ -225,36 +222,49 @@ func normalizePorts(root, svc string, selected []string) []string {
 }
 
 // ── Caddy lifecycle ───────────────────────────────────────────────────────────
+//
+// Caddy runs inside the agent (internal/edge). This process — whichever runs
+// enable/disable/reload — assembles and adapts the config itself, with the
+// env placeholders expanded in memory, and hands the JSON to the agent over
+// its admin socket.
 
-// Validate runs `caddy validate` inside the caddy container.
-func (m *Manager) Validate() error {
-	return m.runner.DockerExec(caddyContainer,
-		"caddy", "validate",
-		"--config", caddyFile,
-		"--adapter", caddyAdapter,
-	)
+func (m *Manager) adapt() ([]byte, error) {
+	envFn := m.envFn
+	if envFn == nil {
+		envFn = func() (map[string]string, error) { return edge.DefaultEnv(m.RepoRoot) }
+	}
+	env, err := envFn()
+	if err != nil {
+		return nil, fmt.Errorf("building caddy env: %w", err)
+	}
+	return edge.Adapt(m.RepoRoot, env)
 }
 
-// Reload validates then gracefully reloads Caddy (zero downtime, no cert re-issuance).
-// If reloadFn is set (e.g. in tests), it is called instead.
+// Validate assembles and adapts the config without loading it. A config that
+// does not adapt is ErrInvalidConfig.
+func (m *Manager) Validate() error {
+	_, err := m.adapt()
+	return err
+}
+
+// Reload loads the assembled config into the agent's Caddy (zero downtime,
+// no cert re-issuance), forced even when unchanged. A rejected config is
+// ErrInvalidConfig and leaves the running one in place; an agent that is not
+// running is edge.ErrAgentDown. If reloadFn is set (tests), it is called
+// instead.
 func (m *Manager) Reload() error {
 	if m.reloadFn != nil {
 		return m.reloadFn()
 	}
-	if err := m.Validate(); err != nil {
-		// A stopped Caddy fails validation too; that is not a config problem
-		// and must not trigger a rollback in ReloadOrRestore.
-		if m.runner.ContainerStatus(caddyContainer) != "running" {
-			return fmt.Errorf("caddy validate failed (is the caddy container running?): %w", err)
-		}
-		return fmt.Errorf("%w: %w", ErrInvalidConfig, err)
+	// Agent first: with it down the change stands and applies at its start;
+	// adapting (and reading the keyring) would only blame the files.
+	sock := edge.AdminSocket(m.RepoRoot)
+	if err := edge.Reachable(sock); err != nil {
+		return err
 	}
-	// Use --force to ensure the admin API fully replaces the active config
-	// rather than skipping if the new config is structurally identical.
-	return m.runner.DockerExec(caddyContainer,
-		"caddy", "reload",
-		"--config", caddyFile,
-		"--adapter", caddyAdapter,
-		"--force",
-	)
+	cfg, err := m.adapt()
+	if err != nil {
+		return err
+	}
+	return edge.PostLoad(sock, cfg)
 }

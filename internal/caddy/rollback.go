@@ -6,15 +6,16 @@ import (
 	"os"
 
 	"github.com/groot/homelab/internal/configgen"
+	"github.com/groot/homelab/internal/edge"
 	"github.com/groot/homelab/internal/exposure"
 )
 
-// ErrInvalidConfig marks a Reload that failed because `caddy validate`
-// rejected the config on disk — as opposed to Caddy not running. Only this
-// failure is rolled back: the files are what is wrong, and leaving them in
-// place means Caddy refuses to start at its next restart, taking every route
-// down with it.
-var ErrInvalidConfig = errors.New("caddy validate failed")
+// ErrInvalidConfig marks a Reload that failed because the config on disk did
+// not adapt or the agent's Caddy rejected it — as opposed to the agent not
+// running (edge.ErrAgentDown). Only this failure is rolled back: the files are
+// what is wrong, and leaving them in place means Caddy refuses to start at its
+// next restart, taking every route down with it.
+var ErrInvalidConfig = edge.ErrInvalidConfig
 
 // Snapshot is a service's routing files at one point in time — its sites file,
 // its layer4 file and its exposure.yaml — so a change that produced an invalid config can be
