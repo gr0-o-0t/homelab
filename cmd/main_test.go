@@ -19,6 +19,7 @@ import (
 // caddy and tailscale containers with mounts into that temp dir, taking every
 // route down. No test may reach the daemon of the machine it runs on.
 func TestMain(m *testing.M) {
+	envshimTestMain()
 	_ = os.Setenv("DOCKER_HOST", "unix:///nonexistent/homelab-test-docker.sock")
 	// Nor systemd: session mode's systemctl calls and unit path are fakes.
 	tmp, err := os.MkdirTemp("", "homelab-test-systemd-")
