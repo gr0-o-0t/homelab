@@ -40,7 +40,7 @@ func extRegistry() *network.Registry {
 // of --help and the actions parity check.
 func addUnavailableFlags(c *cobra.Command) map[string]*bool {
 	flags := map[string]*bool{}
-	for _, l := range layers.Unavailable() {
+	for _, l := range layers.Unavailable("", nil, nil) {
 		flags[l.Name()] = c.Flags().Bool(l.Flag(), false, l.Label()+" (not available in cluster mode yet)")
 		_ = c.Flags().MarkHidden(l.Flag())
 	}
@@ -49,7 +49,7 @@ func addUnavailableFlags(c *cobra.Command) map[string]*bool {
 
 // refuseUnavailable errors when any unavailable layer's flag was given.
 func refuseUnavailable(flags map[string]*bool) error {
-	for _, l := range layers.Unavailable() {
+	for _, l := range layers.Unavailable("", nil, nil) {
 		if *flags[l.Name()] {
 			return fmt.Errorf("%s is not available in cluster mode yet", l.Name())
 		}

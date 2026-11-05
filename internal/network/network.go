@@ -16,6 +16,11 @@ import (
 // listen on it, so tailnet traffic never touches the host's own interfaces.
 const TailnetBind = "hl-ts/homelab"
 
+// TailnetBindUDP is the same node for datagrams. Caddy splits a network address
+// on its first "/", so udp on hl-ts cannot be spelled "udp/hl-ts/…"; UDP gets
+// its own registered network instead.
+const TailnetBindUDP = "hl-tsu/homelab"
+
 // Status represents the current operational state of a network layer.
 type Status struct {
 	ContainerState string // "running", "stopped", "not found"

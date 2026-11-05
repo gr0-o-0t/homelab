@@ -88,8 +88,8 @@ func TestSync_RawPortsGetL4OnTailnetOnly(t *testing.T) {
 	got := read(t, configgen.L4File(root, "gitea"))
 	assert.Contains(t, got, "hl-ts/homelab:22 {\n\troute {\n\t\tproxy gitea:2222\n\t}\n}\n")
 	assert.Contains(t, got, "\nhl-ts/homelab:53 {\n\troute {\n\t\tproxy gitea:53\n")
-	assert.Contains(t, got, "udp/hl-ts/homelab:53 {\n\troute {\n\t\tproxy udp/gitea:53\n")
-	assert.NotContains(t, got, "udp/hl-ts/homelab:22")
+	assert.Contains(t, got, "hl-tsu/homelab:53 {\n\troute {\n\t\tproxy udp/gitea:53\n")
+	assert.NotContains(t, got, "hl-tsu/homelab:22")
 	assert.NotContains(t, read(t, configgen.SitesFile(root, "gitea")), ":22")
 
 	require.NoError(t, routing.Apply(root, reg, "gitea", func(s *exposure.State) { s.Set("ts", false) }))
@@ -160,4 +160,20 @@ func TestConfigureTeardown_DriveTheDaemonSide(t *testing.T) {
 	assert.Equal(t, []string{"configure gitea git", "configure gitea gitea", "teardown gitea"}, l.calls)
 
 	assert.NoError(t, routing.Configure(tailscale.New(root, nil, nil), "gitea", st, e))
+}
+
+// A service whose state lists only layers cluster mode does not serve cannot be
+// rendered: Sync removes its (stale) sites and says so instead of succeeding.
+func TestSync_OnlyUnservedLayersReports(t *testing.T) {
+	root := t.TempDir()
+	writeSvc(t, root, "onion", map[string]string{"config.yaml": "ports:\n  - 80\n"})
+	require.NoError(t, exposure.Save(root, "onion", exposure.State{Layers: []string{"tor", "i2p"}}))
+	require.NoError(t, os.MkdirAll(configgen.SitesDir(root), 0o750))
+	require.NoError(t, os.WriteFile(configgen.SitesFile(root, "onion"), []byte("stale\n"), 0o600))
+
+	err := routing.Sync(root, layers.New(root, nil, nil), "onion")
+	var u *routing.UnservedError
+	require.ErrorAs(t, err, &u)
+	assert.EqualError(t, err, "onion is only exposed on tor, i2p, which are not available in cluster mode")
+	assert.NoFileExists(t, configgen.SitesFile(root, "onion"))
 }

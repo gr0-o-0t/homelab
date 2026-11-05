@@ -12,6 +12,7 @@ import (
 	"github.com/groot/homelab/internal/configgen"
 	"github.com/groot/homelab/internal/exposure"
 	"github.com/groot/homelab/internal/network"
+	"github.com/groot/homelab/internal/network/layers"
 )
 
 // Migration from the per-layer layout.
@@ -29,6 +30,10 @@ type Migrated struct {
 	Service string
 	State   exposure.State
 	Removed []string // legacy files removed
+	Kept    []string // legacy files left in place: their layer is not served in cluster mode
+	// Unserved are the layers the state keeps that cluster mode does not
+	// serve (tor, i2p, ygg): recorded, not rendered.
+	Unserved []string
 }
 
 // legacyFiles returns the service's legacy Caddy files that exist, by layer
@@ -54,11 +59,42 @@ func legacyFiles(root string, reg *network.Registry, svc string, info configgen.
 	return out
 }
 
-// HasLegacy reports whether a service still has legacy per-layer Caddy files.
+// served is the part of reg that cluster mode renders (layers.New's): the
+// layers whose legacy files migration replaces and removes. The rest of reg —
+// tor, i2p, ygg — is only read, so their state survives in exposure.yaml.
+func served(root string, reg *network.Registry) *network.Registry {
+	prod := layers.New(root, nil, nil)
+	out := network.NewRegistry()
+	for _, l := range reg.All() {
+		if prod.Has(l.Name()) {
+			out.Register(l)
+		}
+	}
+	return out
+}
+
+// HasLegacy reports whether a service still needs migrating: it has legacy
+// per-layer Caddy files and either no exposure.yaml yet or files of a layer
+// that is rendered now. Leftover files of an unserved layer next to an
+// exposure.yaml are not pending: they are kept on purpose (see MigrateService).
+// reg should hold every layer that ever existed (layers.Legacy).
 func HasLegacy(root string, reg *network.Registry, svc string) bool {
 	info, _ := configgen.LoadServiceInfo(root, svc)
 	info.Name = svc
-	return len(legacyFiles(root, reg, svc, info)) > 0
+	legacy := legacyFiles(root, reg, svc, info)
+	if len(legacy) == 0 {
+		return false
+	}
+	if _, err := os.Stat(exposure.Path(root, svc)); errors.Is(err, os.ErrNotExist) {
+		return true
+	}
+	active := served(root, reg)
+	for layer := range legacy {
+		if active.Has(layer) {
+			return true
+		}
+	}
+	return false
 }
 
 // Pending lists the installed services that still have legacy per-layer
@@ -165,13 +201,21 @@ func MigrateService(root string, reg *network.Registry, svc string) (Migrated, e
 			}
 		}
 	}
-	if err := Sync(root, reg, svc); err != nil {
+	// Only the served layers are rendered; the others stay in exposure.yaml.
+	active := served(root, reg)
+	var unserved *UnservedError
+	if err := Sync(root, active, svc); err != nil && !errors.As(err, &unserved) {
 		return Migrated{}, fmt.Errorf("rendering %s: %w", configgen.SitesFile(root, svc), err)
 	}
 
-	m := Migrated{Service: svc, State: st}
+	m := Migrated{Service: svc, State: st, Unserved: Unserved(active, st)}
 	for _, l := range reg.All() {
 		for _, path := range legacy[l.Name()] {
+			if !active.Has(l.Name()) {
+				// Not re-rendered, so this file is the only copy of that routing.
+				m.Kept = append(m.Kept, path)
+				continue
+			}
 			if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 				return m, err
 			}

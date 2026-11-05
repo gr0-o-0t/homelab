@@ -26,14 +26,28 @@ func New(root string, runner *run.Commander, env network.EnvFunc) *network.Regis
 }
 
 // Unavailable returns the layers that exist as packages but are not registered
-// in cluster mode, for identity only (name, flag, label). enable and disable
-// use it to refuse their flags with a clear message instead of "unknown flag".
-func Unavailable() []network.NetworkLayer {
+// in cluster mode, in display order. With empty arguments they carry identity
+// only (name, flag, label), which is what enable and disable use to refuse
+// their flags with a clear message instead of "unknown flag". With a root and
+// runner they are usable for Teardown, so `disable` can still clean up a
+// service exposed on one before cluster mode.
+func Unavailable(root string, runner *run.Commander, env network.EnvFunc) []network.NetworkLayer {
 	return []network.NetworkLayer{
-		tor.New("", nil, nil),
-		i2p.New("", nil, nil),
-		ygg.New("", nil, nil),
+		tor.New(root, runner, env),
+		i2p.New(root, runner, env),
+		ygg.New(root, runner, env),
 	}
+}
+
+// Legacy returns every layer that ever existed — New's plus Unavailable's —
+// for reading old state: migration infers exposure.yaml from the legacy files
+// of all five. It is never used to render sites; Sync renders what New serves.
+func Legacy(root string, runner *run.Commander, env network.EnvFunc) *network.Registry {
+	r := New(root, runner, env)
+	for _, l := range Unavailable(root, runner, env) {
+		r.Register(l)
+	}
+	return r
 }
 
 // Static returns the layers for identity only — name, label, flag —

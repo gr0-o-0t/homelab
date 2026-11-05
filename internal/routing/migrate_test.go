@@ -11,11 +11,7 @@ import (
 	"github.com/groot/homelab/internal/configgen"
 	"github.com/groot/homelab/internal/exposure"
 	"github.com/groot/homelab/internal/network"
-	"github.com/groot/homelab/internal/network/cf"
-	"github.com/groot/homelab/internal/network/i2p"
-	"github.com/groot/homelab/internal/network/tailscale"
-	"github.com/groot/homelab/internal/network/tor"
-	"github.com/groot/homelab/internal/network/ygg"
+	"github.com/groot/homelab/internal/network/layers"
 	"github.com/groot/homelab/internal/routing"
 )
 
@@ -52,7 +48,7 @@ func writeFile(t *testing.T, path, content string) {
 //   - onion: tor only.
 func legacyTree(t *testing.T) (root string, legacyFiles []string) {
 	root = t.TempDir()
-	reg := legacyRegistry(root)
+	reg := layers.Legacy(root, nil, nil)
 	get := func(n string) network.NetworkLayer { l, _ := reg.Get(n); return l }
 
 	writeSvc(t, root, "app", map[string]string{"config.yaml": "ports:\n  - 3000\n"})
@@ -83,7 +79,7 @@ func legacyTree(t *testing.T) (root string, legacyFiles []string) {
 
 func TestMigrate_LegacyTree(t *testing.T) {
 	root, legacyFiles := legacyTree(t)
-	reg := legacyRegistry(root)
+	reg := layers.Legacy(root, nil, nil)
 
 	pending, err := routing.Pending(root, reg)
 	require.NoError(t, err)
@@ -105,24 +101,30 @@ func TestMigrate_LegacyTree(t *testing.T) {
 	assert.Contains(t, read(t, exposure.Path(root, "app")), "Do not edit by hand")
 
 	// The sites file is what enable would render from that state now.
-	for _, svc := range []string{"app", "multi", "mesh", "onion"} {
+	for _, svc := range []string{"app", "multi", "mesh"} {
 		assert.FileExists(t, configgen.SitesFile(root, svc))
 	}
+	assert.NoFileExists(t, configgen.SitesFile(root, "onion"), "tor-only: nothing to render")
 	multi := read(t, configgen.SitesFile(root, "multi"))
 	for _, want := range []string{
 		"dev.{$HOME_SUBDOMAIN}.{$DOMAIN} {", "admin.{$HOME_SUBDOMAIN}.{$DOMAIN} {",
 		"http://dev.{$DOMAIN} {", "http://admin.{$DOMAIN} {",
-		"http://dev.{$HOME_SUBDOMAIN}.i2p {", "http://admin.{$HOME_SUBDOMAIN}.i2p {",
 	} {
 		assert.Contains(t, multi, want)
 	}
 	assert.NotContains(t, multi, "metrics", "metrics was not selected")
-	assert.Contains(t, read(t, configgen.SitesFile(root, "mesh")), ":9004 {")
-	assert.Contains(t, read(t, configgen.SitesFile(root, "onion")),
-		"http://abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz23.onion:8081 {")
+	assert.NotContains(t, multi, "metrics", "metrics was not selected")
+	assert.NotContains(t, multi, ".i2p", "i2p is recorded, not rendered")
+	assert.NotContains(t, read(t, configgen.SitesFile(root, "mesh")), ":9004")
 
+	// Legacy files of rendered layers go; those of tor, i2p and ygg are the
+	// only copy of that routing and stay.
 	for _, f := range legacyFiles {
-		assert.NoFileExists(t, f)
+		if dir := filepath.Base(filepath.Dir(f)); dir == "conf.d" || dir == "conf.d-cf" {
+			assert.NoFileExists(t, f)
+		} else {
+			assert.FileExists(t, f)
+		}
 	}
 	assert.NoFileExists(t, configgen.SitesFile(root, "app-extra"))
 	assert.NoFileExists(t, exposure.Path(root, "app-extra"))
@@ -131,14 +133,14 @@ func TestMigrate_LegacyTree(t *testing.T) {
 
 	// The migrated sites file renders identically from the stored state.
 	before := read(t, configgen.SitesFile(root, "multi"))
-	require.NoError(t, routing.Sync(root, reg, "multi"))
+	require.NoError(t, routing.Sync(root, layers.New(root, nil, nil), "multi"))
 	assert.Equal(t, before, read(t, configgen.SitesFile(root, "multi")))
 }
 
 // A second run finds nothing to do and changes nothing.
 func TestMigrate_Idempotent(t *testing.T) {
 	root, _ := legacyTree(t)
-	reg := legacyRegistry(root)
+	reg := layers.Legacy(root, nil, nil)
 	_, err := routing.Migrate(root, reg)
 	require.NoError(t, err)
 	sites := read(t, configgen.SitesFile(root, "multi"))
@@ -154,38 +156,12 @@ func TestMigrate_Idempotent(t *testing.T) {
 	assert.Equal(t, state, read(t, exposure.Path(root, "multi")))
 }
 
-// A run that wrote exposure.yaml but could not render keeps the legacy files,
-// and the next run resumes from the state it wrote.
-func TestMigrate_FailureKeepsLegacyAndResumes(t *testing.T) {
-	root := t.TempDir()
-	reg := legacyRegistry(root)
-	writeSvc(t, root, "hidden", map[string]string{"config.yaml": "ports:\n  - 80\n"})
-	torBlock := filepath.Join(root, "caddy", "conf.d-tor", "hidden.conf")
-	// No onion anywhere: not in the block, no hostname file, no tor running.
-	writeFile(t, torBlock, "# Tor: hidden\nhttp://:8081 {\n\treverse_proxy hidden:80\n}\n")
-
-	_, err := routing.Migrate(root, reg)
-	require.ErrorContains(t, err, "tor has not published an address")
-	assert.FileExists(t, torBlock, "nothing is removed before the new file exists")
-	assert.NoFileExists(t, configgen.SitesFile(root, "hidden"))
-	st, err := exposure.Load(root, "hidden")
-	require.NoError(t, err)
-	assert.Equal(t, []string{"tor"}, st.Layers, "the inferred state is kept for the next run")
-
-	writeFile(t, filepath.Join(root, "tor", "hidden_service", "hidden", "hostname"), "xyz.onion\n")
-	done, err := routing.Migrate(root, reg)
-	require.NoError(t, err)
-	require.Len(t, done, 1)
-	assert.NoFileExists(t, torBlock)
-	assert.Contains(t, read(t, configgen.SitesFile(root, "hidden")), "http://xyz.onion:8081 {")
-}
-
 // Layers that disagree about a port cannot share one --ports selection without
 // exposing more or less than before: refuse and touch nothing. ygg lacking a
 // port is fine — it simply has no mesh port for it.
 func TestMigrate_PerLayerPortsMismatch(t *testing.T) {
 	root := t.TempDir()
-	reg := legacyRegistry(root)
+	reg := layers.Legacy(root, nil, nil)
 	ts, _ := reg.Get("ts")
 	cfl, _ := reg.Get("cf")
 	writeSvc(t, root, "gitea", map[string]string{"config.yaml": "ports:\n  - 3000\n  - admin:9000\n"})
@@ -209,18 +185,68 @@ func TestMigrate_PerLayerPortsMismatch(t *testing.T) {
 	st, err := exposure.Load(root, "gitea")
 	require.NoError(t, err)
 	assert.Equal(t, exposure.State{Layers: []string{"ts", "cf", "ygg"}, Ports: []string{"default"}, YggPorts: map[string]int{"default": 9002}}, st)
-	assert.Contains(t, read(t, configgen.SitesFile(root, "gitea")), ":9002 {")
+	assert.NotContains(t, read(t, configgen.SitesFile(root, "gitea")), ":9002 {", "ygg is recorded, not rendered")
+	assert.FileExists(t, filepath.Join(root, "caddy", "conf.d-ygg", "gitea.conf"), "its old file is the only copy")
 }
 
-// legacyRegistry holds all five layers, as the registry did before cluster
-// mode: the trees migration reads were written when tor, i2p and ygg existed,
-// and the migration code still handles them.
-func legacyRegistry(root string) *network.Registry {
-	r := network.NewRegistry()
-	r.Register(tailscale.New(root, nil, nil))
-	r.Register(cf.New(root, nil, nil))
-	r.Register(tor.New(root, nil, nil))
-	r.Register(i2p.New(root, nil, nil))
-	r.Register(ygg.New(root, nil, nil))
-	return r
+// Migration as production runs it (layers.Legacy): a tor-only service and a
+// mixed one keep every layer in exposure.yaml, the served layers are rendered,
+// and the files of tor and i2p — the only copy of that routing — stay.
+func TestMigrate_KeepsUnservedLayers(t *testing.T) {
+	root := t.TempDir()
+	reg := layers.Legacy(root, nil, nil)
+	get := func(n string) network.NetworkLayer { l, _ := reg.Get(n); return l }
+
+	writeSvc(t, root, "onion", map[string]string{"config.yaml": "ports:\n  - 80\n"})
+	onionBlock := filepath.Join(root, "caddy", "conf.d-tor", "onion.conf")
+	writeFile(t, onionBlock, "# Tor: onion\nhttp://abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz23.onion:8081 {\n\treverse_proxy onion:80\n}\n")
+
+	writeSvc(t, root, "mixed", map[string]string{"config.yaml": "ports:\n  - 3000\n"})
+	tsFiles := legacy(t, root, get("ts"), "mixed", "", nil)
+	torBlock := filepath.Join(root, "caddy", "conf.d-tor", "mixed.conf")
+	writeFile(t, torBlock, "# Tor: mixed\nhttp://abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz23.onion:8081 {\n\treverse_proxy mixed:3000\n}\n")
+	i2pFiles := legacy(t, root, get("i2p"), "mixed", "", nil)
+
+	pending, err := routing.Pending(root, reg)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"mixed", "onion"}, pending)
+
+	done, err := routing.Migrate(root, reg)
+	require.NoError(t, err)
+	require.Len(t, done, 2)
+	byName := map[string]routing.Migrated{}
+	for _, m := range done {
+		byName[m.Service] = m
+	}
+
+	// The warning data: which kept layers are not served.
+	assert.Equal(t, []string{"tor"}, byName["onion"].Unserved)
+	assert.Equal(t, []string{"tor", "i2p"}, byName["mixed"].Unserved)
+
+	st, err := exposure.Load(root, "onion")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"tor"}, st.Layers)
+	st, err = exposure.Load(root, "mixed")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"ts", "tor", "i2p"}, st.Layers)
+
+	assert.NoFileExists(t, configgen.SitesFile(root, "onion"), "nothing served, nothing rendered")
+	mixed := read(t, configgen.SitesFile(root, "mixed"))
+	assert.Contains(t, mixed, "mixed.{$HOME_SUBDOMAIN}.{$DOMAIN} {")
+	assert.NotContains(t, mixed, "onion")
+	assert.NotContains(t, mixed, ".i2p")
+
+	for _, f := range tsFiles {
+		assert.NoFileExists(t, f, "re-rendered, so removed")
+	}
+	for _, f := range append([]string{onionBlock, torBlock}, i2pFiles...) {
+		assert.FileExists(t, f, "not re-rendered, so kept")
+	}
+	assert.ElementsMatch(t, append([]string{onionBlock, torBlock}, i2pFiles...), append(byName["onion"].Kept, byName["mixed"].Kept...))
+
+	// Kept files do not make the service pending again, nor block disable.
+	pending, err = routing.Pending(root, reg)
+	require.NoError(t, err)
+	assert.Empty(t, pending)
+	assert.False(t, routing.HasLegacy(root, reg, "onion"))
 }

@@ -443,13 +443,15 @@ func RenderL4(e Exposure) string {
 			continue
 		}
 		for _, proto := range p.Protocols {
-			prefix := ""
+			// The listener is a registered Caddy network: hl-ts for tcp, hl-tsu
+			// for udp (Caddy splits addresses on the first "/", so "udp/hl-ts/…"
+			// would mean network "udp"). The upstream is an ordinary OS socket,
+			// hence "udp/<svc>". Task 11 registers hl-tsu and verifies it.
+			listen, upstream := network.TailnetBind, ""
 			if proto == protoUDP {
-				prefix = "udp/"
+				listen, upstream = network.TailnetBindUDP, "udp/"
 			}
-			// NOTE: udp on the custom hl-ts network is not verified against
-			// caddy-l4's address grammar (spike S1 covered tcp only).
-			fmt.Fprintf(&b, "\n%s%s:%d {\n\troute {\n\t\tproxy %s%s:%d\n\t}\n}\n", prefix, network.TailnetBind, p.Listen, prefix, e.Service, p.Port)
+			fmt.Fprintf(&b, "\n%s:%d {\n\troute {\n\t\tproxy %s%s:%d\n\t}\n}\n", listen, p.Listen, upstream, e.Service, p.Port)
 		}
 	}
 	if b.Len() == 0 {

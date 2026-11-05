@@ -33,7 +33,7 @@ func TestNew_RegistersOnlyClusterLayers(t *testing.T) {
 		assert.False(t, reg.Has(n), n)
 	}
 	var un []string
-	for _, l := range layers.Unavailable() {
+	for _, l := range layers.Unavailable("", nil, nil) {
 		un = append(un, l.Name())
 	}
 	assert.Equal(t, []string{"tor", "i2p", "ygg"}, un)

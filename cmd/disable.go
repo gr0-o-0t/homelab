@@ -3,10 +3,13 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/groot/homelab/internal/caddy"
+	"github.com/groot/homelab/internal/exposure"
 	"github.com/groot/homelab/internal/network"
 	"github.com/groot/homelab/internal/network/layers"
+	"github.com/groot/homelab/internal/run"
 	"github.com/groot/homelab/internal/session"
 	"github.com/groot/homelab/internal/swarm"
 	"github.com/groot/homelab/internal/tui/styles"
@@ -22,8 +25,8 @@ Select which layers to remove with extension flags:
 
   --cf    remove Cloudflare Tunnel config
 
-Tor, I2P and Yggdrasil (--tor, --i2p, --ygg) are not available in cluster
-mode yet.
+Tor, I2P and Yggdrasil (--tor, --i2p, --ygg) are not served in cluster mode;
+the flags (and -a) still remove them from a service enabled on them earlier.
 
 Without flags, only the private tailnet config is removed.
 -a/--all removes every layer, private included. The container keeps running;
@@ -61,9 +64,6 @@ func init() {
 func runDisable(cmd *cobra.Command, args []string) error {
 	svcName := args[0]
 	root := configDir()
-	if err := refuseUnavailable(disableUnavail); err != nil {
-		return err
-	}
 	// Only the name is checked: disable must still clean up the routes of a
 	// service whose directory is already gone.
 	if err := validName(svcName); err != nil {
@@ -76,6 +76,9 @@ func runDisable(cmd *cobra.Command, args []string) error {
 
 	hasSpecific := false
 	for _, on := range disableLayerFlags {
+		hasSpecific = hasSpecific || *on
+	}
+	for _, on := range disableUnavail {
 		hasSpecific = hasSpecific || *on
 	}
 
@@ -94,6 +97,17 @@ func runDisable(cmd *cobra.Command, args []string) error {
 		}
 		ls = append(ls, l)
 	}
+	// Layers cluster mode no longer serves (tor, i2p, ygg) can still be on in
+	// an old exposure.yaml. Disabling them removes them from the state and
+	// tears their daemon side down (best effort); enabling them stays refused.
+	st, _ := exposure.Load(root, svcName)
+	var unserved []network.NetworkLayer
+	for _, l := range layers.Unavailable(root, run.Default(), func() map[string]string { return buildEnv(root, "") }) {
+		if (disableAll || *disableUnavail[l.Name()]) && st.On(l.Name()) {
+			ls = append(ls, l)
+			unserved = append(unserved, l)
+		}
+	}
 
 	// The public name is resolved before the exposure state goes: it may be a
 	// --name that only the state remembers.
@@ -111,6 +125,11 @@ func runDisable(cmd *cobra.Command, args []string) error {
 			continue
 		}
 		fmt.Printf("  %s  %s: removed\n", styles.Warning.Render("→"), l.Label())
+		if slices.Contains(unserved, l) {
+			fmt.Printf("  %s  %s is not served in cluster mode; removed from the service's state only\n",
+				styles.Warning.Render("!"), l.Name())
+			continue
+		}
 		if l.Name() == "cf" && env["CLOUDFLARE_API_TOKEN"] != "" {
 			// Best effort: only a tunnel CNAME is removed, and none may exist.
 			if n, derr := deleteTunnelCNAME(cfAPIBase, env["CLOUDFLARE_API_TOKEN"], env["DOMAIN"], publicHost); derr == nil {

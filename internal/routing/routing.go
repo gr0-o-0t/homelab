@@ -17,11 +17,36 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 
 	"github.com/groot/homelab/internal/configgen"
 	"github.com/groot/homelab/internal/exposure"
 	"github.com/groot/homelab/internal/network"
 )
+
+// UnservedError is returned by Sync when a service's state lists layers but
+// none of them is registered (tor, i2p and ygg in cluster mode). Its sites and
+// layer4 files have been removed, since nothing would render them.
+type UnservedError struct {
+	Service string
+	Layers  []string
+}
+
+func (e *UnservedError) Error() string {
+	return fmt.Sprintf("%s is only exposed on %s, which are not available in cluster mode",
+		e.Service, strings.Join(e.Layers, ", "))
+}
+
+// Unserved returns the layers in st that reg does not serve.
+func Unserved(reg *network.Registry, st exposure.State) []string {
+	var out []string
+	for _, n := range st.Layers {
+		if !reg.Has(n) {
+			out = append(out, n)
+		}
+	}
+	return out
+}
 
 // Resolve reads a service's declaration into an Exposure for the --name and
 // --ports recorded in its state.
@@ -79,7 +104,15 @@ func Sync(root string, reg *network.Registry, svc string) error {
 		}
 	}
 	if len(on) == 0 {
-		return RemoveSites(root, svc)
+		if err := RemoveSites(root, svc); err != nil {
+			return err
+		}
+		// Layers recorded but none served: nothing can be rendered, and that
+		// must not look like a successful (re)render.
+		if len(st.Layers) > 0 {
+			return &UnservedError{Service: svc, Layers: st.Layers}
+		}
+		return nil
 	}
 	e, err := Resolve(root, svc, st)
 	if err != nil {

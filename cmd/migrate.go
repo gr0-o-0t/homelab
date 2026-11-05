@@ -72,10 +72,16 @@ func init() {
 // runMigration migrates every pending service, reporting to w, and returns
 // how many it migrated.
 func runMigration(root string, w io.Writer) (int, error) {
-	done, err := routing.Migrate(root, layers.New(root, run.Default(), nil))
+	done, err := routing.Migrate(root, layers.Legacy(root, run.Default(), nil))
 	for _, m := range done {
 		_, _ = fmt.Fprintf(w, "%s migrated %s → %s (%s)\n", styles.Success.Render("✓"), m.Service,
 			configgen.SitesFile(root, m.Service), strings.Join(m.State.Layers, ", "))
+		if len(m.Unserved) > 0 {
+			_, _ = fmt.Fprintf(w, "%s %s is also exposed on %s, which %s not available in cluster mode: kept in its state, not served; "+
+				"its old Caddy files were left in place (`homelab disable %s --%s` removes it)\n",
+				styles.Warning.Render("!"), m.Service, strings.Join(m.Unserved, ", "),
+				map[bool]string{true: "is", false: "are"}[len(m.Unserved) == 1], m.Service, m.Unserved[0])
+		}
 	}
 	if err != nil {
 		return len(done), fmt.Errorf("migration incomplete (those services keep their old routes): %w", err)
@@ -86,7 +92,7 @@ func runMigration(root string, w io.Writer) (int, error) {
 // ensureMigrated migrates pending services when the installed core can serve
 // them, and otherwise says how to get there. Cheap when nothing is pending.
 func ensureMigrated(root string) {
-	pending, err := routing.Pending(root, layers.New(root, nil, nil))
+	pending, err := routing.Pending(root, layers.Legacy(root, nil, nil))
 	if err != nil || len(pending) == 0 {
 		return
 	}
@@ -134,7 +140,7 @@ func requireSitesLayout(root, svc string) error {
 
 // requireMigrated refuses to change a service still routed by legacy files.
 func requireMigrated(root, svc string) error {
-	if routing.HasLegacy(root, layers.New(root, nil, nil), svc) {
+	if routing.HasLegacy(root, layers.Legacy(root, nil, nil), svc) {
 		return fmt.Errorf("%s is still routed by the old per-layer Caddy files — run `homelab update` (or `homelab migrate`) first", svc)
 	}
 	return nil

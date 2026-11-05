@@ -42,6 +42,6 @@ func TestRenderL4_ListensOnTailnet(t *testing.T) {
 	got := configgen.RenderL4(e)
 	assert.Contains(t, got, "\n"+network.TailnetBind+":22 {\n\troute {\n\t\tproxy gitea:2222\n")
 	assert.Contains(t, got, "\n"+network.TailnetBind+":53 {\n\troute {\n\t\tproxy gitea:53\n")
-	assert.Contains(t, got, "\nudp/"+network.TailnetBind+":53 {\n\troute {\n\t\tproxy udp/gitea:53\n")
+	assert.Contains(t, got, "\n"+network.TailnetBindUDP+":53 {\n\troute {\n\t\tproxy udp/gitea:53\n")
 	assert.False(t, strings.Contains(got, "\n:22"), got)
 }

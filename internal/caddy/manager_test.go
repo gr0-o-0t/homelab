@@ -275,3 +275,18 @@ func TestDisable_RollsBackOnInvalidConfig(t *testing.T) {
 	assert.Equal(t, beforeState, read(t, exposure.Path(root, "gitea")))
 	assert.Equal(t, []string{"configure gitea gitea"}, fake.calls, "no teardown after a rollback")
 }
+
+// A tor-only service has nothing to render in cluster mode: reload must say so
+// (and remove the stale sites), not report success.
+func TestReloadService_OnlyUnservedLayers(t *testing.T) {
+	root := t.TempDir()
+	writeSvc(t, root, "onion", map[string]string{"config.yaml": "ports:\n  - 80\n"})
+	enabled(t, root, "onion", exposure.State{Layers: []string{"tor"}})
+	require.NoError(t, os.MkdirAll(configgen.SitesDir(root), 0o750))
+	require.NoError(t, os.WriteFile(sites(root, "onion"), []byte("stale\n"), 0o600))
+
+	err := newForTest(root, noopReload).ReloadService("onion")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "onion is only exposed on tor, which are not available in cluster mode")
+	assert.NoFileExists(t, sites(root, "onion"))
+}

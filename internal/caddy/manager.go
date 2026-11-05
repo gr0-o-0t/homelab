@@ -74,7 +74,18 @@ func (m *Manager) ReloadService(name string) error {
 	if err != nil {
 		return err
 	}
-	if err := routing.Sync(m.RepoRoot, layers.New(m.RepoRoot, m.runner, nil), name); err != nil {
+	var unserved *routing.UnservedError
+	err = routing.Sync(m.RepoRoot, layers.New(m.RepoRoot, m.runner, nil), name)
+	if errors.As(err, &unserved) {
+		// Only layers cluster mode does not serve: Sync removed the service's
+		// (now unrenderable) sites. Apply that, then say so instead of
+		// reporting a reload that left the service unrouted.
+		if rerr := m.ReloadOrRestore(snap); rerr != nil {
+			return errors.Join(unserved, rerr)
+		}
+		return fmt.Errorf("%w; its sites were removed", unserved)
+	}
+	if err != nil {
 		return errors.Join(err, snap.Restore())
 	}
 	return m.ReloadOrRestore(snap)
@@ -170,11 +181,16 @@ func (m *Manager) Disable(reg *network.Registry, svc string, ls []network.Networ
 	if err != nil {
 		return err
 	}
+	// ls may name layers reg does not serve (tor, i2p, ygg): they leave the
+	// state all the same, so an old exposure.yaml is not stranded.
+	var unserved *routing.UnservedError
 	if err := routing.Apply(m.RepoRoot, reg, svc, func(s *exposure.State) {
 		for _, l := range ls {
 			s.Set(l.Name(), false)
 		}
-	}); err != nil {
+	}); err != nil && !errors.As(err, &unserved) {
+		// A state left with only unserved layers has no sites to render; that
+		// is the outcome of disabling the rest, not a failure.
 		return errors.Join(err, snap.Restore())
 	}
 	reloadErr := m.ReloadOrRestore(snap)
