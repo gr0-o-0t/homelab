@@ -142,3 +142,36 @@ func TestStartStopCloudflared_UsesSwarm(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, svcs)
 }
+
+// A working tunnel reads as running everywhere: the cf layer, `ext` status,
+// containerStatus and doctor take cloudflared's state from its Swarm task,
+// not from a container named "cloudflared".
+func TestCloudflaredState_FromSwarmTask(t *testing.T) {
+	f := fakeSwarm(t)
+	f.SetImage(swarm.CloudflaredImage, image.InspectResponse{Config: &dockerspec.DockerOCIImageConfig{
+		ImageConfig: ocispec.ImageConfig{Entrypoint: []string{"cloudflared"}},
+	}})
+	root := t.TempDir()
+	assert.Equal(t, "not found", cloudflaredState(root))
+
+	require.NoError(t, startCloudflared(root, map[string]string{"CF_TUNNEL_TOKEN": "tok"}))
+	svcs, err := f.ServiceList(t.Context(), dswarm.ServiceListOptions{})
+	require.NoError(t, err)
+	f.SetNodes([]dswarm.Node{{ID: "n1", Description: dswarm.NodeDescription{Hostname: "minis"}}})
+	f.AddTask(dswarm.Task{ID: "t1", ServiceID: svcs[0].ID, NodeID: "n1",
+		DesiredState: dswarm.TaskStateRunning, Status: dswarm.TaskStatus{State: dswarm.TaskStateRunning}})
+
+	assert.Equal(t, "running", cloudflaredState(root))
+	assert.Equal(t, "running", containerStatus(swarm.CloudflaredService))
+
+	l, ok := extRegistry().Get("cf")
+	require.True(t, ok)
+	assert.Equal(t, swarm.CloudflaredService, l.ContainerName())
+	assert.Equal(t, "running", l.Status().ContainerState)
+	assert.Equal(t, "running", extLayerState(l, nil))
+	assert.Empty(t, l.Profile(), "no compose profile may start a second connector")
+
+	require.NoError(t, stopCloudflared(root))
+	f.SetTasks(nil)
+	assert.Equal(t, "not found", extLayerState(l, nil))
+}

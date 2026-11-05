@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/groot/homelab/internal/network/tor"
+	"github.com/groot/homelab/internal/swarm"
 	"github.com/groot/homelab/internal/tui/styles"
 )
 
@@ -27,6 +28,9 @@ func dockerDaemonUp() bool {
 
 // containerStatus returns the Docker container state ("running", "exited", "not found", etc.).
 func containerStatus(name string) string {
+	if name == swarm.CloudflaredService { // a Swarm service, not a container
+		return cloudflaredState(configDir())
+	}
 	out, err := exec.Command( // nosec G204 -- binary is "docker", name is service name constant
 		"docker", "inspect", "--format={{.State.Status}}", name,
 	).Output()

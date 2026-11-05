@@ -7,6 +7,7 @@ import (
 
 	"github.com/groot/homelab/internal/config"
 	"github.com/groot/homelab/internal/network"
+	"github.com/groot/homelab/internal/network/cf"
 	"github.com/groot/homelab/internal/network/layers"
 	"github.com/groot/homelab/internal/run"
 	"github.com/groot/homelab/internal/tui/styles"
@@ -30,6 +31,11 @@ func extRegistry() *network.Registry {
 		// Evaluated per compose call, not here: buildEnv reads the keyring.
 		env := func() map[string]string { return buildEnv(root, "") }
 		extRegistryInstance = layers.New(root, run.Default(), env)
+		if l, ok := extRegistryInstance.Get("cf"); ok {
+			if cfl, ok := l.(*cf.Layer); ok {
+				cfl.WithState(func() string { return cloudflaredState(root) })
+			}
+		}
 	})
 	return extRegistryInstance
 }

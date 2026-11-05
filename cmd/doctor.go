@@ -13,6 +13,7 @@ import (
 	"github.com/groot/homelab/internal/configgen"
 	"github.com/groot/homelab/internal/diagnostics"
 	"github.com/groot/homelab/internal/docker"
+	"github.com/groot/homelab/internal/network"
 	"github.com/groot/homelab/internal/run"
 	"github.com/groot/homelab/internal/service"
 	"github.com/groot/homelab/internal/tui/spinner"
@@ -244,14 +245,7 @@ func renderExtensionChecks(cfgFile string, dc *docker.Client, pass *bool) {
 			continue
 		}
 		cName := layer.ContainerName()
-		var cState string
-		if dc != nil {
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			cState = dc.ContainerState(ctx, cName)
-			cancel()
-		} else {
-			cState = ""
-		}
+		cState := extLayerState(layer, dc)
 		displayName := layer.Label()
 		if cState == containerStateRunning {
 			results = append(results, diagnostics.CheckResult{
@@ -334,4 +328,19 @@ func init() {
 	doctorCmd.Flags().BoolVar(&doctorFixFlag, "fix", false, "Auto-repair safe issues (missing network, broken symlinks, missing dirs)")
 	doctorCmd.Flags().BoolVar(&doctorAllFlag, "all", false, "Run doctor for all installed services")
 
+}
+
+// extLayerState is a layer's container state. cloudflared is a Swarm service,
+// so the cf layer reports its task state (Status), never a container-name
+// lookup; the others ask the Docker daemon.
+func extLayerState(layer network.NetworkLayer, dc *docker.Client) string {
+	if layer.Name() == cloudflaredLayer {
+		return layer.Status().ContainerState
+	}
+	if dc == nil {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	return dc.ContainerState(ctx, layer.ContainerName())
 }

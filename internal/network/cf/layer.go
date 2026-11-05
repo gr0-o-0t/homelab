@@ -5,7 +5,6 @@
 package cf
 
 import (
-	"context"
 	"errors"
 	"fmt"
 
@@ -14,7 +13,8 @@ import (
 	"github.com/groot/homelab/internal/run"
 )
 
-const containerName = "cloudflared"
+// containerName is the Swarm service; there is no fixed container name.
+const containerName = "homelab_cloudflared"
 
 // Layer implements network.NetworkLayer for Cloudflare Tunnel.
 //
@@ -26,7 +26,7 @@ type Layer struct {
 	repoRoot string
 	runner   *run.Commander
 	envFn    network.EnvFunc
-	tunnel   Tunnel
+	state    func() string
 }
 
 // New creates a new Cloudflare layer.
@@ -42,39 +42,25 @@ var _ network.NetworkLayer = (*Layer)(nil)
 func (l *Layer) Name() string          { return "cf" }
 func (l *Layer) Label() string         { return "Cloudflare Tunnel" }
 func (l *Layer) ContainerName() string { return containerName }
-func (l *Layer) Profile() string       { return "tunnel" }
+func (l *Layer) Profile() string       { return "" } // no compose profile: it is a Swarm service
 func (l *Layer) Flag() string          { return "cf" }
 
-// Tunnel runs and removes the cloudflared Swarm service; *swarm.Deployer
-// satisfies it.
-type Tunnel interface {
-	EnsureCloudflared(ctx context.Context, token string) error
-	RemoveCloudflared(ctx context.Context) error
-}
+// WithState sets where Status reads cloudflared's state: its Swarm task, not
+// a compose container.
+func (l *Layer) WithState(fn func() string) *Layer { l.state = fn; return l }
 
-// WithTunnel sets what Start and Stop drive: cloudflared is a Swarm service,
-// not a compose container.
-func (l *Layer) WithTunnel(t Tunnel) *Layer { l.tunnel = t; return l }
+var errSwarmService = errors.New("cloudflared runs as a Swarm service — use homelab ext start cf")
 
-var errNoTunnel = errors.New("cloudflare: no Swarm deployer configured")
-
-func (l *Layer) Start() error {
-	if l.tunnel == nil {
-		return errNoTunnel
-	}
-	return l.tunnel.EnsureCloudflared(context.Background(), l.env()["CF_TUNNEL_TOKEN"])
-}
-
-func (l *Layer) Stop() error {
-	if l.tunnel == nil {
-		return errNoTunnel
-	}
-	return l.tunnel.RemoveCloudflared(context.Background())
-}
+// Start and Stop are not how cloudflared runs: it is a Swarm service,
+// deployed with `homelab ext start|stop cf`.
+func (l *Layer) Start() error { return errSwarmService }
+func (l *Layer) Stop() error  { return errSwarmService }
 
 func (l *Layer) Status() network.Status {
-	state := l.runner.ContainerStatus(containerName)
-	return network.Status{ContainerState: state}
+	if l.state == nil {
+		return network.Status{ContainerState: "not found"}
+	}
+	return network.Status{ContainerState: l.state()}
 }
 
 func (l *Layer) LegacyConfDir() string { return "conf.d-cf" }
@@ -90,11 +76,4 @@ func (l *Layer) ServiceAddresses(svcName string, env map[string]string) []networ
 	}
 	host := configgen.ServiceHost(l.repoRoot, svcName)
 	return []network.ServiceAddress{{URL: fmt.Sprintf("https://%s.%s", host, dom)}}
-}
-
-func (l *Layer) env() map[string]string {
-	if l.envFn == nil {
-		return map[string]string{}
-	}
-	return l.envFn()
 }

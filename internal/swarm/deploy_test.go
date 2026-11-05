@@ -66,6 +66,7 @@ func writeService(t *testing.T, root, svc, compose string) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte(compose), 0o644))
 }
 
+// withImage registers the entrypoint/cmd the fake returns when ref is inspected.
 func withImage(f *swarmtest.Fake, ref string, entry, cmd []string) {
 	f.SetImage(ref, image.InspectResponse{Config: &dockerspec.DockerOCIImageConfig{
 		ImageConfig: ocispec.ImageConfig{Entrypoint: entry, Cmd: cmd},

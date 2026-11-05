@@ -6,7 +6,7 @@ package assets
 import "embed"
 
 // CoreFS contains the core infrastructure files:
-//   - core/docker-compose.yml     — Tailscale + Caddy + cloudflared stack
+//   - core/docker-compose.yml     — Tailscale + Caddy stack
 //   - core/Dockerfile.caddy       — custom Caddy build with Cloudflare DNS plugin
 //   - core/Dockerfile.ygg         — custom Yggdrasil build with socat
 //   - core/entrypoint.ygg.sh      — Yggdrasil entrypoint script

@@ -165,12 +165,26 @@ func (c *Client) InspectContainers(ctx context.Context, summaries []ContainerSum
 }
 
 // ContainerState returns the state ("running", "exited", etc.) of the named
-// container, or "" if the container does not exist or the daemon is unavailable.
+// container (or Swarm service), or "" if it does not exist or the daemon is unavailable.
 func (c *Client) ContainerState(ctx context.Context, name string) string {
 	f := filters.NewArgs(filters.Arg("name", "^/"+name+"$"))
 	list, err := c.c.ContainerList(ctx, container.ListOptions{All: true, Filters: f})
-	if err != nil || len(list) == 0 {
+	if err != nil {
 		return ""
+	}
+	if len(list) == 0 {
+		// A Swarm service's tasks are named <service>.<slot>.<id>: look the
+		// name up as a service, preferring a running task.
+		list, err = c.c.ContainerList(ctx, container.ListOptions{All: true, Filters: filters.NewArgs(
+			filters.Arg("label", "com.docker.swarm.service.name="+name))})
+		if err != nil || len(list) == 0 {
+			return ""
+		}
+		for i := range list {
+			if list[i].State == "running" {
+				return "running"
+			}
+		}
 	}
 	return list[0].State
 }

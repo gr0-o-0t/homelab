@@ -1,5 +1,5 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# Core stack: Tailscale + Caddy [+ cloudflared] [+ tor] [+ i2p] [+ yggdrasil]
+# Core stack: Tailscale + Caddy [+ tor] [+ i2p] [+ yggdrasil]
 #
 # Architecture
 # ────────────
@@ -13,12 +13,9 @@
 #                    • It listens on the Tailscale IP (100.x.x.x)
 #                    • It can resolve service container names on home-services
 #
-#   cloudflared  → optional; profile "tunnel". Connects outbound-only to
-#                  Cloudflare's edge and forwards public traffic to Caddy
-#                  via http://tailscale:80 (shared netns trick — Caddy is
-#                  reachable on the tailscale container's Docker IP).
-#                  Start with: homelab core start  (auto-activated when
-#                  CF_TUNNEL_TOKEN secret is configured with setup).
+#   cloudflared  → not here: it runs as a Swarm service (homelab_cloudflared),
+#                  deployed by `homelab ext start cf`, pointed at
+#                  http://homelab-edge:80 (the agent's plain-HTTP listener).
 #
 #   tor          → optional; profile "tor". Exposes services as .onion
 #                  addresses. Activate with: homelab ext enable tor
@@ -139,26 +136,6 @@ services:
       # Persistent ACME certs and Caddy state — never delete this volume!
       - caddy-data:/data
       - caddy-config:/config
-
-  # ── Cloudflare Tunnel (optional) ───────────────────────────────────────────
-  # Activated automatically by `homelab core start` when CF_TUNNEL_TOKEN is
-  # set. Forwards *.{DOMAIN} public traffic to Caddy.
-  cloudflared:
-    logging: *default-logging
-    image: cloudflare/cloudflared:latest
-    container_name: cloudflared
-    profiles: ["tunnel"]
-    restart: always
-    command: tunnel --no-autoupdate run
-    environment:
-      TUNNEL_TOKEN: ${CF_TUNNEL_TOKEN}
-    networks:
-      - home-services
-    depends_on:
-      tailscale:
-        condition: service_healthy # don't route public traffic until tailnet is up
-    # Note: no healthcheck — cloudflared's image has no curl/wget, and no other
-    # service depends on cloudflared being healthy.
 
   # ── Tor onion service proxy (optional) ──────────────────────────────
   # Profile-activated. Enable with: homelab ext enable tor

@@ -61,7 +61,7 @@ func TestCloudflared_PinnedCore(t *testing.T) {
 }
 
 func TestCloudflared_RemovedWithoutToken(t *testing.T) {
-	d, f, list := cfDeployer(t)
+	d, _, list := cfDeployer(t)
 	ctx := context.Background()
 	require.NoError(t, d.EnsureCloudflared(ctx, cfToken))
 	require.Len(t, list(), 1)
@@ -70,7 +70,6 @@ func TestCloudflared_RemovedWithoutToken(t *testing.T) {
 	secs, err := d.API.SecretList(ctx, dswarm.SecretListOptions{})
 	require.NoError(t, err)
 	assert.Empty(t, secs)
-	_ = f
 	// Removing what is not there is not an error.
 	require.NoError(t, d.RemoveCloudflared(ctx))
 }

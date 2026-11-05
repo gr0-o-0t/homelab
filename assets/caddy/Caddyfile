@@ -73,7 +73,7 @@ import /homelab/caddy/conf.d/*.conf
 
 # ── Public site blocks (Cloudflare Tunnel) ───────────────────────────────────
 # Each file handles <service>.{$DOMAIN}.
-# Traffic arrives via cloudflared → http://tailscale:80, TLS is terminated at Cloudflare edge.
+# Traffic arrives via cloudflared → http://homelab-edge:80, TLS is terminated at Cloudflare edge.
 import /homelab/caddy/conf.d-cf/*.conf
 
 # ── I2P eepsite blocks ────────────────────────────────────────────────────────

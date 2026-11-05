@@ -13,7 +13,8 @@ func TestLayer_Identity(t *testing.T) {
 	l := New("/test/repo", nil, nil)
 	assert.Equal(t, "cf", l.Name())
 	assert.Equal(t, "Cloudflare Tunnel", l.Label())
-	assert.Equal(t, "cloudflared", l.ContainerName())
+	assert.Equal(t, "homelab_cloudflared", l.ContainerName())
+	assert.Empty(t, l.Profile(), "no compose profile may start a second connector")
 }
 
 func TestLayer_InterfaceImplementation(t *testing.T) {
@@ -41,4 +42,20 @@ func TestLayer_ServiceAddresses_UsesSiteHost(t *testing.T) {
 
 	require.NoError(t, exposure.Save(root, "gitea", exposure.State{Layers: []string{"cf"}, Name: "git"}))
 	assert.Equal(t, "https://git.example.com", l.ServiceAddresses("gitea", env)[0].URL)
+}
+
+// Status comes from the Swarm task, not a container name.
+func TestLayer_StatusFromSwarmState(t *testing.T) {
+	state := "running"
+	l := New("/r", nil, nil).WithState(func() string { return state })
+	assert.Equal(t, "running", l.Status().ContainerState)
+	state = "not found"
+	assert.Equal(t, "not found", l.Status().ContainerState)
+	assert.Equal(t, "not found", New("/r", nil, nil).Status().ContainerState)
+}
+
+func TestLayer_StartStopRefused(t *testing.T) {
+	l := New("/r", nil, nil)
+	assert.ErrorContains(t, l.Start(), "ext start cf")
+	assert.ErrorContains(t, l.Stop(), "ext start cf")
 }

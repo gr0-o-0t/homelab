@@ -43,20 +43,28 @@ func stopCloudflared(root string) error {
 	})
 }
 
-// cloudflaredState reports the state of cloudflared's task.
+// cloudflaredState reports the state of cloudflared's Swarm task: "running"
+// when any task runs, else the first task's state, "not found" with none.
+// It does not need the secrets manager.
 func cloudflaredState(root string) string {
-	state := "not found"
-	_ = withDeployer(root, false, func(ctx context.Context, d *swarm.Deployer) error {
-		tasks, err := d.Status(ctx, swarm.CloudflaredLabel)
-		if err != nil {
-			return err
+	api, err := newSwarmAPI()
+	if err != nil {
+		return "not found"
+	}
+	if c, ok := api.(io.Closer); ok {
+		defer func() { _ = c.Close() }()
+	}
+	d := &swarm.Deployer{API: api, Root: root}
+	tasks, err := d.Status(cmdContext(), swarm.CloudflaredLabel)
+	if err != nil || len(tasks) == 0 {
+		return "not found"
+	}
+	for _, t := range tasks {
+		if t.State == containerStateRunning {
+			return t.State
 		}
-		if len(tasks) > 0 {
-			state = tasks[0].State
-		}
-		return nil
-	})
-	return state
+	}
+	return tasks[0].State
 }
 
 var cfCmd = &cobra.Command{
