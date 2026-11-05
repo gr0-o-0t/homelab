@@ -351,6 +351,12 @@ func runServiceSetup(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return fmt.Errorf("reading database declarations: %w", err)
 		}
+		// No Deployer: setup only provisions on instances already running.
+		closeAPI, err := attachDocker(p)
+		if err != nil {
+			return err
+		}
+		defer closeAPI()
 		if len(svcDB) > 0 {
 			fmt.Printf("\n  %s\n\n", styles.Accent.Render("─── Database Setup ──────────────────────────────────"))
 			for i := range svcDB {

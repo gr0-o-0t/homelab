@@ -25,7 +25,7 @@ func redisProvisioner(t *testing.T) (*Provisioner, *fakeCommander, string) {
 	dir := t.TempDir()
 	fc := &fakeCommander{}
 	sm := &fakeSM{store: map[string]string{"redis/" + config.RedisPasswordKey: "sharedpw"}}
-	return &Provisioner{ConfigDir: dir, RC: fc, SM: sm}, fc, dir
+	return &Provisioner{ContainerFor: fixedNames, ConfigDir: dir, RC: fc, SM: sm}, fc, dir
 }
 
 func TestProvisionRedis_AllocatesStableUniqueNumbers(t *testing.T) {
@@ -211,7 +211,7 @@ func garageProvisioner() (*Provisioner, *fakeCommander, *fakeGarage, *fakeSM) {
 	g := &fakeGarage{buckets: map[string]bool{}, keys: map[string]bool{}}
 	fc := &fakeCommander{outputFn: g.answer}
 	sm := &fakeSM{store: map[string]string{}}
-	return &Provisioner{RC: fc, SM: sm}, fc, g, sm
+	return &Provisioner{ContainerFor: fixedNames, RC: fc, SM: sm}, fc, g, sm
 }
 
 func garageArgs(fc *fakeCommander) []string {
@@ -319,7 +319,7 @@ func TestEnsureGeneratedSecrets(t *testing.T) {
 		t.Fatal(err)
 	}
 	sm := &fakeSM{store: map[string]string{"garage/TOKEN": "keep-me"}}
-	p := &Provisioner{ConfigDir: dir, SM: sm, RC: &fakeCommander{}}
+	p := &Provisioner{ContainerFor: fixedNames, ConfigDir: dir, SM: sm, RC: &fakeCommander{}}
 
 	created, err := p.EnsureGeneratedSecrets("garage")
 	if err != nil {

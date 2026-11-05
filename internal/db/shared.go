@@ -93,8 +93,11 @@ func (p *Provisioner) provisionRedis(svcName string, decl config.ServiceDBDecl) 
 		// A number freed by a deleted service may still hold its keys.
 		script += "FLUSHDB\n"
 	}
-	out, err := p.RC.OutputFrom(strings.NewReader(script),
-		"docker", "exec", "-i", p.containerName(config.DBRedis), "redis-cli")
+	ctr, err := p.Container(config.DBRedis)
+	if err != nil {
+		return err
+	}
+	out, err := p.RC.OutputFrom(strings.NewReader(script), "docker", "exec", "-i", ctr, "redis-cli")
 	if err != nil {
 		return fmt.Errorf("checking shared redis: %w", err)
 	}
@@ -116,7 +119,11 @@ func (p *Provisioner) provisionRedis(svcName string, decl config.ServiceDBDecl) 
 // garage runs the garage CLI inside the shared container. Output, not Run:
 // the CLI logs connection chatter to stderr on every call.
 func (p *Provisioner) garage(args ...string) ([]byte, error) {
-	return p.RC.Output("docker", append([]string{"exec", p.containerName(config.DBS3), "/garage"}, args...)...)
+	ctr, err := p.Container(config.DBS3)
+	if err != nil {
+		return nil, err
+	}
+	return p.RC.Output("docker", append([]string{"exec", ctr, "/garage"}, args...)...)
 }
 
 var layoutVersionRe = regexp.MustCompile(`Current cluster layout version:\s*(\d+)`)

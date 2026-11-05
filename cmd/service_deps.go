@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"time"
@@ -65,23 +66,40 @@ func ensureDBDependencies(ctx context.Context, root, name string) error {
 		return fmt.Errorf("opening keyring: %w", err)
 	}
 	p := db.New(root, sm)
+	closeAPI, err := attachDocker(p)
+	if err != nil {
+		return err
+	}
+	defer closeAPI()
+	p.Deployer = swarmStarter{root}
 
 	for _, dbType := range types {
 		// A service desired running needs its shared database running too:
 		// recorded, the login restore starts it and the supervisor restarts
 		// it after a crash like any other service.
 		recordService(root, config.SharedDBName(dbType), session.Running)
-		if err := p.EnsureRunning(ctx, dbType); err != nil {
-			if err := startSharedDB(ctx, root, dbType, p); err != nil {
+		_, notRunning := p.Container(dbType)
+		if notRunning != nil {
+			if err := prepareSharedDB(root, dbType, p); err != nil {
 				return err
 			}
-			continue
+		}
+		// Deploys the provider when it has no running container here.
+		if err := p.EnsureRunning(ctx, dbType); err != nil {
+			return err
 		}
 		// Running is not ready. Right after the shared instance starts — a
 		// login restore brings it up moments before its dependents — it
 		// refuses connections until healthy, and provisioning would fail.
 		if err := p.WaitHealthy(ctx, dbType, sharedDBStartTimeout); err != nil {
 			return err
+		}
+		if notRunning != nil {
+			shared := config.SharedDBName(dbType)
+			if err := p.Bootstrap(ctx, dbType); err != nil {
+				return fmt.Errorf("initialising %s: %w", shared, err)
+			}
+			fmt.Printf("  %s %s is ready\n", styles.Success.Render("✓"), shared)
 		}
 	}
 
@@ -106,36 +124,45 @@ func ensureDBDependencies(ctx context.Context, root, name string) error {
 	return nil
 }
 
-// startSharedDB brings up the shared instance for dbType and waits for it to be
-// healthy. Installation is left to the user: the shared databases need a root
-// password in the keyring before they will initialise, so silently installing
-// one would just produce a container that crash-loops.
-func startSharedDB(ctx context.Context, root string, dbType config.DBType, p *db.Provisioner) error {
+// prepareSharedDB readies a shared instance that is about to be started:
+// installed, announced, its generated secrets minted. Installation is left
+// to the user: the shared databases need a root password in the keyring
+// before they will initialise, so silently installing one would just
+// produce a container that crash-loops.
+func prepareSharedDB(root string, dbType config.DBType, p *db.Provisioner) error {
 	shared := config.SharedDBName(dbType)
 	composeFile := run.ServiceComposeFile(root, shared)
 	if _, err := os.Stat(composeFile); err != nil {
 		return fmt.Errorf("%s is required by this service but is not installed\n"+
 			"  Install: homelab add %s && homelab setup %s", shared, shared, shared)
 	}
-
 	fmt.Printf("%s Starting %s (required by this service)…\n",
 		styles.Primary.Render("→"), styles.Bold.Render(shared))
+	return ensureGeneratedSecrets(p, shared)
+}
 
-	if err := ensureGeneratedSecrets(p, shared); err != nil {
-		return err
-	}
-	if err := deployRunning(root, shared, (*swarm.Deployer).Up); err != nil {
-		return fmt.Errorf("starting %s: %w", shared, err)
-	}
+// swarmStarter lets the provisioner deploy a shared database provider the
+// way `homelab up` does.
+type swarmStarter struct{ root string }
 
-	if err := p.WaitHealthy(ctx, dbType, sharedDBStartTimeout); err != nil {
-		return err
+func (s swarmStarter) Up(_ context.Context, svc string) error {
+	return deployRunning(s.root, svc, (*swarm.Deployer).Up)
+}
+
+// attachDocker gives p the Docker API its default container resolver uses
+// to find the shared instances' Swarm task containers. Call the returned
+// func when done with p.
+func attachDocker(p *db.Provisioner) (func(), error) {
+	api, err := newSwarmAPI()
+	if err != nil {
+		return nil, fmt.Errorf("connecting to docker: %w", err)
 	}
-	if err := p.Bootstrap(ctx, dbType); err != nil {
-		return fmt.Errorf("initialising %s: %w", shared, err)
-	}
-	fmt.Printf("  %s %s is ready\n", styles.Success.Render("✓"), shared)
-	return nil
+	p.API = api
+	return func() {
+		if c, ok := api.(io.Closer); ok {
+			_ = c.Close()
+		}
+	}, nil
 }
 
 // ensureGeneratedSecrets mints the secrets a service's config.yaml marks
@@ -174,6 +201,11 @@ func bootstrapIfShared(ctx context.Context, root, name string) error {
 		return nil
 	}
 	p := db.New(root, nil)
+	closeAPI, err := attachDocker(p)
+	if err != nil {
+		return err
+	}
+	defer closeAPI()
 	if err := p.WaitHealthy(ctx, dbType, sharedDBStartTimeout); err != nil {
 		return err
 	}
@@ -202,6 +234,11 @@ func releaseDBDependencies(ctx context.Context, root, name string) []error {
 		return []error{fmt.Errorf("opening keyring: %w", err)}
 	}
 	p := db.New(root, sm)
+	closeAPI, err := attachDocker(p) // no Deployer: deleting never starts garage
+	if err != nil {
+		return []error{err}
+	}
+	defer closeAPI()
 	var errs []error
 	for i := range svcDB {
 		entry := &svcDB[i]

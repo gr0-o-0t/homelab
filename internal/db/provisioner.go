@@ -14,6 +14,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/filters"
+
 	"github.com/groot/homelab/internal/config"
 	"github.com/groot/homelab/internal/run"
 )
@@ -33,6 +36,17 @@ type secretsManager interface {
 	Delete(namespace, key string) error
 }
 
+// ContainerLister is the slice of the Docker API the default container
+// resolver needs; *client.Client and swarm.API satisfy it.
+type ContainerLister interface {
+	ContainerList(ctx context.Context, options container.ListOptions) ([]container.Summary, error)
+}
+
+// Starter deploys a catalog service; swarm.Deployer satisfies it.
+type Starter interface {
+	Up(ctx context.Context, svc string) error
+}
+
 // Provisioner manages database lifecycle on shared instances.
 type Provisioner struct {
 	ConfigDir string
@@ -41,6 +55,14 @@ type Provisioner struct {
 	// PollInterval overrides WaitHealthy's re-inspect delay. Zero means the
 	// default; tests set it small so they need not sleep.
 	PollInterval time.Duration
+	// ContainerFor names the container to `docker exec` into for a shared
+	// instance. Nil means the running Swarm task on this node, found via API.
+	ContainerFor func(dbType config.DBType) (string, error)
+	// API lists containers for the default ContainerFor.
+	API ContainerLister
+	// Deployer, when set, lets EnsureRunning start a provider that is not
+	// running; nil makes EnsureRunning a check only.
+	Deployer Starter
 }
 
 // New creates a Provisioner.
@@ -104,23 +126,24 @@ func (p *Provisioner) Bootstrap(ctx context.Context, dbType config.DBType) error
 	return nil
 }
 
-// EnsureRunning checks that a shared DB container is healthy.
-// Returns a user-friendly error if the container isn't running.
+// EnsureRunning makes sure the shared instance for dbType has a running
+// container on this node. With a Deployer it starts the provider when it has
+// none (callers then WaitHealthy); without one it only checks, and says how
+// to start it.
 func (p *Provisioner) EnsureRunning(ctx context.Context, dbType config.DBType) error {
-	container := p.containerName(dbType)
-	if container == "" {
+	provider := config.SharedDBName(dbType)
+	if provider == "" {
 		return fmt.Errorf("unknown database type: %s", dbType)
 	}
-
-	out, err := p.RC.Output("docker", "inspect", "--format={{.State.Status}}", container)
-	if err != nil {
-		return fmt.Errorf("%s container %q not found or not running\n  Install: homelab add %s && homelab up %s",
-			dbType, container, config.SharedDBName(dbType), config.SharedDBName(dbType))
+	_, err := p.Container(dbType)
+	if err == nil {
+		return nil
 	}
-	status := strings.TrimSpace(string(out))
-	if status != "running" {
-		return fmt.Errorf("%s container %q is %s, not running\n  Start: homelab up %s",
-			dbType, container, status, config.SharedDBName(dbType))
+	if p.Deployer == nil {
+		return fmt.Errorf("%w\n  Start: homelab up %s", err, provider)
+	}
+	if err := p.Deployer.Up(ctx, provider); err != nil {
+		return fmt.Errorf("starting %s: %w", provider, err)
 	}
 	return nil
 }
@@ -134,17 +157,18 @@ const healthPollInterval = time.Second
 // WaitHealthy blocks until the shared DB container for dbType reports healthy,
 // or until timeout elapses.
 //
-// `docker compose up -d` returns as soon as the container is created, long
-// before Postgres has finished recovery and is accepting connections. Starting a
-// dependent service in that window gives it connection-refused errors that look
-// like misconfiguration, so callers that auto-start a dependency must wait here
-// first.
+// Deploying a provider returns as soon as Swarm accepts the spec, before its
+// task container even exists, let alone before Postgres has finished recovery
+// and is accepting connections. Starting a dependent service in that window
+// gives it connection-refused errors that look like misconfiguration, so
+// callers that auto-start a dependency must wait here first. The container
+// is re-resolved on every poll: a task that fails is replaced by a new one.
 //
 // A container with no healthcheck reports no health state at all; for those,
 // "running" is the best signal available and is accepted.
 func (p *Provisioner) WaitHealthy(ctx context.Context, dbType config.DBType, timeout time.Duration) error {
-	container := p.containerName(dbType)
-	if container == "" {
+	provider := config.SharedDBName(dbType)
+	if provider == "" {
 		return fmt.Errorf("unknown database type: %s", dbType)
 	}
 
@@ -156,14 +180,19 @@ func (p *Provisioner) WaitHealthy(ctx context.Context, dbType config.DBType, tim
 	deadline := time.Now().Add(timeout)
 	var last string
 	for {
-		out, err := p.RC.Output("docker", "inspect",
-			"--format={{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}", container)
-		if err == nil {
-			switch last = strings.TrimSpace(string(out)); last {
-			case "healthy", "running":
-				return nil
-			case "unhealthy":
-				// Keep waiting: an unhealthy report during start_period is normal.
+		container, err := p.Container(dbType)
+		if err != nil {
+			last = err.Error()
+		} else {
+			out, err := p.RC.Output("docker", "inspect",
+				"--format={{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}", container)
+			if err == nil {
+				switch last = strings.TrimSpace(string(out)); last {
+				case "healthy", "running":
+					return nil
+				case "unhealthy":
+					// Keep waiting: an unhealthy report during start_period is normal.
+				}
 			}
 		}
 
@@ -171,12 +200,11 @@ func (p *Provisioner) WaitHealthy(ctx context.Context, dbType config.DBType, tim
 			if last == "" {
 				last = "no status reported"
 			}
-			return fmt.Errorf("%s container %q did not become healthy within %s (last status: %s)\n"+
+			return fmt.Errorf("%s did not become healthy within %s (last status: %s)\n"+
 				"  Check: homelab logs %s\n"+
 				"  If it never starts, confirm `homelab setup %s` has been run — "+
 				"the image needs its root password to initialise",
-				dbType, container, timeout, last,
-				config.SharedDBName(dbType), config.SharedDBName(dbType))
+				provider, timeout, last, provider, provider)
 		}
 
 		select {
@@ -187,8 +215,43 @@ func (p *Provisioner) WaitHealthy(ctx context.Context, dbType config.DBType, tim
 	}
 }
 
-func (p *Provisioner) containerName(dbType config.DBType) string {
-	return config.SharedDBContainer(dbType)
+// swarmServiceLabel is the label Swarm puts on a task's container naming
+// its service.
+const swarmServiceLabel = "com.docker.swarm.service.name"
+
+// Container returns the container to `docker exec` into for dbType's shared
+// instance: ContainerFor when set, else the running Swarm task on this node.
+func (p *Provisioner) Container(dbType config.DBType) (string, error) {
+	if p.ContainerFor != nil {
+		return p.ContainerFor(dbType)
+	}
+	return p.taskContainer(dbType)
+}
+
+// taskContainer finds the running task container of the provider's Swarm
+// service on this node. The service is <provider>_<provider>: a stack's
+// services are named <stack>_<compose key>, and every provider's compose
+// file has one service keyed by its own name (pinned by a test). Providers
+// are pinned to core nodes, where the leader runs, so the task is local.
+func (p *Provisioner) taskContainer(dbType config.DBType) (string, error) {
+	provider := config.SharedDBName(dbType)
+	if provider == "" {
+		return "", fmt.Errorf("unknown database type: %s", dbType)
+	}
+	if p.API == nil {
+		return "", fmt.Errorf("no Docker API to find the %s container with", provider)
+	}
+	list, err := p.API.ContainerList(context.Background(), container.ListOptions{Filters: filters.NewArgs(
+		filters.Arg("label", swarmServiceLabel+"="+provider+"_"+provider),
+		filters.Arg("status", "running"),
+	)})
+	if err != nil {
+		return "", fmt.Errorf("finding the %s container: %w", provider, err)
+	}
+	if len(list) == 0 {
+		return "", fmt.Errorf("%s is not running on this node", provider)
+	}
+	return list[0].ID, nil
 }
 
 func (p *Provisioner) ensurePassword(svcName string) (string, error) {
@@ -215,10 +278,11 @@ func (p *Provisioner) ensurePassword(svcName string) (string, error) {
 
 // execSQL runs sql as user, feeding it over stdin rather than argv: statements
 // here carry passwords, and a process's argv is readable by anyone on the host
-// via ps or /proc.
-func (p *Provisioner) execSQL(container, user, sql string) error {
+// via ps or /proc. The client follows dbType: a Swarm task's container ID
+// says nothing about the engine inside.
+func (p *Provisioner) execSQL(dbType config.DBType, container, user, sql string) error {
 	var args []string
-	if strings.Contains(container, "postgres") {
+	if dbType == config.DBPostgres {
 		args = []string{"exec", "-i", container, "psql", "-U", user, "-v", "ON_ERROR_STOP=1", "-f", "-"}
 	} else {
 		args = []string{"exec", "-i", container, "mysql", "-u", "root"}
@@ -234,7 +298,10 @@ func (p *Provisioner) execPSQL(container, db, user string, args ...string) ([]by
 }
 
 func (p *Provisioner) provisionPostgres(ctx context.Context, svcName string, decl config.ServiceDBDecl, password string) error {
-	container := p.containerName(config.DBPostgres)
+	container, err := p.Container(config.DBPostgres)
+	if err != nil {
+		return err
+	}
 
 	// Ownership model: one database per service, owned outright by that
 	// service's role. Every database here is single-tenant, so an owner role is
@@ -260,7 +327,7 @@ func (p *Provisioner) provisionPostgres(ctx context.Context, svcName string, dec
 	if strings.TrimSpace(string(out)) != "" {
 		verb = "ALTER"
 	}
-	if err := p.execSQL(container, "postgres", fmt.Sprintf("%s USER %s WITH LOGIN PASSWORD %s;",
+	if err := p.execSQL(config.DBPostgres, container, "postgres", fmt.Sprintf("%s USER %s WITH LOGIN PASSWORD %s;",
 		verb, escID(decl.User), escLit(password))); err != nil {
 		return fmt.Errorf("creating user %s: %w", decl.User, err)
 	}
@@ -316,9 +383,12 @@ func (p *Provisioner) provisionPostgres(ctx context.Context, svcName string, dec
 }
 
 func (p *Provisioner) deprovisionPostgres(ctx context.Context, decl config.ServiceDBDecl) error {
-	container := p.containerName(config.DBPostgres)
+	container, err := p.Container(config.DBPostgres)
+	if err != nil {
+		return err
+	}
 	sql := fmt.Sprintf(`DROP USER IF EXISTS %s;`, escID(decl.User))
-	return p.execSQL(container, "postgres", sql)
+	return p.execSQL(config.DBPostgres, container, "postgres", sql)
 }
 
 // mariaAnyHost is MariaDB's "connect from anywhere" host pattern. Provision and
@@ -330,7 +400,10 @@ func (p *Provisioner) deprovisionPostgres(ctx context.Context, decl config.Servi
 const mariaAnyHost = "%"
 
 func (p *Provisioner) provisionMariaDB(ctx context.Context, svcName string, decl config.ServiceDBDecl, password string) error {
-	container := p.containerName(config.DBMariaDB)
+	container, err := p.Container(config.DBMariaDB)
+	if err != nil {
+		return err
+	}
 	db := escMariaID(decl.Database)
 	account := escMariaLit(decl.User) + "@" + escMariaLit(mariaAnyHost)
 	pw := escMariaLit(password)
@@ -342,13 +415,16 @@ func (p *Provisioner) provisionMariaDB(ctx context.Context, svcName string, decl
 		"GRANT ALL PRIVILEGES ON %s.* TO %s; "+
 		"FLUSH PRIVILEGES;",
 		db, account, pw, account, pw, db, account)
-	return p.execSQL(container, "root", sql)
+	return p.execSQL(config.DBMariaDB, container, "root", sql)
 }
 
 func (p *Provisioner) deprovisionMariaDB(ctx context.Context, decl config.ServiceDBDecl) error {
-	container := p.containerName(config.DBMariaDB)
+	container, err := p.Container(config.DBMariaDB)
+	if err != nil {
+		return err
+	}
 	sql := fmt.Sprintf("DROP USER IF EXISTS %s@%s;", escMariaLit(decl.User), escMariaLit(mariaAnyHost))
-	return p.execSQL(container, "root", sql)
+	return p.execSQL(config.DBMariaDB, container, "root", sql)
 }
 
 // escLit renders a value as a single-quoted SQL string literal, doubling any

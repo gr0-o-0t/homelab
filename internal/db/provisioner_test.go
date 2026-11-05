@@ -2,11 +2,9 @@ package db
 
 import (
 	"context"
-	"errors"
 	"io"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/groot/homelab/internal/config"
 )
@@ -146,25 +144,6 @@ func TestEscID(t *testing.T) {
 	}
 }
 
-func TestContainerName(t *testing.T) {
-	tests := []struct {
-		dbType config.DBType
-		want   string
-	}{
-		{config.DBPostgres, "homelab-postgres"},
-		{config.DBMariaDB, "homelab-mariadb"},
-		{config.DBRedis, "homelab-redis"},
-		{"unknown", ""},
-	}
-	for _, tt := range tests {
-		p := &Provisioner{}
-		got := p.containerName(tt.dbType)
-		if got != tt.want {
-			t.Errorf("containerName(%q) = %q, want %q", tt.dbType, got, tt.want)
-		}
-	}
-}
-
 func TestNew(t *testing.T) {
 	p := New("/cfg", nil)
 	if p == nil {
@@ -235,63 +214,6 @@ func TestEnsurePassword(t *testing.T) {
 	})
 }
 
-func TestEnsureRunning(t *testing.T) {
-	ctx := context.Background()
-
-	t.Run("container running", func(t *testing.T) {
-		fc := &fakeCommander{
-			outputData: map[string][]byte{
-				"docker inspect --format={{.State.Status}} homelab-postgres": []byte("running"),
-			},
-		}
-		p := &Provisioner{RC: fc}
-		err := p.EnsureRunning(ctx, config.DBPostgres)
-		if err != nil {
-			t.Fatal(err)
-		}
-	})
-
-	t.Run("container not found", func(t *testing.T) {
-		fc := &fakeCommander{
-			outputErr: map[string]error{
-				"docker inspect --format={{.State.Status}} homelab-postgres": errFake("exit code 1"),
-			},
-		}
-		p := &Provisioner{RC: fc}
-		err := p.EnsureRunning(ctx, config.DBPostgres)
-		if err == nil {
-			t.Fatal("expected error for missing container")
-		}
-		if !strings.Contains(err.Error(), "homelab add") {
-			t.Errorf("error should mention installation, got: %v", err)
-		}
-	})
-
-	t.Run("container stopped", func(t *testing.T) {
-		fc := &fakeCommander{
-			outputData: map[string][]byte{
-				"docker inspect --format={{.State.Status}} homelab-postgres": []byte("exited"),
-			},
-		}
-		p := &Provisioner{RC: fc}
-		err := p.EnsureRunning(ctx, config.DBPostgres)
-		if err == nil {
-			t.Fatal("expected error for stopped container")
-		}
-		if !strings.Contains(err.Error(), "exited") || !strings.Contains(err.Error(), "homelab up") {
-			t.Errorf("error should mention status and service up, got: %v", err)
-		}
-	})
-
-	t.Run("unknown db type", func(t *testing.T) {
-		p := &Provisioner{RC: &fakeCommander{}}
-		err := p.EnsureRunning(ctx, config.DBType("foobar"))
-		if err == nil {
-			t.Fatal("expected error for unknown db type")
-		}
-	})
-}
-
 func TestProvision(t *testing.T) {
 	ctx := context.Background()
 	decl := config.ServiceDBDecl{
@@ -309,7 +231,7 @@ func TestProvision(t *testing.T) {
 			},
 		}
 		sm := &fakeSM{store: make(map[string]string)}
-		p := &Provisioner{RC: fc, SM: sm}
+		p := &Provisioner{ContainerFor: fixedNames, RC: fc, SM: sm}
 
 		if err := p.Provision(ctx, config.DBPostgres, "mysvc", decl); err != nil {
 			t.Fatal(err)
@@ -352,7 +274,7 @@ func TestProvision(t *testing.T) {
 	// The role has to exist before CREATE DATABASE can name it as OWNER.
 	t.Run("postgres creates the role before the database", func(t *testing.T) {
 		fc := &fakeCommander{}
-		p := &Provisioner{RC: fc, SM: &fakeSM{store: make(map[string]string)}}
+		p := &Provisioner{ContainerFor: fixedNames, RC: fc, SM: &fakeSM{store: make(map[string]string)}}
 		if err := p.Provision(ctx, config.DBPostgres, "mysvc", decl); err != nil {
 			t.Fatal(err)
 		}
@@ -383,7 +305,7 @@ func TestProvision(t *testing.T) {
 				"docker exec homelab-postgres psql -U postgres -d postgres -t -A -c SELECT 1 FROM pg_database WHERE datname='testdb'": []byte("1"),
 			},
 		}
-		p := &Provisioner{RC: fc, SM: &fakeSM{store: make(map[string]string)}}
+		p := &Provisioner{ContainerFor: fixedNames, RC: fc, SM: &fakeSM{store: make(map[string]string)}}
 		if err := p.Provision(ctx, config.DBPostgres, "mysvc", decl); err != nil {
 			t.Fatal(err)
 		}
@@ -404,7 +326,7 @@ func TestProvision(t *testing.T) {
 	// for every Postgres-backed service. The role must be looked up first.
 	t.Run("postgres never emits CREATE USER IF NOT EXISTS", func(t *testing.T) {
 		fc := &fakeCommander{}
-		p := &Provisioner{RC: fc, SM: &fakeSM{store: make(map[string]string)}}
+		p := &Provisioner{ContainerFor: fixedNames, RC: fc, SM: &fakeSM{store: make(map[string]string)}}
 
 		if err := p.Provision(ctx, config.DBPostgres, "mysvc", decl); err != nil {
 			t.Fatal(err)
@@ -423,7 +345,7 @@ func TestProvision(t *testing.T) {
 				"docker exec homelab-postgres psql -U postgres -d postgres -t -A -c SELECT 1 FROM pg_roles WHERE rolname='testuser'": []byte("1"),
 			},
 		}
-		p := &Provisioner{RC: fc, SM: &fakeSM{store: make(map[string]string)}}
+		p := &Provisioner{ContainerFor: fixedNames, RC: fc, SM: &fakeSM{store: make(map[string]string)}}
 
 		if err := p.Provision(ctx, config.DBPostgres, "mysvc", decl); err != nil {
 			t.Fatal(err)
@@ -451,13 +373,13 @@ func TestProvision(t *testing.T) {
 	// wildcard differently from the CREATE silently leaves the user behind.
 	t.Run("mariadb create and drop agree on the wildcard host", func(t *testing.T) {
 		fcCreate := &fakeCommander{}
-		pc := &Provisioner{RC: fcCreate, SM: &fakeSM{store: make(map[string]string)}}
+		pc := &Provisioner{ContainerFor: fixedNames, RC: fcCreate, SM: &fakeSM{store: make(map[string]string)}}
 		if err := pc.Provision(ctx, config.DBMariaDB, "mysvc", decl); err != nil {
 			t.Fatal(err)
 		}
 
 		fcDrop := &fakeCommander{}
-		pd := &Provisioner{RC: fcDrop, SM: &fakeSM{store: make(map[string]string)}}
+		pd := &Provisioner{ContainerFor: fixedNames, RC: fcDrop, SM: &fakeSM{store: make(map[string]string)}}
 		if err := pd.Deprovision(ctx, config.DBMariaDB, "mysvc", decl); err != nil {
 			t.Fatal(err)
 		}
@@ -494,7 +416,7 @@ func TestProvision(t *testing.T) {
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				fc := &fakeCommander{}
-				p := &Provisioner{RC: fc, SM: &fakeSM{store: make(map[string]string)}}
+				p := &Provisioner{ContainerFor: fixedNames, RC: fc, SM: &fakeSM{store: make(map[string]string)}}
 
 				su := decl
 				su.Superuser = tc.superuser
@@ -522,7 +444,7 @@ func TestProvision(t *testing.T) {
 			},
 		}
 		sm := &fakeSM{store: make(map[string]string)}
-		p := &Provisioner{RC: fc, SM: sm}
+		p := &Provisioner{ContainerFor: fixedNames, RC: fc, SM: sm}
 
 		if err := p.Provision(ctx, config.DBPostgres, "mysvc", decl); err != nil {
 			t.Fatal(err)
@@ -539,7 +461,7 @@ func TestProvision(t *testing.T) {
 	t.Run("mariadb provisions DB and user", func(t *testing.T) {
 		fc := &fakeCommander{}
 		sm := &fakeSM{store: make(map[string]string)}
-		p := &Provisioner{RC: fc, SM: sm}
+		p := &Provisioner{ContainerFor: fixedNames, RC: fc, SM: sm}
 
 		if err := p.Provision(ctx, config.DBMariaDB, "mysvc", decl); err != nil {
 			t.Fatal(err)
@@ -563,7 +485,7 @@ func TestProvision(t *testing.T) {
 		for _, dbType := range []config.DBType{config.DBPostgres, config.DBMariaDB} {
 			fc := &fakeCommander{}
 			sm := &fakeSM{store: map[string]string{config.DBPasswordKey("mysvc"): "s3cretPW"}}
-			p := &Provisioner{RC: fc, SM: sm}
+			p := &Provisioner{ContainerFor: fixedNames, RC: fc, SM: sm}
 			if err := p.Provision(ctx, dbType, "mysvc", decl); err != nil {
 				t.Fatal(err)
 			}
@@ -586,7 +508,7 @@ func TestProvision(t *testing.T) {
 			"docker exec homelab-postgres psql -U postgres -d postgres -t -A -c SELECT 1 FROM pg_database WHERE datname='testdb'",
 		} {
 			fc := &fakeCommander{outputErr: map[string]error{probe: errFake("connection refused")}}
-			p := &Provisioner{RC: fc, SM: &fakeSM{store: make(map[string]string)}}
+			p := &Provisioner{ContainerFor: fixedNames, RC: fc, SM: &fakeSM{store: make(map[string]string)}}
 			if err := p.Provision(ctx, config.DBPostgres, "mysvc", decl); err == nil {
 				t.Fatalf("expected error when probe fails: %s", probe)
 			}
@@ -603,7 +525,7 @@ func TestProvision(t *testing.T) {
 	// the ALTER is what makes `homelab setup` re-sync it; names must be escaped.
 	t.Run("mariadb re-syncs password and escapes names", func(t *testing.T) {
 		fc := &fakeCommander{}
-		p := &Provisioner{RC: fc, SM: &fakeSM{store: map[string]string{config.DBPasswordKey("mysvc"): "pw"}}}
+		p := &Provisioner{ContainerFor: fixedNames, RC: fc, SM: &fakeSM{store: map[string]string{config.DBPasswordKey("mysvc"): "pw"}}}
 		evil := config.ServiceDBDecl{Database: "a`b", User: `o'k\`}
 		if err := p.Provision(ctx, config.DBMariaDB, "mysvc", evil); err != nil {
 			t.Fatal(err)
@@ -621,7 +543,7 @@ func TestProvision(t *testing.T) {
 	})
 
 	t.Run("unsupported db type returns error", func(t *testing.T) {
-		p := &Provisioner{RC: &fakeCommander{}}
+		p := &Provisioner{ContainerFor: fixedNames, RC: &fakeCommander{}}
 		err := p.Provision(ctx, config.DBType("mssql"), "mysvc", decl)
 		if err == nil {
 			t.Fatal("expected error for unsupported db type")
@@ -632,63 +554,6 @@ func TestProvision(t *testing.T) {
 // `docker compose up -d` returns before Postgres accepts connections, so
 // auto-started dependencies must be waited on or the dependent service comes up
 // against a database that is not listening yet.
-func TestWaitHealthy(t *testing.T) {
-	ctx := context.Background()
-	const inspectKey = "docker inspect --format={{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}} homelab-postgres"
-
-	t.Run("returns once healthy", func(t *testing.T) {
-		fc := &fakeCommander{outputData: map[string][]byte{inspectKey: []byte("healthy\n")}}
-		p := &Provisioner{RC: fc, PollInterval: time.Millisecond}
-
-		if err := p.WaitHealthy(ctx, config.DBPostgres, time.Second); err != nil {
-			t.Fatal(err)
-		}
-	})
-
-	// Containers without a healthcheck report no health state; "running" is then
-	// the only signal available and must be accepted rather than timing out.
-	t.Run("accepts running when no healthcheck is defined", func(t *testing.T) {
-		fc := &fakeCommander{outputData: map[string][]byte{inspectKey: []byte("running\n")}}
-		p := &Provisioner{RC: fc, PollInterval: time.Millisecond}
-
-		if err := p.WaitHealthy(ctx, config.DBPostgres, time.Second); err != nil {
-			t.Fatal(err)
-		}
-	})
-
-	t.Run("times out with actionable guidance", func(t *testing.T) {
-		fc := &fakeCommander{outputData: map[string][]byte{inspectKey: []byte("starting\n")}}
-		p := &Provisioner{RC: fc, PollInterval: time.Millisecond}
-
-		err := p.WaitHealthy(ctx, config.DBPostgres, 5*time.Millisecond)
-		if err == nil {
-			t.Fatal("expected a timeout")
-		}
-		for _, want := range []string{"did not become healthy", "starting", "homelab logs postgres", "homelab setup postgres"} {
-			if !strings.Contains(err.Error(), want) {
-				t.Errorf("error should mention %q, got: %v", want, err)
-			}
-		}
-	})
-
-	t.Run("honours context cancellation", func(t *testing.T) {
-		fc := &fakeCommander{outputData: map[string][]byte{inspectKey: []byte("starting\n")}}
-		p := &Provisioner{RC: fc, PollInterval: time.Hour}
-
-		cctx, cancel := context.WithCancel(context.Background())
-		cancel()
-		if err := p.WaitHealthy(cctx, config.DBPostgres, time.Hour); !errors.Is(err, context.Canceled) {
-			t.Errorf("expected context.Canceled, got %v", err)
-		}
-	})
-
-	t.Run("rejects unknown db type", func(t *testing.T) {
-		p := &Provisioner{RC: &fakeCommander{}, PollInterval: time.Millisecond}
-		if err := p.WaitHealthy(ctx, config.DBType("mongo"), time.Second); err == nil {
-			t.Fatal("expected an error for an unsupported engine")
-		}
-	})
-}
 
 func TestDeprovision(t *testing.T) {
 	ctx := context.Background()
@@ -699,7 +564,7 @@ func TestDeprovision(t *testing.T) {
 
 	t.Run("postgres drops user", func(t *testing.T) {
 		fc := &fakeCommander{}
-		p := &Provisioner{RC: fc}
+		p := &Provisioner{ContainerFor: fixedNames, RC: fc}
 		if err := p.Deprovision(ctx, config.DBPostgres, "mysvc", decl); err != nil {
 			t.Fatal(err)
 		}
@@ -717,7 +582,7 @@ func TestDeprovision(t *testing.T) {
 
 	t.Run("mariadb drops user", func(t *testing.T) {
 		fc := &fakeCommander{}
-		p := &Provisioner{RC: fc}
+		p := &Provisioner{ContainerFor: fixedNames, RC: fc}
 		if err := p.Deprovision(ctx, config.DBMariaDB, "mysvc", decl); err != nil {
 			t.Fatal(err)
 		}
