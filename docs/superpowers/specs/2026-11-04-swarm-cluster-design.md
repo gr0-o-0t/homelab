@@ -367,4 +367,20 @@ across stacks, so two stacks each with a `postgres` service on the shared
 overlay would collide; keep explicit `homelab-*` aliases and avoid relying on
 short names.
 
-**S3 - Swarm over tailnet: pending (run with owner).**
+**S3 - Swarm over tailnet: YES, without overlay encryption.** minis
+`swarm init --advertise-addr/--data-path-addr 100.126.67.64`, laptop joined
+with its tailnet IP; nginx pinned to the laptop answered a container on minis
+(HTTP 200). After `systemctl suspend` on the laptop, gossip marked it
+`NodeFailed → NodeActive` on wake and it rejoined with no manual step; traffic
+resumed. Two caveats:
+
+- `--opt encrypted` overlays fail on minis: Docker's mangle rule
+  (`-m owner … -m bpf`) is rejected by iptables v1.8.13 (nf_tables) with
+  "CHAIN_ADD failed (File exists)". Overlays are therefore unencrypted; the
+  data path is encrypted by Tailscale's WireGuard because advertise and
+  data-path addresses are tailnet IPs. Goal 7 holds as long as no node
+  advertises a non-tailnet address, which `init`/`join` enforce.
+- memberlist repeatedly logs "Suspect … no acks received" for the laptop
+  (UDP 7946 probes lost — the laptop runs ufw), recovering over TCP. `join`
+  and `doctor` should check that the host firewall allows 7946/tcp+udp and
+  4789/udp on `tailscale0` (and 2377/tcp on the manager).

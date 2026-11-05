@@ -16,8 +16,8 @@
 - One container per PC: the `homelab` agent; hosts need only Docker Engine (rootful) and their existing Tailscale.
 - Secrets never in plain text on disk, in a stack/service spec, or in env visible via `docker service inspect`. Leader secrets: AES-256-GCM vault in the agent volume; key file `/var/lib/homelab/vault.key`, mode `0400`, root-owned. No unlock prompt; Swarm autolock off.
 - Nothing permanent on laptop/desktop: data volumes, host bind paths, the docker socket and shared DB providers pin to `node.labels.homelab.role == core`.
-- Overlay network `home-services`: driver `overlay`, `--attachable`, `encrypted`, MTU `1230` (VXLAN inside WireGuard).
-- Swarm `--advertise-addr` / `--data-path-addr` = the host's tailnet IPv4 on every node.
+- Overlay network `home-services`: driver `overlay`, `--attachable`, **not** `encrypted` (Docker's IPsec rule fails on minis' iptables-nft; spike S3), MTU `1230` (VXLAN inside WireGuard). Encryption between machines comes from the data path riding Tailscale: advertise and data-path addresses must be tailnet IPs (100.64.0.0/10).
+- Swarm `--advertise-addr` / `--data-path-addr` = the host's tailnet IPv4 on every node; `init`/`join` refuse an address outside 100.64.0.0/10.
 - Raw listen ports are cluster-unique per protocol; reserved: tcp 80, 443, 8081, 2019 (carried over from `internal/routing/routing.go`).
 - Day-one layers: `ts`, `cf`. tor/i2p/ygg are disabled in the registry until a later plan; `enable --tor|--i2p|--ygg` fails with "not available in cluster mode yet".
 - Tests never reach a real Docker daemon or tailnet: every new package that touches Docker takes an interface and has fakes; packages with a `TestMain` keep the `DOCKER_HOST` guard.
@@ -142,7 +142,7 @@ Swarm has no soft affinity (`spread` balances, it does not prefer), so "prefer w
 - Produces: `type Stack struct{ Name string; Services []swarm.ServiceSpec; Volumes []string /* external named volumes to ensure */; Configs []FileConfig }`, `type FileConfig struct{ Service, Target, Source string /* path under the service dir */; Mode os.FileMode }`, and `func Translate(svcDir string, env map[string]string, cfg *config.ServiceConfig, dbProvider bool) (Stack, error)`:
   - load `docker-compose.yml` with compose-go, interpolating `env`;
   - service spec name `<svc>_<compose service>`; labels `com.docker.stack.namespace=<svc>`, `homelab.service=<svc>`;
-  - networks: every service attaches to `home-services` with aliases `[<compose key>, <container_name if set>]`; compose networks marked `internal: true` become per-stack overlay `<svc>_internal` (`internal`, encrypted, MTU 1230);
+  - networks: every service attaches to `home-services` with aliases `[<compose key>, <container_name if set>]`; compose networks marked `internal: true` become per-stack overlay `<svc>_internal` (`internal`, MTU 1230, not encrypted — see Global Constraints);
   - named volumes → `mount.TypeVolume` with source = compose `name:` if set (keeps `gitea_data` etc.), else `<svc>_<key>`;
   - bind mounts of files/dirs under the service dir → `FileConfig` entries (Task 16 turns them into Swarm configs); bind mounts outside it (`/mnt/media`, `/etc/localtime`, docker.sock) stay binds;
   - `restart:` → `RestartPolicy` (`always|unless-stopped` → any, `on-failure` → on-failure, `no` → none); `healthcheck`, `user`, `command`, `entrypoint`, `cap_add`, `labels`, `ports` (ignored: exposure is the edge's job), `depends_on` (ignored);
@@ -190,7 +190,7 @@ Swarm has no soft affinity (`spread` balances, it does not prefer), so "prefer w
 
 - `Up` labels each spec `homelab.role=<Role>` and sets `Constraints(role, anyWorkerReady)` from `NodeList`.
 
-- [ ] **Step 1: Failing tests** against `swarmtest.Fake`: `TestDeploy_UpCreatesThenUpdates`, `TestDeploy_DownScalesToZeroKeepsVolumes`, `TestDeploy_EnsureNetworkValues` (encrypted, attachable, mtu 1230), `TestDeploy_StatelessOnMinisWhenNoWorker` and `TestDeploy_StatelessConstrainedToWorkerWhenReady`, `TestDeploy_StaleEnvSecretRemoved`, `TestDeploy_RemoveKeepsVolumes`.
+- [ ] **Step 1: Failing tests** against `swarmtest.Fake`: `TestDeploy_UpCreatesThenUpdates`, `TestDeploy_DownScalesToZeroKeepsVolumes`, `TestDeploy_EnsureNetworkValues` (not encrypted, attachable, mtu 1230), `TestDeploy_StatelessOnMinisWhenNoWorker` and `TestDeploy_StatelessConstrainedToWorkerWhenReady`, `TestDeploy_StaleEnvSecretRemoved`, `TestDeploy_RemoveKeepsVolumes`.
 - [ ] **Step 2–4:** `go test ./internal/swarm/` FAIL → implement → PASS.
 - [ ] **Step 5:** switch the cmd files to `Deployer`; `go test ./cmd/...` PASS (update cmd tests that asserted compose argv to assert Fake calls).
 - [ ] **Step 6: Commit** `feat(swarm): Run the lifecycle verbs on Swarm`.
