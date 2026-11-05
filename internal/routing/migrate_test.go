@@ -250,3 +250,38 @@ func TestMigrate_KeepsUnservedLayers(t *testing.T) {
 	assert.Empty(t, pending)
 	assert.False(t, routing.HasLegacy(root, reg, "onion"))
 }
+
+// A run that wrote exposure.yaml but could not render keeps the legacy files
+// (the only routing the service has), and the next run resumes from the state
+// it wrote. The render is made to fail by putting a file where caddy/sites
+// must be a directory.
+func TestMigrate_FailureKeepsLegacyAndResumes(t *testing.T) {
+	root := t.TempDir()
+	reg := layers.Legacy(root, nil, nil)
+	ts, _ := reg.Get("ts")
+	writeSvc(t, root, "app", map[string]string{"config.yaml": "ports:\n  - 3000\n"})
+	files := legacy(t, root, ts, "app", "", nil)
+	require.Len(t, files, 1)
+	sitesDir := configgen.SitesDir(root)
+	writeFile(t, sitesDir, "in the way\n")
+
+	_, err := routing.Migrate(root, reg)
+	require.ErrorContains(t, err, "app: rendering")
+	assert.FileExists(t, files[0], "nothing is removed before the new file exists")
+	st, err := exposure.Load(root, "app")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"ts"}, st.Layers, "the inferred state is kept for the next run")
+	pending, err := routing.Pending(root, reg)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"app"}, pending, "still pending: its legacy files are still its routing")
+
+	require.NoError(t, os.Remove(sitesDir))
+	done, err := routing.Migrate(root, reg)
+	require.NoError(t, err)
+	require.Len(t, done, 1)
+	assert.NoFileExists(t, files[0])
+	assert.Contains(t, read(t, configgen.SitesFile(root, "app")), "app.{$HOME_SUBDOMAIN}.{$DOMAIN} {")
+	pending, err = routing.Pending(root, reg)
+	require.NoError(t, err)
+	assert.Empty(t, pending)
+}
