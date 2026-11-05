@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -730,13 +731,33 @@ func ServiceConfigFile(configDir, svcName string) string {
 // everything that *did* resolve, so callers can choose to proceed with a
 // partial result and surface the error as a warning rather than aborting.
 func BuildEnv(rootConfigFile, configDir, svcName string, sm *secrets.Manager) (map[string]string, error) {
+	env, _, err := BuildEnvWithSecrets(rootConfigFile, configDir, svcName, sm)
+	return env, err
+}
+
+// BuildEnvWithSecrets is BuildEnv that also returns, sorted, the env keys
+// whose value came from the secrets manager or embeds such a value (a
+// database password, a DSN carrying it, S3 keys). The Swarm translator uses
+// their values to refuse a service spec that would show a secret.
+func BuildEnvWithSecrets(rootConfigFile, configDir, svcName string, sm *secrets.Manager) (map[string]string, []string, error) {
 	env := make(map[string]string)
+	secret := map[string]bool{}
 	var errs []error
+	done := func() (map[string]string, []string, error) {
+		var keys []string
+		for k := range secret {
+			if _, ok := env[k]; ok {
+				keys = append(keys, k)
+			}
+		}
+		sort.Strings(keys)
+		return env, keys, errors.Join(errs...)
+	}
 
 	// 1. Root vars from config.yaml
 	rootCfg, err := Load(rootConfigFile)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if rootCfg != nil {
 		for k, v := range rootCfg.Vars {
@@ -756,23 +777,25 @@ func BuildEnv(rootConfigFile, configDir, svcName string, sm *secrets.Manager) (m
 			}
 			if val != "" {
 				env[k] = val
+				secret[k] = true
 			}
 		}
 	}
 
 	if svcName == "" {
-		return env, errors.Join(errs...)
+		return done()
 	}
 
 	// 3. Service vars (override root)
 	svcCfg, err := Load(ServiceConfigFile(configDir, svcName))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if svcCfg != nil {
 		for k, v := range svcCfg.Vars {
 			if v.Value != "" {
 				env[k] = v.Value
+				delete(secret, k)
 			}
 		}
 
@@ -786,6 +809,7 @@ func BuildEnv(rootConfigFile, configDir, svcName string, sm *secrets.Manager) (m
 				}
 				if val != "" {
 					env[k] = val
+					secret[k] = true
 				}
 			}
 		}
@@ -807,13 +831,13 @@ func BuildEnv(rootConfigFile, configDir, svcName string, sm *secrets.Manager) (m
 		}
 		svcDB, err := svcCfg.ServiceDatabases()
 		if err == nil && svcDB != nil {
-			if err := injectDBEnv(env, configDir, rootDB, svcDB, svcName, sm); err != nil {
+			if err := injectDBEnv(env, secret, configDir, rootDB, svcDB, svcName, sm); err != nil {
 				errs = append(errs, err)
 			}
 		}
 	}
 
-	return env, errors.Join(errs...)
+	return done()
 }
 
 // defaultDSNTemplate returns the default DSN template for a DB type.
@@ -869,7 +893,7 @@ func buildDSN(tmpl string, v dsnValues) string {
 //
 // A redis `db` and `dsn` are only injected once the provisioner has allocated
 // the number: guessing 0 would silently share keys with every other service.
-func injectDBEnv(env map[string]string, configDir string, rootDB *DatabaseConfig, svcDB ServiceDatabases, svcName string, sm *secrets.Manager) error {
+func injectDBEnv(env map[string]string, secret map[string]bool, configDir string, rootDB *DatabaseConfig, svcDB ServiceDatabases, svcName string, sm *secrets.Manager) error {
 	get := func(ns, key string) (string, error) {
 		if sm == nil {
 			return "", nil
@@ -986,7 +1010,22 @@ func injectDBEnv(env map[string]string, configDir string, rootDB *DatabaseConfig
 					env[target] = buildDSN(logical, v)
 				}
 			}
+			markDBSecret(env, secret, logical, target)
 		}
 	}
 	return nil
+}
+
+// markDBSecret records whether target now holds a secret-sourced value:
+// passwords, S3 keys and DSNs (which embed the password) do.
+func markDBSecret(env map[string]string, secret map[string]bool, logical, target string) {
+	if _, set := env[target]; !set {
+		return
+	}
+	switch logical {
+	case "host", "port", "user", "database", "db", "endpoint", "region", "bucket":
+		delete(secret, target)
+	default: // password, access_key, secret_key, dsn, legacy DSN templates
+		secret[target] = true
+	}
 }
