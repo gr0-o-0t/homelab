@@ -43,6 +43,9 @@ type Cluster struct {
 	Secret     string `yaml:"-"`
 	LeaderAddr string `yaml:"leader_addr"`
 	TSHostname string `yaml:"ts_hostname"`
+	// Tailnet is the MagicDNS suffix (tail1234.ts.net): the leader reaches a
+	// worker's agent at homelab-<host>.<Tailnet>:7443.
+	Tailnet string `yaml:"tailnet,omitempty"`
 }
 
 // LoadCluster reads cluster.yaml and the secret from sm. With neither present

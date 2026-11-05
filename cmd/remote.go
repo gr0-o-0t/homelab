@@ -123,6 +123,12 @@ func forwardToAgent(argv []string) (int, error) {
 	if err != nil {
 		return 1, err
 	}
+	return runOnAgent(c, argv)
+}
+
+// runOnAgent runs argv on the agent c points at, over this process's
+// terminal.
+func runOnAgent(c *remote.Client, argv []string) (int, error) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 

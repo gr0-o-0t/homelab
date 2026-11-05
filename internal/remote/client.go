@@ -55,6 +55,34 @@ func ClientConfigPath() string {
 	return filepath.Join(config.DefaultConfigDir(), "client.yaml")
 }
 
+// SaveClientConfig writes client.yaml (0600) with endpoint, which must be an
+// https:// URL.
+func SaveClientConfig(endpoint string) error {
+	if u, err := url.Parse(endpoint); err != nil || u.Scheme != "https" || u.Host == "" {
+		return fmt.Errorf("agent endpoint %q must be an https:// URL", endpoint)
+	}
+	b, err := yaml.Marshal(ClientConfig{Endpoint: endpoint})
+	if err != nil {
+		return err
+	}
+	path := ClientConfigPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0o600)
+}
+
+// RemoveClientConfig deletes client.yaml; a missing one is not an error.
+func RemoveClientConfig() error {
+	if err := os.Remove(ClientConfigPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
 // KeyringSecret reads the cluster secret from the local keyring.
 func KeyringSecret() (string, error) {
 	sm, err := secrets.Open()

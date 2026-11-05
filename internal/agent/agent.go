@@ -471,11 +471,9 @@ func (a *Agent) runWorker(ctx context.Context, p agentstate.Paths, sm *secrets.M
 		a.logf("agent: reading TS_AUTHKEY: %v", err)
 	}
 	if authKey == "" {
-		// Stopgap until join stores it in the vault: an env var is visible
-		// to anyone who can `docker inspect` the agent container.
-		if authKey = os.Getenv("TS_AUTHKEY"); authKey != "" {
-			a.logf("agent: warning: TS_AUTHKEY taken from the environment; run homelab join to store it in the vault")
-		}
+		// `homelab join` seeds it; never from the environment, which anyone
+		// who can `docker inspect` the agent container could read.
+		a.logf("agent: no TS_AUTHKEY in the vault — run `homelab join` on this PC")
 	}
 	newNode := a.NewNode
 	if newNode == nil {

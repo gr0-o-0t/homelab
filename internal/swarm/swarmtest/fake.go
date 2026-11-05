@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"slices"
 	"sort"
 	"strconv"
@@ -21,7 +22,9 @@ import (
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/swarm"
+	"github.com/docker/docker/api/types/system"
 	"github.com/docker/docker/api/types/volume"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 
 	hswarm "github.com/groot/homelab/internal/swarm"
 )
@@ -51,6 +54,12 @@ type Fake struct {
 	configs    []swarm.Config
 	seq        int
 	failUpdate map[string]error // service ID → error for its next ServiceUpdate
+	info       system.Info
+	inits      []swarm.InitRequest
+	joins      []swarm.JoinRequest
+	execs      []*Exec
+	execExit   int
+	created    []*CreatedContainer
 }
 
 // New returns an empty Fake.
@@ -528,15 +537,48 @@ func (f *Fake) SwarmInit(_ context.Context, req swarm.InitRequest) (string, erro
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.rec("SwarmInit", req.AdvertiseAddr)
+	f.inits = append(f.inits, req)
 	f.swarm.ID = f.nextID("swarm")
-	return f.nextID("node"), nil
+	id := f.nextID("node")
+	// This engine is now the manager of a one-node swarm.
+	f.info.Swarm.NodeID = id
+	f.info.Swarm.LocalNodeState = swarm.LocalNodeStateActive
+	f.info.Swarm.ControlAvailable = true
+	f.nodes = append(f.nodes, swarm.Node{ID: id, Description: swarm.NodeDescription{Hostname: f.info.Name}})
+	return id, nil
 }
 
 func (f *Fake) SwarmJoin(_ context.Context, req swarm.JoinRequest) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.rec("SwarmJoin", req.AdvertiseAddr)
+	f.joins = append(f.joins, req)
+	if f.info.Swarm.NodeID == "" {
+		f.info.Swarm.NodeID = f.nextID("node")
+	}
+	f.info.Swarm.LocalNodeState = swarm.LocalNodeStateActive
 	return nil
+}
+
+// Inits returns the recorded SwarmInit requests.
+func (f *Fake) Inits() []swarm.InitRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]swarm.InitRequest(nil), f.inits...)
+}
+
+// Joins returns the recorded SwarmJoin requests.
+func (f *Fake) Joins() []swarm.JoinRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]swarm.JoinRequest(nil), f.joins...)
+}
+
+// SetSwarm sets what SwarmInspect returns (join tokens).
+func (f *Fake) SetSwarm(s swarm.Swarm) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.swarm = s
 }
 
 func (f *Fake) SwarmInspect(_ context.Context) (swarm.Swarm, error) {
@@ -580,18 +622,183 @@ func (f *Fake) ContainerList(_ context.Context, o container.ListOptions) ([]cont
 	return out, nil
 }
 
-func (f *Fake) ContainerExecCreate(_ context.Context, c string, _ container.ExecOptions) (container.ExecCreateResponse, error) {
+// Exec is one recorded ContainerExecCreate and the stdin written to it.
+type Exec struct {
+	Container string
+	Options   container.ExecOptions
+	Stdin     []byte
+}
+
+// CreatedContainer is one recorded ContainerCreate.
+type CreatedContainer struct {
+	Name       string
+	Config     container.Config
+	HostConfig container.HostConfig
+	Networking network.NetworkingConfig
+	Started    bool
+	Restarts   int
+}
+
+// SetInfo sets what Info returns.
+func (f *Fake) SetInfo(i system.Info) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.info = i
+}
+
+// Info returns the settable engine info.
+func (f *Fake) Info(context.Context) (system.Info, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rec("Info")
+	return f.info, nil
+}
+
+// Execs returns a copy of the recorded execs, stdin included.
+func (f *Fake) Execs() []Exec {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]Exec, len(f.execs))
+	for i, e := range f.execs {
+		out[i] = *e
+		out[i].Stdin = append([]byte(nil), e.Stdin...)
+	}
+	return out
+}
+
+// SetExecExitCode makes every exec report code from ContainerExecInspect.
+func (f *Fake) SetExecExitCode(code int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.execExit = code
+}
+
+// Created returns a copy of the containers created through ContainerCreate.
+func (f *Fake) Created() []CreatedContainer {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]CreatedContainer, len(f.created))
+	for i, c := range f.created {
+		out[i] = *c
+	}
+	return out
+}
+
+func (f *Fake) ContainerExecCreate(_ context.Context, c string, o container.ExecOptions) (container.ExecCreateResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.rec("ContainerExecCreate", c)
-	return container.ExecCreateResponse{}, nyi("ContainerExecCreate")
+	f.execs = append(f.execs, &Exec{Container: c, Options: o})
+	return container.ExecCreateResponse{ID: "exec" + strconv.Itoa(len(f.execs))}, nil
 }
 
+func (f *Fake) execByID(id string) (*Exec, bool) {
+	n, err := strconv.Atoi(strings.TrimPrefix(id, "exec"))
+	if err != nil || n < 1 || n > len(f.execs) {
+		return nil, false
+	}
+	return f.execs[n-1], true
+}
+
+// ContainerExecAttach returns a connection whose writes are recorded as the
+// exec's stdin; its output is empty.
 func (f *Fake) ContainerExecAttach(_ context.Context, id string, _ container.ExecAttachOptions) (types.HijackedResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.rec("ContainerExecAttach", id)
-	return types.HijackedResponse{}, nyi("ContainerExecAttach")
+	e, ok := f.execByID(id)
+	if !ok {
+		return types.HijackedResponse{}, fmt.Errorf("swarmtest: exec %q not found: %w", id, errdefs.ErrNotFound)
+	}
+	conn := &execConn{f: f, e: e}
+	return types.NewHijackedResponse(conn, "application/vnd.docker.raw-stream"), nil
+}
+
+func (f *Fake) ContainerExecInspect(_ context.Context, id string) (container.ExecInspect, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rec("ContainerExecInspect", id)
+	if _, ok := f.execByID(id); !ok {
+		return container.ExecInspect{}, fmt.Errorf("swarmtest: exec %q not found: %w", id, errdefs.ErrNotFound)
+	}
+	return container.ExecInspect{ExecID: id, ExitCode: f.execExit}, nil
+}
+
+// execConn records writes as stdin and reads as EOF. Only the methods a
+// HijackedResponse user calls are implemented.
+type execConn struct {
+	net.Conn
+	f *Fake
+	e *Exec
+}
+
+func (c *execConn) Read([]byte) (int, error) { return 0, io.EOF }
+func (c *execConn) Write(b []byte) (int, error) {
+	c.f.mu.Lock()
+	defer c.f.mu.Unlock()
+	c.e.Stdin = append(c.e.Stdin, b...)
+	return len(b), nil
+}
+func (c *execConn) Close() error      { return nil }
+func (c *execConn) CloseWrite() error { return nil }
+
+// ContainerCreate records the container; a second one of the same name
+// conflicts.
+func (f *Fake) ContainerCreate(_ context.Context, cfg *container.Config, hc *container.HostConfig,
+	nc *network.NetworkingConfig, _ *ocispec.Platform, name string) (container.CreateResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rec("ContainerCreate", name)
+	for _, c := range f.created {
+		if c.Name == name {
+			return container.CreateResponse{}, conflict("container", name)
+		}
+	}
+	c := &CreatedContainer{Name: name}
+	if cfg != nil {
+		c.Config = *cfg
+	}
+	if hc != nil {
+		c.HostConfig = *hc
+	}
+	if nc != nil {
+		c.Networking = *nc
+	}
+	f.created = append(f.created, c)
+	return container.CreateResponse{ID: name}, nil
+}
+
+func (f *Fake) createdByName(name string) (*CreatedContainer, error) {
+	for _, c := range f.created {
+		if c.Name == name {
+			return c, nil
+		}
+	}
+	return nil, fmt.Errorf("swarmtest: container %q not found: %w", name, errdefs.ErrNotFound)
+}
+
+func (f *Fake) ContainerStart(_ context.Context, name string, _ container.StartOptions) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rec("ContainerStart", name)
+	c, err := f.createdByName(name)
+	if err != nil {
+		return err
+	}
+	c.Started = true
+	return nil
+}
+
+func (f *Fake) ContainerRestart(_ context.Context, name string, _ container.StopOptions) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rec("ContainerRestart", name)
+	c, err := f.createdByName(name)
+	if err != nil {
+		return err
+	}
+	c.Restarts++
+	return nil
 }
 
 // FailServiceUpdateOnce makes the next ServiceUpdate of service id fail

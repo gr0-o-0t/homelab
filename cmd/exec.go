@@ -34,6 +34,9 @@ A TTY is allocated when stdin and stdout are terminals; -T disables it.
 		if err := validateService(root, name); err != nil {
 			return err
 		}
+		if handled, err := relayToTaskNode(name); handled {
+			return err
+		}
 
 		var composeExecArgs []string
 		// compose exec allocates a TTY by default. Turn it off when there is

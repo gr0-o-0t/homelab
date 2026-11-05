@@ -32,6 +32,15 @@ var parityExcludedFlags = map[string]string{
 	" --gui":     "opens the GUI; front ends are already running",
 	"logs --tui": "the CLI's own full-screen viewer; front ends render Stream output themselves",
 	"exec --tty": "auto-detected; service.shell runs in a real terminal, service.exec passes --no-tty",
+	// init/join/login run in a terminal (Interactive), which asks for what
+	// these flags would otherwise give.
+	"init --image":         "overrides the agent image for testing builds; the default matches this CLI's version",
+	"init --import":        "migrating an old single-host config dir is a one-off done from a shell (Task 17)",
+	"join --image":         "overrides the agent image for testing builds; the default matches this CLI's version",
+	"join --endpoint":      "the default (homelab.<tailnet>:7443) is the leader; a front end has no other to offer",
+	"join --secret-stdin":  "for scripts; the interactive action prompts for the secret",
+	"login --endpoint":     "the interactive action prompts for it, offering the tailnet default",
+	"login --secret-stdin": "for scripts; the interactive action prompts for the secret",
 }
 
 // cmdPath is a command's path without the leading "homelab".

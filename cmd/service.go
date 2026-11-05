@@ -194,6 +194,9 @@ func runServiceLogs(_ *cobra.Command, args []string) error {
 	if err := validateService(root, name); err != nil {
 		return err
 	}
+	if handled, err := relayToTaskNode(name); handled {
+		return err
+	}
 	if logsFlags.tui {
 		return runLogTUI(root, name)
 	}

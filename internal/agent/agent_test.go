@@ -557,9 +557,9 @@ func TestAgent_AnotherAgentIsFatal(t *testing.T) {
 	assert.NotContains(t, h.rec.Calls(), "serve")
 }
 
-// The worker's env fallback for TS_AUTHKEY works but says it should not be
-// used.
-func TestAgent_WorkerTSAuthKeyFromEnvWarns(t *testing.T) {
+// A worker takes TS_AUTHKEY from its vault only (join seeds it there): an
+// env var would be visible to anyone who can `docker inspect` the agent.
+func TestAgent_WorkerIgnoresTSAuthKeyEnv(t *testing.T) {
 	t.Setenv("TS_AUTHKEY", "tskey-env")
 	h := newHarness(t, RoleWorker)
 	var got string
@@ -569,8 +569,7 @@ func TestAgent_WorkerTSAuthKeyFromEnvWarns(t *testing.T) {
 	}
 	_, stop := h.start()
 	require.NoError(t, stop())
-	assert.Equal(t, "tskey-env", got)
-	assert.Contains(t, h.rec.Logs(), "TS_AUTHKEY taken from the environment; run homelab join to store it in the vault")
+	assert.Empty(t, got)
 	assert.NotContains(t, h.rec.Logs(), "tskey-env")
 }
 

@@ -10,7 +10,9 @@ import (
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/swarm"
+	"github.com/docker/docker/api/types/system"
 	"github.com/docker/docker/api/types/volume"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
 // API is the slice of the Docker Engine SDK that homelab uses to drive Swarm.
@@ -46,4 +48,13 @@ type API interface {
 	ContainerList(ctx context.Context, options container.ListOptions) ([]container.Summary, error)
 	ContainerExecCreate(ctx context.Context, container string, options container.ExecOptions) (container.ExecCreateResponse, error)
 	ContainerExecAttach(ctx context.Context, execID string, options container.ExecAttachOptions) (types.HijackedResponse, error)
+	ContainerExecInspect(ctx context.Context, execID string) (container.ExecInspect, error)
+	// The agent container itself (init/join) is a plain container, not a
+	// Swarm service: it must run before the node is in a swarm.
+	ContainerCreate(ctx context.Context, config *container.Config, hostConfig *container.HostConfig,
+		networkingConfig *network.NetworkingConfig, platform *ocispec.Platform, containerName string) (container.CreateResponse, error)
+	ContainerStart(ctx context.Context, container string, options container.StartOptions) error
+	ContainerRestart(ctx context.Context, container string, options container.StopOptions) error
+	// Info reports this engine's swarm membership (node ID, manager or not).
+	Info(ctx context.Context) (system.Info, error)
 }

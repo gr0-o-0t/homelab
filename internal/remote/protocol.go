@@ -13,13 +13,13 @@ const Path = "/v1/run"
 // too: it renders here, and the invocations its buttons exec are forwarded.
 var LocalOnly = map[string]bool{
 	"init": true, "join": true, "login": true, "logout": true, "version": true,
-	"completion": true, "agent": true, "envshim": true, "edit": true,
+	"completion": true, "agent": true, "agent-seed": true, "envshim": true, "edit": true,
 }
 
 // Internal commands are plumbing the agent runs itself, never for a client:
 // `session run` would start a second supervisor whose SIGTERM path stops
 // every service.
-var Internal = map[string]bool{"agent": true, "envshim": true, "session": true}
+var Internal = map[string]bool{"agent": true, "agent-seed": true, "envshim": true, "session": true}
 
 // Mutating commands (canonical top-level names) hold the server-wide lock
 // for their whole run, except the ReadOnly subcommands under them; every
@@ -28,7 +28,7 @@ var Mutating = map[string]bool{
 	"add": true, "setup": true, "up": true, "down": true, "start": true, "stop": true,
 	"restart": true, "pull": true, "update": true, "delete": true, "enable": true,
 	"disable": true, "reload": true, "backup": true, "restore": true, "prune": true,
-	"ext": true, "cf": true, "migrate": true, "new": true,
+	"ext": true, "cf": true, "migrate": true, "new": true, "cluster": true,
 }
 
 // ReadOnly are the canonical paths of observing subcommands under a
