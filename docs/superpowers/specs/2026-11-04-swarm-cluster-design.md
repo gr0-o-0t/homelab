@@ -305,3 +305,66 @@ Rollback: `docker swarm leave --force`, reinstall v0.4.3, `homelab up -a`.
 - Swarm over host tailnet IPs with the laptop roaming and sleeping (worker
   `Down` handling, overlay VXLAN over WireGuard MTU).
 - Images with no `*_FILE` support needing secrets in env.
+
+### Spike findings (2026-11-05)
+
+**S1 - Embedded edge: YES (localhost stand-in for tsnet).** Verified with
+`caddy/v2 v2.11.9` + `modules/standard`, `mholt/caddy-l4 v0.1.2`,
+`caddy-dns/cloudflare v0.2.4` (Go 1.26). A custom network registered with
+`caddy.RegisterNetwork` is honoured by BOTH the HTTP `bind` directive and
+caddy-l4 `listen` addresses; no fallback needed. An HTTP request through the
+site and a raw TCP echo through the layer4 server both worked. A real tsnet
+listener (`tsnet.Server.Listen`) replaces the `net.Listen` in the callback;
+caddy-tailscale itself was not needed or tested.
+
+```go
+caddy.RegisterNetwork("hl-ts", func(ctx context.Context, network, host, portRange string,
+	portOffset uint, cfg net.ListenConfig) (any, error) {
+	// host is whatever follows "hl-ts/" in bind/listen; portRange is the port
+	return net.Listen("tcp", net.JoinHostPort("127.0.0.1", portRange)) // tsnet: srv.Listen("tcp", ":"+portRange)
+})
+cfgJSON, warns, err := caddyconfig.GetAdapter("caddyfile").Adapt([]byte(cf), nil)
+err = caddy.Load(cfgJSON, true) // forceReload
+```
+
+```caddyfile
+{
+	auto_https off
+	admin off
+	layer4 {
+		hl-ts/x:18222 {
+			route { proxy 127.0.0.1:9999 }
+		}
+	}
+}
+http://:18080 {
+	bind hl-ts/x
+	reverse_proxy 127.0.0.1:8000
+}
+```
+
+Notes: the callback is invoked once per listen address (host=`x`,
+port=`18222` / `18080`). `caddy.Load` with an invalid config (unknown handler
+module) returns an error ("loading http app module: ... unknown module") and
+the previous config keeps serving (HTTP 200 afterwards). Imports needed:
+`caddyconfig/caddyfile`, `modules/standard`, caddy-l4, caddy-dns/cloudflare.
+The module graph is large (go mod tidy pulls cloud SDKs via caddy deps).
+
+**S2 - Swarm naming: YES.** Single-node swarm (`docker swarm init
+--advertise-addr 127.0.0.1` accepted), overlay created with
+`docker network create -d overlay --attachable --opt encrypted --opt
+com.docker.network.driver.mtu=1230`. Stack A `sa` service `postgres`
+(postgres:17-alpine) with `networks: {<net>: {aliases: [homelab-postgres]}}`;
+stack B `sb` service `client` (alpine). `nc -z <name> 5432` succeeded from
+both stack B's task and a plain `docker run --rm --network <net> alpine` for
+ALL of: `homelab-postgres` (alias), `postgres` (short service name),
+`sa_postgres` (stack-qualified service name), `tasks.sa_postgres`.
+Caveat: a local bridge network named `home-services` already exists on this
+machine (the current Compose stack); `docker network create` refuses the name,
+so the spike used `hlspike`. Migration must remove/rename the Compose bridge
+before creating the overlay `home-services`. Also: bare `postgres` resolves
+across stacks, so two stacks each with a `postgres` service on the shared
+overlay would collide; keep explicit `homelab-*` aliases and avoid relying on
+short names.
+
+**S3 - Swarm over tailnet: pending (run with owner).**
