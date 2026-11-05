@@ -22,12 +22,29 @@ var LocalOnly = map[string]bool{
 var Internal = map[string]bool{"agent": true, "envshim": true, "session": true}
 
 // Mutating commands (canonical top-level names) hold the server-wide lock
-// for their whole run; every other command runs without waiting on it.
+// for their whole run, except the ReadOnly subcommands under them; every
+// other command runs without waiting on it. See Locks.
 var Mutating = map[string]bool{
 	"add": true, "setup": true, "up": true, "down": true, "start": true, "stop": true,
 	"restart": true, "pull": true, "update": true, "delete": true, "enable": true,
 	"disable": true, "reload": true, "backup": true, "restore": true, "prune": true,
-	"ext": true, "cf": true, "migrate": true, "new": true, "session": true,
+	"ext": true, "cf": true, "migrate": true, "new": true,
+}
+
+// ReadOnly are the canonical paths of observing subcommands under a
+// Mutating command; their siblings (cf route add/rm, ext enable/disable/
+// start/stop) take the lock.
+var ReadOnly = map[string]bool{
+	"cf status": true, "cf logs": true,
+	"ext list": true, "ext status": true, "ext logs": true,
+}
+
+// Locks reports whether the canonical command path takes the lock.
+func Locks(path []string) bool {
+	if len(path) == 0 || ReadOnly[strings.Join(path, " ")] {
+		return false
+	}
+	return Mutating[path[0]]
 }
 
 // refusedFlags may not appear anywhere in a forwarded argv: the first two
@@ -82,36 +99,38 @@ func CommandName(argv []string) string {
 }
 
 // validate refuses a handshake before anything runs, and otherwise returns
-// the canonical top-level command name.
-func validate(h Handshake, agentVersion string, resolve Resolver) (string, int, error) {
+// the canonical command path (never empty).
+func validate(h Handshake, agentVersion string, resolve Resolver) ([]string, int, error) {
 	if majorMinor(h.Version) != majorMinor(agentVersion) {
-		return "", 2, fmt.Errorf("homelab CLI %s and agent %s differ — run `homelab upgrade`", h.Version, agentVersion)
+		return nil, 2, fmt.Errorf("homelab CLI %s and agent %s differ — run `homelab upgrade`", h.Version, agentVersion)
 	}
 	if len(h.Argv) == 0 {
-		return "", 2, fmt.Errorf("no command given")
+		return nil, 2, fmt.Errorf("no command given")
 	}
 	for _, a := range h.Argv {
 		for _, f := range refusedFlags {
 			if a == f || strings.HasPrefix(a, f+"=") {
-				return "", 2, fmt.Errorf("%s cannot be passed to the agent", f)
+				return nil, 2, fmt.Errorf("%s cannot be passed to the agent", f)
 			}
 		}
 	}
 	path, ok := resolve(h.Argv)
 	if !ok {
-		return "", 2, fmt.Errorf("unknown command %q", CommandName(h.Argv))
+		return nil, 2, fmt.Errorf("unknown command %q", CommandName(h.Argv))
 	}
 	if len(path) == 0 {
-		return "", 2, fmt.Errorf("the root command runs on the local machine, not the agent")
+		return nil, 2, fmt.Errorf("the root command runs on the local machine, not the agent")
 	}
 	name := path[0]
-	if LocalOnly[name] {
-		return "", 2, fmt.Errorf("`homelab %s` runs on the local machine, not the agent", name)
+	// help, completion and cobra's __complete* run on the client
+	// (cmd.shouldForward); nothing forwards them.
+	if LocalOnly[name] || name == "help" || name == "completion" || strings.HasPrefix(name, "__") {
+		return nil, 2, fmt.Errorf("`homelab %s` runs on the local machine, not the agent", name)
 	}
 	if Internal[name] {
-		return "", 2, fmt.Errorf("`homelab %s` is internal to the agent and cannot be run remotely", name)
+		return nil, 2, fmt.Errorf("`homelab %s` is internal to the agent and cannot be run remotely", name)
 	}
-	return name, 0, nil
+	return path, 0, nil
 }
 
 // majorMinor is "1.4" for "v1.4.2"; a version with fewer than two parts

@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/spf13/cobra"
@@ -21,6 +22,9 @@ import (
 // buttons exec this binary and so are forwarded one by one) and cobra's own
 // help/completion run here. Inside the agent (HOMELAB_AGENT=1) nothing is
 // ever forwarded.
+
+// resolveMu serialises ResolveCommand (cobra Find mutates flag sets).
+var resolveMu sync.Mutex
 
 // invokedArgs is the argv Execute was given, forwarded verbatim.
 var invokedArgs []string
@@ -74,7 +78,15 @@ func shouldForward(c *cobra.Command) bool {
 // ResolveCommand is the agent's remote.Resolver: the canonical command path
 // argv invokes through the cobra tree, aliases resolved (`rm` → delete).
 // ok is false for an unknown command; an empty path is the root command.
+//
+// Safe for concurrent use: the agent's runner calls it from every
+// connection, and cobra's Find writes pflag maps (it merges persistent flags
+// lazily, and re-adds flag.CommandLine on every call) — unguarded, two
+// requests at once can die of "concurrent map writes" and take the agent,
+// with Caddy and Tailscale, down.
 func ResolveCommand(argv []string) ([]string, bool) {
+	resolveMu.Lock()
+	defer resolveMu.Unlock()
 	c, _, err := rootCmd.Find(argv)
 	if err != nil || c == nil {
 		return nil, false

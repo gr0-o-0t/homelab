@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -25,6 +27,29 @@ func TestResolveCommand_CanonicalPathThroughAliases(t *testing.T) {
 		assert.Equal(t, tc.ok, ok, "%q", tc.argv)
 		assert.Equal(t, tc.path, path, "%q", tc.argv)
 	}
+}
+
+// The agent resolves from every connection goroutine at once; cobra's Find
+// writes flag maps. Run under -race. Paths are distinct per goroutine, and
+// include commands no earlier test walked.
+func TestResolveCommand_ConcurrentSafe(t *testing.T) {
+	var paths [][]string
+	walkCommands(rootCmd, func(c *cobra.Command) {
+		if c != rootCmd {
+			paths = append(paths, strings.Fields(cmdPath(c)))
+		}
+	})
+	var wg sync.WaitGroup
+	for _, p := range paths {
+		wg.Go(func() {
+			for range 3 {
+				got, ok := ResolveCommand(append(append([]string{"--no-color"}, p...), "x"))
+				assert.True(t, ok, "%q", p)
+				assert.NotEmpty(t, got, "%q", p)
+			}
+		})
+	}
+	wg.Wait()
 }
 
 // Cobra runs only the nearest persistent pre-run hook: one set on any

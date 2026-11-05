@@ -123,3 +123,94 @@ func TestRemote_CapsConcurrentSessions(t *testing.T) {
 		return err == nil && code == 3
 	}, 15*time.Second, 100*time.Millisecond)
 }
+
+func TestLocks_FollowTheCommandPath(t *testing.T) {
+	for path, want := range map[string]bool{
+		"up": true, "delete": true, "cf route add": true, "cf route rm": true,
+		"ext enable": true, "ext disable": true, "ext start": true, "ext stop": true,
+		"cf status": false, "cf logs": false, "ext list": false, "ext status": false, "ext logs": false,
+		"status": false, "logs": false, "session run": false,
+	} {
+		assert.Equal(t, want, Locks(strings.Fields(path)), path)
+	}
+}
+
+func TestRunner_ReadOnlySubcommandsSkipTheLock(t *testing.T) {
+	e := newTestServer(t, nil)
+	c := e.client(testSecret, "1.4.2")
+
+	// cf logs runs inside a running up.
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		code, _, _, err := run(t, c, RunOptions{Argv: []string{"up", "a", "1500"}})
+		assert.NoError(t, err)
+		assert.Equal(t, 0, code)
+	})
+	waitPid(t, e.stateDir, "a")
+	code, _, _, err := run(t, c, RunOptions{Argv: []string{"cf", "logs", "b", "50"}})
+	require.NoError(t, err)
+	require.Equal(t, 0, code)
+	wg.Wait()
+	as, ae := span(t, e.stateDir, "a")
+	bs, be := span(t, e.stateDir, "b")
+	assert.True(t, as < bs && be < ae, "cf logs waited on the lock: a=[%d,%d] b=[%d,%d]", as, ae, bs, be)
+
+	// cf route add takes it.
+	for _, argv := range [][]string{{"up", "c", "400"}, {"cf", "route", "add", "d", "400"}} {
+		wg.Go(func() {
+			code, _, _, err := run(t, c, RunOptions{Argv: argv})
+			assert.NoError(t, err)
+			assert.Equal(t, 0, code)
+		})
+	}
+	wg.Wait()
+	cs, ce := span(t, e.stateDir, "c")
+	ds, de := span(t, e.stateDir, "d")
+	assert.True(t, ce <= ds || de <= cs, "cf route add ran unlocked: c=[%d,%d] d=[%d,%d]", cs, ce, ds, de)
+}
+
+func TestRemote_RefusesClientOnlyCommands(t *testing.T) {
+	e := newTestServer(t, nil)
+	c := e.client(testSecret, "1.4.2")
+	for _, argv := range [][]string{{"help", "up"}, {"completion", "bash"}, {"__complete", "u"}} {
+		code, _, _, err := run(t, c, RunOptions{Argv: argv})
+		require.Error(t, err, "%q", argv)
+		assert.Equal(t, 2, code, "%q", argv)
+	}
+}
+
+// A child that never reads stdin fills the queue; a client that floods it
+// and then falls silent must still be dropped, its child killed and the
+// lock released, within a few ping intervals.
+func TestRemote_StalledStdinStillDropsSilentClient(t *testing.T) {
+	e := newTestServer(t, func(c *ServerConfig) { c.PingInterval = 100 * time.Millisecond })
+	tr := e.srv.Client().Transport.(*http.Transport)
+	d := websocket.Dialer{TLSClientConfig: tr.TLSClientConfig.Clone()}
+	url := "wss" + strings.TrimPrefix(e.srv.URL, "https") + Path
+	conn, _, err := d.Dial(url, http.Header{"Authorization": {"Bearer " + Token(testSecret)}})
+	require.NoError(t, err)
+	defer func() { _ = conn.Close() }()
+	require.NoError(t, conn.WriteJSON(Handshake{Argv: []string{"up", "stall", "600000"}, Version: "1.4.2"}))
+	pid := waitPid(t, e.stateDir, "stall")
+
+	flooded := make(chan struct{})
+	go func() { // well past the pipe buffer and the 16-frame queue; then silence
+		defer close(flooded)
+		chunk := bytes.Repeat([]byte("x"), 64<<10)
+		for range 40 {
+			if conn.WriteMessage(websocket.BinaryMessage, chunk) != nil {
+				return
+			}
+		}
+	}()
+
+	assert.Eventually(t, func() bool { return syscall.Kill(pid, 0) != nil }, 10*time.Second, 20*time.Millisecond,
+		"child of a silent client with a stalled stdin survived")
+	<-flooded
+
+	start := time.Now()
+	code, _, _, err := run(t, e.client(testSecret, "1.4.2"), RunOptions{Argv: []string{"up", "next", "10"}})
+	require.NoError(t, err)
+	assert.Equal(t, 0, code)
+	assert.Less(t, time.Since(start), 5*time.Second)
+}

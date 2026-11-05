@@ -59,9 +59,9 @@ func helperMain(args []string) {
 		_, _ = buf.ReadFrom(os.Stdin)
 		fmt.Print("got:" + buf.String())
 		os.Exit(0)
-	case "up", "rm": // up|rm <id> <sleep-ms>: records its interval in dir
-		id := args[1]
-		ms, _ := strconv.Atoi(args[2])
+	case "up", "rm", "cf": // up|rm|cf <sub…> <id> <sleep-ms>: records its interval in dir
+		id := args[len(args)-2]
+		ms, _ := strconv.Atoi(args[len(args)-1])
 		_ = os.WriteFile(filepath.Join(dir, id+".pid"), []byte(strconv.Itoa(os.Getpid())), 0o600)
 		start := time.Now().UnixNano()
 		time.Sleep(time.Duration(ms) * time.Millisecond)
@@ -108,8 +108,14 @@ func testResolve(argv []string) ([]string, bool) {
 	if name == "rm" {
 		name = "delete"
 	}
+	if name == "cf" { // cf logs|status <…>, cf route add|rm <…>
+		if len(argv) > 2 && argv[1] == "route" {
+			return []string{"cf", "route", argv[2]}, true
+		}
+		return []string{"cf", argv[1]}, true
+	}
 	switch name {
-	case "status", "ls", "cat", "up", "delete", "session", "agent", "envshim", "version", "login", "join":
+	case "help", "completion", "__complete", "status", "ls", "cat", "up", "delete", "session", "agent", "envshim", "version", "login", "join":
 		return []string{name}, true
 	}
 	return nil, false

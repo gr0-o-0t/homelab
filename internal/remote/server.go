@@ -229,14 +229,15 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		s.cfg.Logf("remote: bad handshake from %s: %q", r.RemoteAddr, err.Error())
 		return
 	}
-	name, code, err := validate(h, s.cfg.Version, s.cfg.Resolve)
+	path, code, err := validate(h, s.cfg.Version, s.cfg.Resolve)
 	if err != nil {
 		// Client-supplied strings are quoted: no forged log lines.
 		s.cfg.Logf("remote: refused %q from %s: %q", CommandName(h.Argv), r.RemoteAddr, err.Error())
 		ss.finish(code, err.Error())
 		return
 	}
-	// Only the command name: arguments can carry values (setup --set).
+	// Only the command path: arguments can carry values (setup --set).
+	name := strings.Join(path, " ")
 	s.cfg.Logf("remote: %s runs %q", r.RemoteAddr, name)
 
 	// A client silent for two ping intervals — no frame, no pong — is gone.
@@ -251,7 +252,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	go s.readLoop(ctx, conn, stdin, ch, cancel, alive)
 	go keepAlive(ctx, ss, s.cfg.PingInterval, cancel)
 
-	if Mutating[name] {
+	if Locks(path) {
 		select {
 		case s.lock <- struct{}{}:
 		default:
@@ -298,12 +299,20 @@ func (s *Server) readLoop(ctx context.Context, conn *websocket.Conn, stdin chan<
 		}
 		switch kind {
 		case websocket.BinaryMessage:
-			if open {
-				select {
-				case stdin <- b:
-				case <-ctx.Done():
-					return
-				}
+			if !open {
+				continue // stdin was closed: discarded
+			}
+			select {
+			case stdin <- b:
+			case <-ctx.Done():
+				return
+			case <-time.After(2 * s.cfg.PingInterval):
+				// The child is not reading its stdin. Waiting longer would
+				// stop this loop noticing a vanished client (deadlines and
+				// pongs are only seen while reading) and so hold the lock:
+				// end its stdin instead, and drop what follows.
+				close(stdin)
+				open = false
 			}
 		case websocket.TextMessage:
 			var c control
