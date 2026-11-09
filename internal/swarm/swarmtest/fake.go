@@ -63,6 +63,7 @@ type Fake struct {
 	leaves     int
 	copies     []Copy
 	restartErr error
+	copyLimit  int64
 }
 
 // New returns an empty Fake.
@@ -871,6 +872,12 @@ type Copy struct {
 
 // CopyToContainer records the tar stream; the container must exist.
 func (f *Fake) CopyToContainer(_ context.Context, name, dst string, content io.Reader, _ container.CopyToContainerOptions) error {
+	f.mu.Lock()
+	limit := f.copyLimit
+	f.mu.Unlock()
+	if limit > 0 {
+		content = io.LimitReader(content, limit) // a daemon that stops reading early
+	}
 	b, err := io.ReadAll(content)
 	if err != nil {
 		return err
@@ -936,4 +943,12 @@ func (f *Fake) FailServiceUpdateOnce(id string, err error) {
 		f.failUpdate = map[string]error{}
 	}
 	f.failUpdate[id] = err
+}
+
+// SetCopyReadLimit makes CopyToContainer read at most n bytes of the stream
+// and still return nil, like a daemon that stopped early (0: read it all).
+func (f *Fake) SetCopyReadLimit(n int64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.copyLimit = n
 }

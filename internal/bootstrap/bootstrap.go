@@ -199,8 +199,8 @@ func StartAgent(ctx context.Context, api swarm.API, img string, leader bool) err
 	cfg, hc, nc := AgentSpec(img, leader)
 	if _, err := api.ContainerCreate(ctx, cfg, hc, nc, nil, AgentContainer); err != nil {
 		if errdefs.IsConflict(err) {
-			return fmt.Errorf("a %s container already exists — remove it (`docker rm -f %s`) and retry: %w",
-				AgentContainer, AgentContainer, err)
+			return fmt.Errorf("a %s container already exists — remove it and its state (`docker rm -f %s && docker volume rm %s`; data volumes are untouched) and retry: %w",
+				AgentContainer, AgentContainer, StateVolume, err)
 		}
 		return fmt.Errorf("creating the %s container: %w", AgentContainer, err)
 	}
@@ -504,6 +504,9 @@ func (in *Init) Do(ctx context.Context) (err error) {
 	// Compose-era network must be idle, the old dir importable.
 	var imp *builtImport
 	if in.Import != "" {
+		if err := refuseLeftoverStateVolume(ctx, in.API); err != nil {
+			return err
+		}
 		if err := composeContainers(ctx, in.API, in.Import); err != nil {
 			return err
 		}
@@ -545,6 +548,14 @@ func (in *Init) Do(ctx context.Context) (err error) {
 	if err := (&swarm.Deployer{API: in.API}).EnsureNetwork(ctx); err != nil {
 		return err
 	}
+	// Whether StartAgent creates the state volume or reuses one: the import
+	// rollback only removes a volume this run created.
+	volumeExisted := false
+	if imp != nil {
+		if volumeExisted, err = stateVolumeExists(ctx, in.API); err != nil {
+			return err
+		}
+	}
 	if err := StartAgent(ctx, in.API, in.Image, true); err != nil {
 		return err
 	}
@@ -555,7 +566,7 @@ func (in *Init) Do(ctx context.Context) (err error) {
 	if imp != nil {
 		defer func() {
 			if err != nil && !restarted {
-				removeAgentAndState(context.WithoutCancel(ctx), in.API, in.Out)
+				removeAgentAndState(context.WithoutCancel(ctx), in.API, in.Out, !volumeExisted)
 			}
 		}()
 	}

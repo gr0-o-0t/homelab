@@ -13,13 +13,16 @@ import (
 	"testing"
 
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
+	"github.com/docker/docker/api/types/volume"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/groot/homelab/internal/agentstate"
 	"github.com/groot/homelab/internal/config"
 	"github.com/groot/homelab/internal/importer"
+	"github.com/groot/homelab/internal/swarm/swarmtest"
 )
 
 const (
@@ -273,5 +276,79 @@ func TestImport_FailureAfterRestartKeepsState(t *testing.T) {
 	for _, c := range h.fake.CallLog() {
 		assert.NotContains(t, c, "VolumeRemove")
 		assert.NotContains(t, c, "ContainerRemove")
+	}
+}
+
+// I-1: a state volume an earlier attempt left would be reused silently (vault
+// included) and could be deleted by the rollback: refused up front.
+func TestImport_RefusesLeftoverStateVolume(t *testing.T) {
+	in, h := newImportInit(t)
+	h.fake.SetVolumes(&volume.Volume{Name: StateVolume})
+	err := in.Do(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "a homelab-agent volume from an earlier attempt exists; if it holds nothing "+
+		"you need, remove it with `docker volume rm homelab-agent` (data volumes are untouched)")
+	assert.Empty(t, h.fake.Inits(), "no swarm call")
+	assert.Empty(t, h.fake.Created())
+	assert.Empty(t, h.prompts, "refused before any prompt")
+}
+
+// The rollback only removes a state volume this run created.
+func TestImport_RollbackKeepsPreexistingVolume(t *testing.T) {
+	f := swarmtest.New()
+	f.SetImage("img", image.InspectResponse{})
+	f.SetVolumes(&volume.Volume{Name: StateVolume})
+	require.NoError(t, StartAgent(context.Background(), f, "img", true))
+	var out bytes.Buffer
+	removeAgentAndState(context.Background(), f, &out, false)
+	log := f.CallLog()
+	assert.Contains(t, log, "ContainerRemove "+AgentContainer)
+	for _, c := range log {
+		assert.NotContains(t, c, "VolumeRemove")
+	}
+	assert.Contains(t, out.String(), "predates this run and is kept")
+
+	// A plain init over an existing volume never removes it on failure.
+	in, h := newInit(t, testIP)
+	h.fake.SetVolumes(&volume.Volume{Name: StateVolume})
+	h.fake.FailRestart(errors.New("restart failed"))
+	require.Error(t, in.Do(context.Background()))
+	for _, c := range h.fake.CallLog() {
+		assert.NotContains(t, c, "VolumeRemove")
+	}
+}
+
+// M-2: a copy that returns nil after reading only part of the stream is a
+// truncated tree: the import seed must not run on it.
+func TestImport_RefusesTruncatedCopy(t *testing.T) {
+	in, h := newImportInit(t)
+	h.fake.SetCopyReadLimit(512)
+	err := in.Do(context.Background())
+	require.ErrorContains(t, err, "incomplete")
+	for _, e := range h.fake.Execs() {
+		assert.NotContains(t, e.Options.Cmd, "--import", "agent-seed --import never sees a truncated tree")
+	}
+}
+
+// M-1: the import dir and the compose label may each be the symlinked
+// spelling of the other.
+func TestImport_ComposeContainersThroughSymlinks(t *testing.T) {
+	for _, dir := range []string{"import via link", "label via link"} {
+		t.Run(dir, func(t *testing.T) {
+			in, h := newImportInit(t)
+			link := filepath.Join(t.TempDir(), "link")
+			require.NoError(t, os.Symlink(in.Import, link))
+			wd := filepath.Join(in.Import, "services", "gitea")
+			if dir == "import via link" {
+				in.Import = link
+			} else {
+				wd = filepath.Join(link, "services", "gitea")
+			}
+			h.fake.SetContainers([]container.Summary{{ID: "g", Names: []string{"/gitea"}, State: "exited",
+				Labels: map[string]string{composeWorkingDir: wd}}})
+			err := in.Do(context.Background())
+			require.ErrorContains(t, err, "gitea")
+			assert.Empty(t, h.fake.Inits())
+		})
 	}
 }

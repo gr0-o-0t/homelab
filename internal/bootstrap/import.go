@@ -13,6 +13,7 @@ import (
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/network"
+	"github.com/docker/docker/api/types/volume"
 
 	"github.com/groot/homelab/internal/agentstate"
 	"github.com/groot/homelab/internal/importer"
@@ -65,11 +66,15 @@ func (b *builtImport) install(ctx context.Context, api swarm.API) error {
 	}()
 	err = api.CopyToContainer(ctx, AgentContainer, agentstate.Root, pr, container.CopyToContainerOptions{})
 	_ = pr.CloseWithError(io.ErrClosedPipe) // unblocks the writer if the copy stopped reading
-	if terr := <-tarDone; terr != nil && !errors.Is(terr, io.ErrClosedPipe) {
-		return fmt.Errorf("packing the imported state: %w", terr)
-	}
+	terr := <-tarDone
 	if err != nil {
 		return fmt.Errorf("copying the imported state into %s: %w", AgentContainer, err)
+	}
+	// The copy succeeded, but a writer error — even the closed pipe of a
+	// copy that stopped reading early — means the container got a truncated
+	// tar, which must never reach agent-seed.
+	if terr != nil {
+		return fmt.Errorf("packing the imported state (the copy into %s is incomplete): %w", AgentContainer, terr)
 	}
 	cmd := []string{"homelab", "agent-seed", "--root", agentstate.Root, "--import", staging}
 	if err := seedExec(ctx, api, cmd, b.secrets); err != nil {
@@ -106,7 +111,13 @@ func composeContainers(ctx context.Context, api swarm.API, oldDir string) error 
 	for i := range list {
 		c := &list[i]
 		wd := c.Labels[composeWorkingDirLabel]
-		if wd == "" || (!within(root, wd) && !within(real, wd)) {
+		// Either side may be the symlinked spelling.
+		wdReal, rerr := filepath.EvalSymlinks(wd)
+		if rerr != nil {
+			wdReal = wd
+		}
+		under := within(root, wd) || within(real, wd) || within(root, wdReal) || within(real, wdReal)
+		if wd == "" || !under {
 			continue
 		}
 		name := c.ID
@@ -130,12 +141,44 @@ func within(dir, path string) bool {
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
 }
 
-// removeAgentAndState undoes a failed import: the agent container and its
-// own state volume (StateVolume) go, so a retry starts clean. No other
-// volume is ever removed — the services' data volumes stay as they are.
-func removeAgentAndState(ctx context.Context, api swarm.API, out io.Writer) {
+// stateVolumeExists reports whether the agent's state volume exists.
+func stateVolumeExists(ctx context.Context, api swarm.API) (bool, error) {
+	res, err := api.VolumeList(ctx, volume.ListOptions{Filters: filters.NewArgs(filters.Arg("name", StateVolume))})
+	if err != nil {
+		return false, fmt.Errorf("listing volumes: %w", err)
+	}
+	for _, v := range res.Volumes {
+		if v != nil && v.Name == StateVolume {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// refuseLeftoverStateVolume refuses an import onto a state volume an earlier
+// attempt left: Docker would silently reuse it (vault included), and the
+// rollback must never delete something this run did not create.
+func refuseLeftoverStateVolume(ctx context.Context, api swarm.API) error {
+	exists, err := stateVolumeExists(ctx, api)
+	if err != nil || !exists {
+		return err
+	}
+	return fmt.Errorf("a %s volume from an earlier attempt exists; if it holds nothing you need, remove it with "+
+		"`docker volume rm %s` (data volumes are untouched)", StateVolume, StateVolume)
+}
+
+// removeAgentAndState undoes a failed import: the agent container goes and,
+// when this run created it (ownVolume), its state volume (StateVolume), so a
+// retry starts clean. No other volume is ever removed — the services' data
+// volumes stay as they are.
+func removeAgentAndState(ctx context.Context, api swarm.API, out io.Writer, ownVolume bool) {
 	cerr := api.ContainerRemove(ctx, AgentContainer, container.RemoveOptions{Force: true})
 	verr := error(nil)
+	if cerr == nil && !ownVolume {
+		_, _ = fmt.Fprintf(out, "Import failed: removed the agent; its state volume %s predates this run and is kept.\n",
+			StateVolume)
+		return
+	}
 	if cerr == nil {
 		verr = api.VolumeRemove(ctx, StateVolume, true)
 	}

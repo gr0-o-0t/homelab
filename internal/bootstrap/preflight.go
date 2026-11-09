@@ -79,8 +79,8 @@ func checkEngine(ctx context.Context, api swarm.API) error {
 	for i := range list {
 		for _, n := range list[i].Names {
 			if strings.TrimPrefix(n, "/") == AgentContainer {
-				return fmt.Errorf("a %s container already exists — remove it (`docker rm -f %s`) and retry",
-					AgentContainer, AgentContainer)
+				return fmt.Errorf("a %s container already exists — remove it and its state (`docker rm -f %s && docker volume rm %s`; data volumes are untouched) and retry",
+					AgentContainer, AgentContainer, StateVolume)
 			}
 		}
 	}
