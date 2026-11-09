@@ -58,7 +58,6 @@ func updateCoreStack(root string) error {
 	if err := installAssets(root); err != nil {
 		return fmt.Errorf("refreshing core files: %w", err)
 	}
-	recordCore(root, desired.Running)
 	env := buildEnv(root, "")
 	composeFile := run.CoreComposeFile(root)
 	// withProfiles: the extension containers are profile-gated, and without

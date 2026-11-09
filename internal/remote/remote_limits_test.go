@@ -36,7 +36,7 @@ func TestRunner_AliasesTakeTheLock(t *testing.T) {
 	assert.True(t, ae <= bs || be <= as, "`rm` (delete) ran unlocked beside `up`: a=[%d,%d] b=[%d,%d]", as, ae, bs, be)
 }
 
-func TestRemote_RefusesUnknownInternalAndNoRecord(t *testing.T) {
+func TestRemote_RefusesUnknownAndInternal(t *testing.T) {
 	e := newTestServer(t, nil)
 	c := e.client(testSecret, "1.4.2")
 	for _, argv := range [][]string{
@@ -44,9 +44,6 @@ func TestRemote_RefusesUnknownInternalAndNoRecord(t *testing.T) {
 		{"session", "run"},
 		{"agent"},
 		{"envshim", "--", "/bin/sh"},
-		{"ls", "--no-record"},
-		{"--no-record", "ls"},
-		{"ls", "--no-record=true"},
 	} {
 		code, out, _, err := run(t, c, RunOptions{Argv: argv})
 		require.Error(t, err, "%q", argv)

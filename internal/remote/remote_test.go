@@ -130,7 +130,7 @@ func testResolve(argv []string) ([]string, bool) {
 		return []string{"cf", argv[1]}, true
 	}
 	switch name {
-	case "help", "completion", "__complete", "status", "ls", "cat", "up", "delete", "session", "agent", "envshim", "version", "login", "join", "backup", "restore":
+	case "help", "completion", "__complete", "status", "ls", "cat", "up", "delete", "agent", "envshim", "version", "login", "join", "backup", "restore":
 		return []string{name}, true
 	}
 	return nil, false

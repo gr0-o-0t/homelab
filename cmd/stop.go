@@ -33,7 +33,6 @@ configuration and volumes kept).`,
 			return runServiceStop(cmd, args)
 		}
 		env := buildEnv(dir, "")
-		recordCore(dir, desired.Stopped)
 		fmt.Printf("%s Stopping core stack…\n", styles.Warning.Render("→"))
 		return run.Default().DockerComposeEnv(
 			run.CoreComposeFile(dir),

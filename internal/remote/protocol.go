@@ -16,10 +16,8 @@ var LocalOnly = map[string]bool{
 	"completion": true, "agent": true, "agent-seed": true, "envshim": true, "edit": true,
 }
 
-// Internal commands are plumbing the agent runs itself, never for a client:
-// `session run` would start a second supervisor whose SIGTERM path stops
-// every service.
-var Internal = map[string]bool{"agent": true, "agent-seed": true, "envshim": true, "session": true}
+// Internal commands are plumbing the agent runs itself, never for a client.
+var Internal = map[string]bool{"agent": true, "agent-seed": true, "envshim": true}
 
 // Mutating commands (canonical top-level names) hold the server-wide lock
 // for their whole run, except the ReadOnly subcommands under them; every
@@ -62,10 +60,9 @@ func Locks(path []string) bool {
 	return Mutating[path[0]]
 }
 
-// refusedFlags may not appear anywhere in a forwarded argv: the first two
-// would choose the agent's state, --no-record would hide changes from the
-// desired state the supervisor keeps.
-var refusedFlags = []string{"--config-dir", "--config", "--no-record"}
+// refusedFlags may not appear anywhere in a forwarded argv: they would choose
+// the agent's state.
+var refusedFlags = []string{"--config-dir", "--config"}
 
 // Resolver maps argv to the canonical command path it invokes (aliases
 // resolved, e.g. ["rm","x"] → ["delete"]); ok is false for an unknown

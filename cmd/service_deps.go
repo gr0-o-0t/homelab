@@ -76,8 +76,8 @@ func ensureDBDependencies(ctx context.Context, root, name string) error {
 
 	for _, dbType := range types {
 		// A service desired running needs its shared database running too:
-		// recorded, the login restore starts it and the supervisor restarts
-		// it after a crash like any other service.
+		// recorded, the agent brings it up after a reboot like any other
+		// service.
 		recordService(root, config.SharedDBName(dbType), desired.Running)
 		_, notRunning := p.Container(dbType)
 		if notRunning != nil {

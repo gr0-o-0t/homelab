@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/groot/homelab/internal/desired"
 	"github.com/groot/homelab/internal/run"
 	"github.com/groot/homelab/internal/tui/styles"
 	"github.com/spf13/cobra"
@@ -35,7 +34,6 @@ var upCmd = &cobra.Command{
 			return err
 		}
 
-		recordCore(dir, desired.Running)
 		fmt.Printf("%s Starting core stack…\n", styles.Primary.Render("→"))
 		for _, note := range activeExtNotes(dir) {
 			fmt.Printf("  %s\n", styles.Muted.Render(note))

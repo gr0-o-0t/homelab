@@ -307,7 +307,7 @@ func taskOn(t *testing.T, f *swarmtest.Fake, svc, host string) {
 
 func TestForwardableArgv_StripsLeaderFlags(t *testing.T) {
 	assert.Equal(t, []string{"--no-color", "exec", "a", "sh"},
-		forwardableArgv([]string{"--config-dir", "/x", "--no-color", "--config=/y", "--no-record", "exec", "a", "sh"}))
+		forwardableArgv([]string{"--config-dir", "/x", "--no-color", "--config=/y", "exec", "a", "sh"}))
 	// after the service, flags belong to the command
 	assert.Equal(t, []string{"exec", "a", "grep", "--config", "z"},
 		forwardableArgv([]string{"--config-dir=/x", "exec", "a", "grep", "--config", "z"}))

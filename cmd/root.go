@@ -17,7 +17,6 @@ var rootFlags struct {
 	noColor    bool
 	json       bool
 	gui        bool
-	noRecord   bool
 }
 
 var (

@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/groot/homelab/internal/desired"
 	"github.com/groot/homelab/internal/run"
 	"github.com/groot/homelab/internal/tui/styles"
 	"github.com/spf13/cobra"
@@ -28,7 +27,6 @@ var restartCmd = &cobra.Command{
 		}
 		// No arg → core stack restart.
 		env := buildEnv(dir, "")
-		recordCore(dir, desired.Running)
 		msg := "Restarting core stack…"
 		composeArgs := []string{"restart"}
 		if restartFlags.build {

@@ -36,7 +36,6 @@ for them start is the same as 'homelab up'.`,
 		if _, err := os.Stat(composeFile); err != nil {
 			return err
 		}
-		recordCore(dir, desired.Running)
 		fmt.Printf("%s Starting core stack…\n", styles.Primary.Render("→"))
 		return run.Default().DockerComposeEnv(
 			composeFile,

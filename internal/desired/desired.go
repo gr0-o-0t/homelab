@@ -24,9 +24,9 @@ const (
 )
 
 // Desired is what should be running: the file the lifecycle commands write
-// and the supervisor restores at login.
+// and the leader agent brings the cluster back to when it starts. A `core:`
+// key written by the Compose-era session mode is ignored.
 type Desired struct {
-	Core     State            `yaml:"core,omitempty"`
 	Services map[string]State `yaml:"services,omitempty"`
 }
 
@@ -58,11 +58,11 @@ func LoadDesired(root string) (d *Desired, exists bool, err error) {
 
 const desiredHeader = `# Written by homelab: what should be running. Lifecycle commands (up, start,
 # restart, update → running; stop, down → stopped; delete, prune → removed)
-# update it, and the session supervisor (homelab session) restores it at login.
+# update it, and the leader agent brings the cluster back to it when it starts.
 `
 
-// Save writes the file atomically (temp file + rename): the supervisor reads it
-// on every container event.
+// Save writes the file atomically (temp file + rename), so the agent never
+// reads a partial file.
 func (d *Desired) Save(root string) error {
 	if err := os.MkdirAll(StateDir(root), 0o700); err != nil {
 		return err
@@ -72,14 +72,6 @@ func (d *Desired) Save(root string) error {
 		return err
 	}
 	return WriteAtomic(DesiredFile(root), append([]byte(desiredHeader), data...))
-}
-
-// SetCore records the core stack's desired state.
-func (d *Desired) SetCore(s State) {
-	if s == Removed {
-		s = Stopped
-	}
-	d.Core = s
 }
 
 // SetService records one service's desired state; Removed forgets it.
@@ -93,9 +85,6 @@ func (d *Desired) SetService(name string, s State) {
 	}
 	d.Services[name] = s
 }
-
-// CoreRunning reports whether the core stack should be up.
-func (d *Desired) CoreRunning() bool { return d.Core == Running }
 
 // ServiceRunning reports whether a service should be up. A service the file
 // does not mention should not.

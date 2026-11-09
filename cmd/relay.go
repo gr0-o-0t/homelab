@@ -148,7 +148,7 @@ func dockerExecArgs(id string, tty bool, cmdArgs []string) []string {
 }
 
 // forwardableArgv drops the root flags the agent gave this process
-// (--config-dir, --config, --no-record), which another agent refuses. Only
+// (--config-dir, --config), which another agent refuses. Only
 // the flags before the command name are looked at: after it, they are the
 // command's (`homelab exec svc grep --config x`).
 func forwardableArgv(argv []string) []string {
@@ -164,7 +164,6 @@ func forwardableArgv(argv []string) []string {
 			if !hasValue {
 				i++ // and its value
 			}
-		case "no-record":
 		default:
 			out = append(out, a)
 		}

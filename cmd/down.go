@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/groot/homelab/internal/desired"
 	"github.com/groot/homelab/internal/run"
 	"github.com/groot/homelab/internal/tui/styles"
 	"github.com/spf13/cobra"
@@ -29,7 +28,6 @@ exactly as it was. Use 'homelab disable' to remove exposure.
 			return runServiceDown(cmd, args)
 		}
 		env := buildEnv(dir, "")
-		recordCore(dir, desired.Stopped)
 		fmt.Printf("%s Stopping core stack…\n", styles.Warning.Render("→"))
 		return run.Default().DockerComposeEnv(
 			run.CoreComposeFile(dir),

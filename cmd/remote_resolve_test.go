@@ -19,7 +19,6 @@ func TestResolveCommand_CanonicalPathThroughAliases(t *testing.T) {
 		{[]string{"ps"}, []string{"status"}, true},
 		{[]string{"--no-color", "up", "web"}, []string{"up"}, true},
 		{[]string{"cf", "route", "add", "web"}, []string{"cf", "route", "add"}, true},
-		{[]string{"session", "run"}, []string{"session", "run"}, true},
 		{[]string{"--json"}, nil, true},
 		{[]string{"frobnicate"}, nil, false},
 	} {

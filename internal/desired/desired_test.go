@@ -13,13 +13,11 @@ func TestDesired_MissingFile(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, exists)
 	assert.NotNil(t, d.Services)
-	assert.False(t, d.CoreRunning())
 }
 
 func TestDesired_RoundTripAndTransitions(t *testing.T) {
 	root := t.TempDir()
 	d := &Desired{}
-	d.SetCore(Running)
 	d.SetService("jellyfin", Running)
 	d.SetService("immich", Running)
 	d.SetService("immich", Stopped)
@@ -30,15 +28,11 @@ func TestDesired_RoundTripAndTransitions(t *testing.T) {
 	got, exists, err := LoadDesired(root)
 	require.NoError(t, err)
 	assert.True(t, exists)
-	assert.True(t, got.CoreRunning())
 	assert.True(t, got.ServiceRunning("jellyfin"))
 	assert.False(t, got.ServiceRunning("immich"))
 	assert.Equal(t, Stopped, got.Services["immich"])
 	_, present := got.Services["gone"]
 	assert.False(t, present, "removed services are forgotten")
-
-	got.SetCore(Removed) // the core cannot be removed, only stopped
-	assert.Equal(t, Stopped, got.Core)
 
 	info, err := os.Stat(StateDir(root))
 	require.NoError(t, err)
@@ -55,7 +49,17 @@ func TestDesired_RunningServices_SharedFirst(t *testing.T) {
 func TestDesired_CorruptFile(t *testing.T) {
 	root := t.TempDir()
 	require.NoError(t, os.MkdirAll(StateDir(root), 0o700))
-	require.NoError(t, os.WriteFile(DesiredFile(root), []byte("core: [nope"), 0o600))
+	require.NoError(t, os.WriteFile(DesiredFile(root), []byte("services: [nope"), 0o600))
 	_, _, err := LoadDesired(root)
 	assert.Error(t, err)
+}
+
+func TestDesired_IgnoresLegacyCoreKey(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(StateDir(root), 0o700))
+	require.NoError(t, os.WriteFile(DesiredFile(root), []byte("core: running\nservices:\n  web: running\n"), 0o600))
+	d, exists, err := LoadDesired(root)
+	require.NoError(t, err)
+	assert.True(t, exists)
+	assert.Equal(t, []string{"web"}, d.RunningServices())
 }
