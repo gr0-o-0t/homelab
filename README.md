@@ -1,27 +1,26 @@
 # homelab
 
-A modular, secure homelab stack exposing self-hosted services exclusively over a private [Tailscale](https://tailscale.com) network, fronted by [Caddy](https://caddyserver.com) reverse proxy with automatic wildcard TLS via [Cloudflare](https://cloudflare.com).
+A modular, secure homelab on Docker Swarm, exposing self-hosted services exclusively over a private [Tailscale](https://tailscale.com) network, fronted by [Caddy](https://caddyserver.com) with automatic wildcard TLS via [Cloudflare](https://cloudflare.com).
 
-No ports are opened on your home router. Every service gets a clean `https://<service>.home.<yourdomain>.com` URL, reachable only from devices on your tailnet. Optionally expose services via Cloudflare Tunnel (public), Tor .onion, I2P eepsites, or Yggdrasil mesh.
+One `homelab` agent container runs on every PC. The one on the Swarm manager (the leader) holds all state and runs Caddy on its own Tailscale node; stateless services can run on the other PCs. No ports are opened on your home router. Every service gets a clean `https://<service>.home.<yourdomain>.com` URL, reachable only from devices on your tailnet. Optionally expose services publicly via Cloudflare Tunnel.
 
 ---
 
 ## Architecture at a glance
 
 ```
+any PC:  homelab (CLI) ──tailnet──▶ leader agent API (:7443)
+
 Client (on tailnet)
   └─► immich.home.example.com
-        └─► Cloudflare DNS (A record → Tailscale IP, DNS only — not proxied)
-              └─► Tailscale (100.x.x.x — private, tailnet-only)
-                    └─► Caddy (TLS termination, wildcard cert via DNS-01)
-                          └─► Docker home-services network
-                                └─► service container
+        └─► Cloudflare DNS (A record → the leader's Tailscale IP, DNS only — not proxied)
+              └─► the leader agent's tailnet node (100.x.x.x — private, tailnet-only)
+                    └─► Caddy inside the agent (TLS termination, wildcard cert via DNS-01)
+                          └─► home-services Swarm overlay
+                                └─► service task, on any PC of the cluster
 
-Optional layers:
-  Cloudflare Tunnel (public) ──► Caddy ──► service
-  Tor .onion ──► Caddy ──► service
-  I2P eepsite ──► I2P daemon ──► service
-  Yggdrasil ──► socat ──► service
+Optional layer:
+  Cloudflare Tunnel (public) ──► cloudflared ──► Caddy ──► service
 ```
 
 See [docs/architecture.md](docs/architecture.md) for the full design rationale.
@@ -32,10 +31,10 @@ See [docs/architecture.md](docs/architecture.md) for the full design rationale.
 
 | Requirement | Notes |
 |---|---|
-| Docker + Docker Compose v2 | `docker compose` (not `docker-compose`) |
+| Docker Engine (rootful) | On every PC; `homelab init`/`join` set up Swarm |
+| Tailscale on every PC | Swarm traffic between PCs rides the tailnet |
 | Go 1.25+ | To build the `homelab` CLI |
-| Linux host with `/dev/net/tun` | See [docs/tailscale-setup.md](docs/tailscale-setup.md) for WSL2 |
-| Tailscale account | Free tier supports 100 devices |
+| Tailscale account | Free tier supports 100 devices; see [docs/tailscale-setup.md](docs/tailscale-setup.md) |
 | Cloudflare-managed domain | Any registrar; just delegate DNS to Cloudflare |
 
 ---
@@ -53,89 +52,57 @@ make build-headless  # pure Go, no GUI — for servers without a desktop
 make install      # go install → puts 'homelab' on your PATH
 ```
 
-### 2. Configure
+### 2. Get the credentials
 
-Run the interactive wizard. Non-secret values are saved to
-`~/.config/homelab/config.yaml`; secrets go to the system keyring
-(SecretService on Linux).
+- Follow [docs/tailscale-setup.md](docs/tailscale-setup.md) to generate a reusable auth key (`TS_AUTHKEY`).
+- Follow [docs/cloudflare-setup.md](docs/cloudflare-setup.md) to create the API token (`CLOUDFLARE_API_TOKEN`).
+
+### 3. Create the cluster
+
+On the always-on machine:
 
 ```bash
-homelab setup
+homelab init        # Swarm manager + the leader agent; asks for the secrets it needs
+homelab setup       # DOMAIN, HOME_SUBDOMAIN, ACME_EMAIL, … (stored on the leader)
+homelab status      # the Edge table: caddy running
 ```
 
-You will be prompted for:
+`init` prints the cluster secret and the command that adds other PCs:
+`homelab join` (a Swarm worker running its own agent), or `homelab login` on a
+PC that should only run the CLI. The leader keeps the `*.home.<domain>` DNS
+record pointed at its tailnet node.
 
-| Variable | Description |
-|---|---|
-| `DOMAIN` | Your base domain (e.g. `example.com`) |
-| `HOME_SUBDOMAIN` | Subdomain prefix for private services (e.g. `home`) |
-| `ACME_EMAIL` | Let's Encrypt registration email |
-| `TS_HOSTNAME` | Tailscale node name for the Caddy host |
-| `TS_AUTHKEY` | Tailscale auth key (stored in keyring) |
-| `CLOUDFLARE_API_TOKEN` | API token with `Zone:DNS:Edit` (stored in keyring) |
-| `CF_TUNNEL_TOKEN` | Cloudflare Tunnel token — optional, for public exposure |
-| `TOR_ENABLED` | Enable Tor onion service proxy (`true`/`false`) |
-| `I2P_ENABLED` | Enable I2P router + eepsite proxy |
-| `YGGDRASIL_ENABLED` | Enable Yggdrasil mesh node |
-
-### 3. Set up Tailscale and Cloudflare
-
-- Follow [docs/tailscale-setup.md](docs/tailscale-setup.md) to generate an auth key.
-- Follow [docs/cloudflare-setup.md](docs/cloudflare-setup.md) to create the API token and A record.
-
-### 4. Start the core stack
+### 4. Add and start a service
 
 ```bash
-homelab up                      # create and start Tailscale + Caddy + enabled extensions
-homelab status                  # check everything is running
-```
-
-Get the Tailscale IP from `homelab status` and set it as the A record value in Cloudflare DNS.
-
-### 5. Add and start a service
-
-```bash
-homelab add uptime-kuma        # copy from embedded catalog to ~/.config/homelab/services/
+homelab add uptime-kuma        # install from the embedded catalog into the leader's state
 homelab setup uptime-kuma      # configure vars and secrets interactively
-homelab up uptime-kuma         # create and start
-homelab enable uptime-kuma     # expose on tailnet via Caddy
+homelab up uptime-kuma         # deploy on Swarm
+homelab enable uptime-kuma     # expose on the tailnet via Caddy
 ```
 
 Visit `https://status.home.example.com` from any device on your tailnet.
 
 ---
 
-## Running at login (encrypted home / laptops)
-
-Docker starts `restart: always` containers at boot, before you log in. If your
-home directory is encrypted (ecryptfs, fscrypt, systemd-homed) or otherwise
-mounted at login, those containers see the unmounted home: single-file bind
-mounts fail ("mounting a directory onto a file") and directory mounts are
-silently empty. Session mode ties the stack to your login session instead:
-
-```bash
-homelab session install     # systemd user service; restart policies → "no"
-homelab session status      # unit state, desired state, boot-starting containers
-journalctl --user -u homelab -f
-homelab session uninstall   # back to Docker's restart policies
-```
-
-At login the service waits for the config dir and Docker, brings up the core
-and every service recorded as running in `state/desired.yaml`, and restarts
-containers that crash. At logout it stops them (services first, then the core);
-the next login restores the same set. `up`/`stop`/`down`/… keep the desired
-state current, so stopping a service by hand keeps it stopped.
-
 ## CLI reference
 
-### Global flags
+Except `init`, `join`, `login`, `logout`, `edit`, `version`, `completion` and
+`backup --fetch`, every command runs on the leader agent: the CLI forwards it
+over the tailnet with the cluster secret.
+
+### Cluster
 
 ```
---config-dir <path>   config directory (default: ~/.config/homelab)
---config <file>       root config file; overrides config-dir/config.yaml
---json                output as JSON (on commands that support it)
---no-color            disable coloured output
+homelab init [--import <dir>]   Create the cluster on this machine (Swarm manager, leader agent)
+homelab join                    Add this machine as a Swarm worker running its own agent
+homelab login                   Use this machine as a client of the cluster only
+homelab logout                  Forget the cluster endpoint and secret here
 ```
+
+`init --import ~/.config/homelab` brings a Compose-era install along (config,
+services, exposure, desired state, keyring secrets) and reuses its volumes.
+`homelab upgrade` (rolling the agents) is planned and does not exist yet.
 
 ### Service lifecycle
 
@@ -143,61 +110,71 @@ state current, so stopping a service by hand keeps it stopped.
 homelab add [name]              Install from catalog (no name → list catalog)
 homelab new [name]              Scaffold a new service directory (interactive wizard)
 homelab setup [service]         Configure vars and secrets (no arg → root setup wizard)
-homelab up [service...]         Create and start containers (first use or after config changes)
-homelab down [service...]       Stop and remove containers (exposure is kept)
-homelab start [service...]      Resume existing stopped containers (no create)
-homelab stop [service...]       Stop running containers without removing them
-homelab restart [service...]    Restart containers
-homelab reload [service]        Reload Caddy config or a service's routing config
-homelab pull [service...]       Pull latest images without recreating
-homelab update [service...]     Pull latest images and recreate containers
+homelab up <service...>         Deploy on Swarm (shared databases first)
+homelab down <service...>       Scale to zero (config, volumes and exposure kept)
+homelab start <service...>      Same as up (Swarm keeps no stopped containers)
+homelab stop <service...>       Same as down
+homelab restart <service...>    Replace every task of the service
+homelab reload [service]        Load the routes into Caddy, or re-render one service's
+homelab pull <service...>       Pull latest images without redeploying
+homelab update <service...>     Pull latest images and redeploy
+homelab edit <service> <path>   Edit a bind-mounted config file in $EDITOR and roll it out
 homelab delete <service>...     Remove service entirely, asks for the name (alias: rm, -y to skip)
 homelab ls [-q]                 List installed services
 homelab status [service]        Show status overview or per-service detail (alias: ps)
-homelab logs [service]          Print logs like docker compose logs (-f, -n, -t, --since, --until; --tui)
-homelab exec <svc> <cmd...>     Run a command in a service container (-u, -w, -e, -T)
-homelab doctor [service]        Environment health check
+homelab logs [service]          A service's logs from every node (-f, -n, -t, --since, -c; --tui); no service: the leader agent's
+homelab exec <svc> <cmd...>     Run a command in a service container, on whichever node runs it (-c, -u, -w, -e, -T)
+homelab config <service>        The compose file as resolved to deploy (contains secrets)
+homelab images <service>        Images the stack deploys
+homelab doctor [service]        Health checks
 homelab --gui                   Desktop GUI (not in headless builds)
 ```
 
-With no service, lifecycle commands act on the core stack. Several services may
-be named at once, as with `docker compose`. Lifecycle commands accept batch
-flags, and a batch keeps going past a failing service:
+Lifecycle commands need a service: with none they refuse ("name a service, or
+use -a/--all"). Several services may be named at once, and a batch keeps going
+past a failing service:
 
 ```
-homelab up --all                     # create and start all installed services
-homelab up --group media             # create and start by group (defined in config.yaml)
+homelab up --all                     # deploy all installed services
+homelab up --group media             # by group (defined in config.yaml)
 homelab up --group media --all       # error: mutually exclusive
-homelab up --build                   # rebuild images before creating and starting
-homelab down -a                      # stop and remove all installed services
-homelab down --group media           # stop and remove by group
+homelab down -a                      # scale every installed service to zero
+homelab down --group media           # by group
 ```
-
-`restart` also supports `--build` (`homelab restart --build` rebuilds and recreates).
 
 ### Network routing
 
 ```
 homelab enable <service>           Expose on tailnet via Caddy (private)
 homelab enable <service> --cf      Also expose via Cloudflare Tunnel (public)
-homelab enable <service> --tor     Also expose as Tor .onion service
-homelab enable <service> --i2p     Also expose as I2P eepsite
-homelab enable <service> --ygg     Also expose on Yggdrasil mesh
 
 homelab disable <service>          Remove private tailnet route
 homelab disable <service> --cf     Remove Cloudflare Tunnel route
-homelab disable <service> --tor    Remove Tor .onion service
-homelab disable <service> --i2p    Remove I2P eepsite tunnel
-homelab disable <service> --ygg    Remove Yggdrasil forwarder
+homelab disable <service> -a       Remove every layer
 ```
+
+Tor, I2P and Yggdrasil (`--tor`, `--i2p`, `--ygg`) are not available in
+cluster mode yet.
 
 ### Diagnostics
 
 ```
-homelab doctor                     Environment health check
+homelab doctor                     Environment, the agent's Caddy, routing
 homelab doctor <service>           Per-service health check
 homelab doctor --all               Check all installed services
-homelab validate                   Validate Caddyfile syntax only
+homelab validate                   Assemble and adapt the Caddy config without loading it
+homelab caddy status               Whether the agent's Caddy answers
+homelab caddy logs                 Follow the leader agent's logs
+```
+
+### Backup and restore
+
+```
+homelab backup [service]                     Volumes + DB dumps + config, on the leader (--all, --group, --live)
+homelab backup --list                        Existing backups, newest first
+homelab backup --fetch <name> <local-dir>    Copy a backup to this PC
+homelab restore <backup-dir> [service]       Replace volumes + databases (--config, --create-volumes)
+homelab prune [service...]                   Remove Swarm services, volumes and images (--keep-volumes)
 ```
 
 ### Shell completion
@@ -208,33 +185,14 @@ homelab completion bash|zsh|fish|powershell   Generate shell completion scripts
 
 ### Network extensions
 
-Extensions are managed via the `ext` subcommand:
-
 ```
-homelab ext enable <ext>           Turn an extension on and start its container
-homelab ext disable <ext>          Stop it and turn it off
+homelab ext enable cf              Turn Cloudflare Tunnel on and deploy cloudflared
+homelab ext disable cf             Remove it and turn it off
 homelab ext list                   List extensions and their enabled/disabled status
-homelab ext status [ext]           Show container status for all or one
-homelab ext logs [ext]             Stream container logs for all or one
-homelab ext start [ext]            Start extension container(s)
-homelab ext stop [ext]             Stop extension container(s)
-```
-
-Service-level exposure (through an extension) is managed via the root
-`enable`/`disable` commands:
-
-```
-homelab enable <svc> --i2p    expose via I2P eepsite
-homelab enable <svc> --tor    expose as Tor .onion service
-homelab enable <svc> --ygg    expose on Yggdrasil mesh
-homelab disable <svc> --i2p   remove I2P exposure
-```
-
-Extension-specific advanced subcommands:
-
-```
-homelab cf route add <service>     # add Cloudflare DNS route
-homelab cf route rm <service>      # remove it (needs CLOUDFLARE_API_TOKEN with DNS:Edit)
+homelab ext status [ext]           Show their state
+homelab ext logs [ext]             Stream their logs
+homelab cf route add <service>     Add the Cloudflare DNS route (enable --cf does it)
+homelab cf route rm <service>      Remove it (needs CLOUDFLARE_API_TOKEN with DNS:Edit)
 ```
 
 ---
@@ -244,103 +202,13 @@ homelab cf route rm <service>      # remove it (needs CLOUDFLARE_API_TOKEN with 
 ```
 homelab/
 ├── main.go                   # CLI entry point
-├── go.mod / go.sum
 ├── Makefile                  # build / install / tidy / test / catalog
-│
 ├── assets/                   # embedded into binary via //go:embed
-│   ├── assets.go             # CoreFS + CatalogFS embed declarations
-│   ├── core/                 # Tailscale + Caddy compose stack
-│   ├── caddy/                # Caddyfile + conf.d templates
+│   ├── caddy/Caddyfile       # the global Caddy block the agent assembles its config from
 │   └── services/             # bundled service catalog (canonical copy)
-│       ├── actual-budget/
-│       ├── adguardhome/
-│       ├── audiobookshelf/
-│       ├── bazarr/
-│       ├── beszel-hub/
-│       ├── copyparty/
-│       ├── cyberchef/
-│       ├── dozzle/
-│       ├── excalidraw/
-│       ├── forgejo/
-│       ├── gitea/
-│       ├── glance/
-│       ├── gokapi/
-│       ├── gotify/
-│       ├── homarr/
-│       ├── home-assistant/
-│       ├── homebox/
-│       ├── homepage/
-│       ├── immich/
-│       ├── it-tools/
-│       ├── jellyfin/
-│       ├── kavita/
-│       ├── mattermost/
-│       ├── mealie/
-│       ├── metube/
-│       ├── minero/
-│       ├── miniflux/
-│       ├── navidrome/
-│       ├── netbox/
-│       ├── nextcloud/
-│       ├── ntfy/
-│       ├── ollama/
-│       ├── open-webui/
-│       ├── pihole/
-│       ├── plex/
-│       ├── pocket-id/
-│       ├── portainer/
-│       ├── prowlarr/
-│       ├── qbittorrent/
-│       ├── radarr/
-│       ├── searxng/
-│       ├── seerr/
-│       ├── sonarr/
-│       ├── speedtest-tracker/
-│       ├── stirlingpdf/
-│       ├── tandoor/
-│       ├── tautulli/
-│       ├── technitium/
-│       ├── uptime-kuma/
-│       └── vaultwarden/
-│
 ├── cmd/                      # Cobra command definitions
-│   ├── root.go               # --config-dir / --config flags, TUI launcher
-│   ├── service.go            # service lifecycle functions (runServiceUp, etc.)
-│   ├── add.go                # homelab add
-│   ├── caddy.go              # homelab reload + homelab validate
-│   ├── delete.go             # homelab delete (alias: rm)
-│   ├── disable.go            # homelab disable
-│   ├── doctor.go             # homelab doctor
-│   ├── enable.go             # homelab enable
-│   ├── ext.go                # homelab ext (list + extension command hub)
-│   ├── i2p.go                # homelab ext i2p
-│   ├── logs.go               # homelab logs
-│   ├── new.go                # homelab new
-│   ├── restart.go            # homelab restart
-│   ├── setup.go              # homelab setup
-│   ├── start.go              # homelab start (resume stopped containers)
-│   ├── status.go             # homelab status
-│   ├── stop.go               # homelab stop (pause containers)
-│   ├── up.go                 # homelab up (create and start)
-│   ├── down.go               # homelab down (stop and remove)
-│   ├── tor.go                # homelab ext tor
-│   ├── tunnel.go             # homelab ext cf
-│   ├── update.go             # homelab update
-│   ├── yggdrasil.go          # homelab ext ygg
-│   ├── completion.go         # shell completion generation
-│   ├── commands_test.go      # integration tests
-│   └── service_add_test.go   # add command tests
-│
-├── internal/                 # Go packages
-│   ├── caddy/                # Caddy reload + config rollback
-│   ├── config/               # XDG config dir, YAML schema, BuildEnv
-│   ├── docker/               # Docker SDK client (read-only status)
-│   ├── run/                  # Commander — shells out to docker compose
-│   ├── scaffold/             # embedded templates for new-service wizard
-│   ├── secrets/              # system keyring (SecretService / Keychain)
-│   ├── service/              # filesystem + Docker service discovery
-│   └── tui/                  # Bubble Tea UI (list, logs, wizard, spinner, styles)
-│
+├── internal/                 # Go packages: agent, bootstrap, remote, edge, swarm, importer,
+│                             #   backup, db, config, secrets, vault, tui, gui, … (see CLAUDE.md)
 ├── services/                 # gitignored export for local browsing (run 'make catalog')
 └── docs/
     ├── architecture.md
@@ -353,26 +221,27 @@ homelab/
 
 ---
 
-## Config directory
+## Where state lives
 
-All runtime state lives under `${XDG_CONFIG_HOME:-$HOME/.config}/homelab/`:
+All state lives on the leader, in the `homelab-agent` Docker volume
+(`/var/lib/homelab` inside the agent container):
 
 ```
-~/.config/homelab/
-├── config.yaml          # root vars (DOMAIN, HOME_SUBDOMAIN, …)
-├── core/                # installed by homelab setup
-│   └── docker-compose.yml
-├── caddy/               # installed by homelab setup
-│   ├── Caddyfile
-│   └── conf.d/
-└── services/            # populated by homelab add
-    └── uptime-kuma/
-        ├── docker-compose.yml
-        └── config.yaml  # vars, secrets, ports (routes are generated)
+/var/lib/homelab/
+├── vault.bin, vault.key   # encrypted secrets; the key file is root-only
+└── state/
+    ├── config.yaml        # root vars (DOMAIN, HOME_SUBDOMAIN, …)
+    ├── caddy/sites/       # generated routes, one file per service
+    └── services/          # populated by homelab add
+        └── uptime-kuma/
+            ├── docker-compose.yml
+            ├── config.yaml    # vars, secrets, ports (routes are generated)
+            └── exposure.yaml  # the layers it is exposed on
 ```
 
-Secrets (API tokens, passwords) are **never** written to disk — they are stored in
-the system keyring and injected into docker compose at runtime.
+A PC running only the CLI keeps `~/.config/homelab/client.yaml` (the leader's
+endpoint) and the cluster secret in its system keyring. Secrets are **never**
+written to disk in plain text, and never appear in a Swarm service spec.
 
 ---
 
@@ -437,11 +306,11 @@ the system keyring and injected into docker compose at runtime.
 
 ## Security notes
 
-- **No public ports required.** Tailscale's DERP relay infrastructure means Caddy is reachable without opening any firewall ports.
-- **Defence-in-depth.** Tailscale enforces network-level ACLs. Caddy enforces TLS and can add HTTP-layer access controls.
-- **Wildcard cert stays private.** The private key never leaves your server; Cloudflare only sees a temporary TXT record during DNS-01 challenge.
-- **Service isolation.** Each service uses a dedicated `internal: true` network for databases and workers. Only the UI container joins `home-services`.
-- **Secrets in keyring only.** All secrets (auth keys, API tokens, passwords) are stored in the OS keyring — never written to any file on disk.
+- **No public ports required.** Tailscale's DERP relay infrastructure means the agent's Caddy is reachable without opening any firewall ports.
+- **Defence-in-depth.** Tailscale enforces network-level ACLs. Caddy enforces TLS and can add HTTP-layer access controls. The remote CLI requires the cluster secret.
+- **Wildcard cert stays private.** The private key never leaves the leader; Cloudflare only sees a temporary TXT record during DNS-01 challenge.
+- **Service isolation.** Only a service's UI container joins `home-services`; stack-internal traffic can use an `internal: true` network.
+- **Secrets encrypted at rest.** All secrets (auth keys, API tokens, passwords) are in the leader's AES-256-GCM vault; service env reaches containers through Swarm secrets, never the service spec.
 
 ---
 
@@ -450,8 +319,8 @@ the system keyring and injected into docker compose at runtime.
 **Caddy can't reach a service container**
 
 ```bash
-docker network inspect home-services
-docker exec caddy ping <container-name>
+docker network inspect home-services          # on the leader
+homelab status <service>                      # is a task running?
 ```
 
 **TLS cert not issuing**
@@ -464,15 +333,15 @@ homelab logs | grep -i "acme\|tls\|cloudflare"
 **Tailscale not connecting**
 
 ```bash
-homelab logs | grep tailscale
+homelab logs | grep -i tailnet
 # Check TS_AUTHKEY hasn't expired
 ```
 
-**`homelab enable` fails Caddyfile validation**
+**`homelab enable` fails: Caddy rejected the config**
 
 ```bash
 homelab validate
-# Check caddy/conf.d/<service>.conf for syntax errors
+# Check the service's caddy.routes.conf, if it has one
 ```
 
 **Service resolves with `dig` but not `curl` or browser**
@@ -524,7 +393,7 @@ See [docs/adding-a-service.md](docs/adding-a-service.md) for step-by-step instru
 
 - Create `assets/services/<name>/` with `docker-compose.yml` and `config.yaml` (declare `ports:`; Caddy config is generated)
 - Follow the network pattern: main container on `home-services`, databases/workers on `internal: true` network
-- Use sensible defaults in `config.yaml` with `vars` (non-secrets) and `secrets` (keyring-stored) sections
+- Use sensible defaults in `config.yaml` with `vars` (non-secrets) and `secrets` (stored in the leader's vault) sections
 - Test the service end-to-end before submitting
 
 ### Development

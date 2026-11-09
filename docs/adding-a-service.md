@@ -12,7 +12,18 @@ homelab new
 homelab new paperless --container paperless-ngx --port 8000
 ```
 
-This creates `~/.config/homelab/services/paperless/` with boilerplate files. Edit the generated files, then follow the steps below to test and optionally contribute to the catalog.
+Like every command but `init`/`join`/`login`/`edit`, `new` runs on the leader
+agent: it creates `services/paperless/` with boilerplate files in the leader's
+state dir (`/var/lib/homelab/state` in the `homelab-agent` volume on minis).
+Edit the generated files, then follow the steps below to test and optionally
+contribute to the catalog.
+
+> **Editing on the leader**: `homelab edit <service> <path>` edits the files a
+> service bind-mounts from any PC. `docker-compose.yml` and `config.yaml` are
+> not editable through the CLI: change them on minis inside the agent volume
+> (`docker volume inspect homelab-agent` shows its mountpoint), or write the
+> service in `assets/services/` of this repository and install it with
+> `homelab add` from an agent built with it.
 
 > **Port config format**: The scaffolded `config.yaml` uses the new list-of-strings format. For a single HTTP port, use a bare port number (e.g. `- 8000`). For services with multiple ports, use named entries (e.g. `- ssh:22`) or mapped entries (e.g. `- 22:22`). See below for examples.
 
@@ -31,7 +42,7 @@ homelab new paperless
 This creates:
 
 ```
-~/.config/homelab/services/paperless/
+services/paperless/          # in the leader's state dir
 ├── docker-compose.yml
 └── config.yaml         # vars, secrets and the ports Caddy routes to
 ```
@@ -39,13 +50,21 @@ This creates:
 ### 2. Edit `docker-compose.yml`
 
 Two rules:
-- Attach the main (UI-facing) container to the `home-services` external network.
+- Attach the main (UI-facing) container to the `home-services` external network
+  (the Swarm overlay; homelab deploys the file as a Swarm stack).
 - Never bundle a database, cache or object store. Postgres, MariaDB, Redis and
   S3 (Garage) each run once, shared; declare what you need under `databases:`
   in `config.yaml` and the service gets its own database/role, redis database
   number, or bucket + key inside the shared instance. (A catalog test fails on
   a bundled postgres/mysql/mariadb/mongo/redis/valkey/keydb/minio/garage image.)
   Use a separate `internal: true` network only for other background workers.
+
+It runs on Swarm, so `privileged`, `devices`, `network_mode`, `env_file` and a
+`build:` without an `image:` are refused. A container with a data volume, a
+host path or the docker socket is pinned to minis; a stateless one prefers a
+worker PC. Override per container in `config.yaml` with `placement:`
+(`core`, `worker`, `any`), and list re-creatable volumes (model caches) under
+`cache_volumes:` so they do not pin.
 
 ```yaml
 networks:
@@ -68,7 +87,7 @@ services:
       - paperless-data:/usr/src/paperless/data
       - paperless-media:/usr/src/paperless/media
     networks:
-      - home-services        # reachable by Caddy, and by the shared databases
+      - home-services        # reachable by the agent's Caddy, and by the shared databases
 
 volumes:
   paperless-data:
@@ -87,7 +106,7 @@ databases:
       env:
         host: PAPERLESS_DBHOST
         user: PAPERLESS_DBUSER
-        password: PAPERLESS_DBPASS   # generated, kept in the keyring
+        password: PAPERLESS_DBPASS   # generated, kept in the leader's vault
   - redis:
       env:
         dsn: PAPERLESS_REDIS        # redis://:<shared pw>@homelab-redis:6379/<own db>
@@ -96,7 +115,7 @@ databases:
 ### 3. Declare the ports in `config.yaml` (routing)
 
 You do not write Caddy config. `homelab enable` generates a site block for
-every layer (private, `--cf`, `--i2p`, `--tor`, `--ygg`) from the ports the
+every layer (private, `--cf`) from the ports the
 service declares:
 
 ```yaml
@@ -104,7 +123,8 @@ ports:
   - 8000          # paperless.<HOME_SUBDOMAIN>.<DOMAIN> → paperless:8000
 ```
 
-The upstream is `<service>:<port>`, resolved by Docker DNS on `home-services`,
+The upstream is `<service>:<port>`, resolved by Docker DNS on `home-services`
+(a compose `container_name` becomes a network alias there),
 so the service name must resolve: name the compose service (or its
 `container_name`, or a network alias) after the service directory. See the
 port grammar in CLAUDE.md for subdomains and listen ports.
@@ -139,10 +159,9 @@ ports:
 ```
 
 > **Port format reference**:
-> - `- 8000` — bare port number, routes to main subdomain (one per service)
-> - `- web:8000` — named port, routes to `web.<service>.home.*` subdomain
-> - `- 22:22` — mapped port (host:container), Caddy L4 proxy
-```
+> - `- 8000` — bare port number: `<service>.<home>.<domain>` → container :8000
+> - `- web:8000` — a subdomain: `web.<home>.<domain>` → container :8000 (it replaces the service name)
+> - `- 22:2222/tcp` — a listen port: raw TCP on the tailnet, `:22` → container :2222 (caddy-l4)
 
 Run the interactive setup wizard to configure values:
 
@@ -171,16 +190,15 @@ For private (tailnet) access:
 homelab enable paperless
 ```
 
-This generates Caddy config and reloads Caddy. It will:
-- Validate the Caddyfile syntax
+This renders the service's Caddy file and loads it into the leader agent's Caddy. It will:
+- Refuse a config Caddy rejects, leaving the running one in place
 - Obtain a TLS certificate (or reuse the wildcard if already issued)
-- Start routing `paperless.<HOME_SUBDOMAIN>.<DOMAIN>` → the container
+- Start routing `paperless.<HOME_SUBDOMAIN>.<DOMAIN>` → the service, on whichever node runs it
 
 For public internet access (optional):
 
 ```bash
-# First configure Cloudflare Tunnel DNS route
-homelab ext cf route add paperless
+# With cloudflared on (homelab ext enable cf); this also creates the DNS route
 homelab enable paperless --cf
 ```
 
@@ -199,7 +217,8 @@ Once your service is tested and working, contribute it to the embedded catalog:
 1. **Copy to assets directory**:
 
 ```bash
-cp -r ~/.config/homelab/services/paperless assets/services/paperless
+# from minis, out of the leader's state dir
+sudo cp -r "$(docker volume inspect -f '{{.Mountpoint}}' homelab-agent)/state/services/paperless" assets/services/paperless
 ```
 
 2. **Verify the service catalog**:
@@ -210,10 +229,10 @@ make catalog
 
 This exports `assets/services/` → `services/` for local browsing verification.
 
-3. **Test from the catalog**:
+3. **Test from the catalog** (`homelab add` installs from the catalog embedded in the leader agent, so run an agent built from this tree):
 
 ```bash
-# Remove the local copy
+# Remove the scaffolded copy
 homelab delete paperless
 
 # Install from catalog
@@ -242,7 +261,7 @@ homelab disable paperless
 homelab down paperless
 ```
 
-### Remove the service from your config directory
+### Remove the service from the leader's state
 
 ```bash
 homelab delete paperless

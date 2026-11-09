@@ -1,8 +1,18 @@
 # Tailscale Setup
 
+Every PC in the cluster is already on your tailnet with its own Tailscale. On
+top of that, each homelab agent runs an embedded Tailscale node (tsnet) of its
+own: the leader's is `homelab` — it carries Caddy, the `*.home.<domain>` sites
+and the remote CLI on `:7443` — and each worker's is `homelab-<hostname>`. No
+TUN device or Tailscale container is involved.
+
 ## 1. Create a tailnet (if you don't have one)
 
 Sign up at [tailscale.com](https://tailscale.com). The free plan supports up to 100 devices — more than enough for a homelab.
+
+Enable **MagicDNS** and **HTTPS certificates** (Admin Console → DNS): the CLI
+reaches the leader at `https://homelab.<tailnet>.ts.net:7443`, served with the
+node's tailnet certificate.
 
 ## 2. Generate an auth key
 
@@ -12,18 +22,24 @@ Recommended settings:
 
 | Option | Value | Reason |
 |---|---|---|
-| Reusable | Yes | Allows container restarts without generating a new key |
-| Ephemeral | No | The node should persist across restarts |
+| Reusable | Yes | Every agent (leader and workers) registers a node with it |
+| Ephemeral | No | The nodes must persist across agent restarts |
 | Pre-authorized | Yes | Skips manual device approval |
 | Tags | `tag:homelab` | Enables ACL-based access control |
 
-Paste the key as `TS_AUTHKEY` in your `.env`.
+Give it to homelab as the `TS_AUTHKEY` secret: `homelab init` takes it from
+the machine's keyring or prompts for it, and stores it in the leader's vault —
+never in a file or the agent's environment. `homelab join` receives it from
+the leader with the Swarm join token and seeds the worker agent's vault with
+it, which is why the key must be reusable.
 
-> **Note:** Auth keys expire. Generate a new key and update `.env` if the container fails to authenticate after a long period.
+> **Note:** Auth keys expire. An agent whose node is already registered keeps
+> working (its node state lives in the agent volume); a new key is only needed
+> to register a node again — set it with `homelab setup`.
 
 ## 3. Configure ACLs (recommended)
 
-In the Tailscale admin console, edit your ACL policy to restrict which tailnet devices can reach the Caddy node. Example policy:
+In the Tailscale admin console, edit your ACL policy to restrict which tailnet devices can reach the homelab nodes. Example policy:
 
 ```json
 {
@@ -34,54 +50,32 @@ In the Tailscale admin console, edit your ACL policy to restrict which tailnet d
     {
       "action": "accept",
       "src": ["autogroup:member"],
-      "dst": ["tag:homelab:443", "tag:homelab:80"]
+      "dst": ["tag:homelab:443", "tag:homelab:7443"]
     }
   ]
 }
 ```
 
-This allows any authenticated tailnet member to reach port 443 on homelab-tagged devices, and nothing else.
+This allows any authenticated tailnet member to reach the sites (443) and the
+remote CLI (7443, which also needs the cluster secret) on homelab-tagged nodes.
+Add the raw ports your services declare (e.g. `tag:homelab:22` for Gitea SSH).
 
-## 4. TUN device on the host
+The Swarm traffic between PCs (2377, 7946, 4789) runs between the hosts' own
+Tailscale addresses, so those hosts must be able to reach each other on those
+ports as well.
 
-The Tailscale container runs with `TS_USERSPACE: "false"` (kernel-mode networking, required for the shared `network_mode: service:tailscale` trick). This needs `/dev/net/tun` on the host:
-
-```bash
-# Check if the device exists
-ls -la /dev/net/tun
-
-# If missing, load the module (Ubuntu/Debian)
-sudo modprobe tun
-
-# Make it persistent across reboots
-echo "tun" | sudo tee /etc/modules-load.d/tun.conf
-```
-
-### WSL2
-
-WSL2 kernels typically support TUN. If `/dev/net/tun` is missing:
+## 4. Verify the node is registered
 
 ```bash
-sudo mkdir -p /dev/net
-sudo mknod /dev/net/tun c 10 200
-sudo chmod 0666 /dev/net/tun
+homelab status          # the Edge table: caddy running
+homelab caddy status    # the agent's Caddy answers on its admin socket
 ```
 
-Add to `/etc/wsl.conf` to persist:
+The `homelab` machine appears in **Admin Console → Machines** with a
+`100.x.x.x` address. The leader agent points the `*.home.<domain>` A record at
+that address itself (see `docs/architecture.md`).
 
-```ini
-[boot]
-command = mkdir -p /dev/net && mknod -m 0666 /dev/net/tun c 10 200 || true
-```
+## 5. Approve the device (if not pre-authorized)
 
-## 5. Verify the node is registered
-
-```bash
-homelab status
-```
-
-You should see your `TS_HOSTNAME` node (e.g. `caddy-home`) listed with a `100.x.x.x` Tailscale IP. That IP is what you'll use as the value for the Cloudflare A record.
-
-## 6. Approve the device (if not pre-authorized)
-
-Go to **Admin Console → Machines** and approve `caddy-home` if it appears as pending.
+Go to **Admin Console → Machines** and approve `homelab` (and any
+`homelab-<hostname>` worker node) if it appears as pending.

@@ -25,20 +25,23 @@ keyring, not a file on disk.
 
 ## 2. Add the wildcard A record
 
-Bring up the core stack and find Caddy's Tailscale IP:
+The leader agent creates and updates this record itself, with the same API
+token, each time it starts: `*.<HOME_SUBDOMAIN>.<DOMAIN>` → the IPv4 of its
+tailnet node `homelab` (see the Tailscale admin console). Its log says so:
 
 ```bash
-homelab up
-homelab status
+homelab logs | grep DNS      # agent: DNS *.home.example.com → 100.x.x.x
 ```
 
-Look for the node named after your `TS_HOSTNAME` (e.g. `caddy-home`) and note its `100.x.x.x` address. Tailscale IPs are stable — they only change if the node is removed and re-added to the tailnet.
+Tailscale IPs are stable — they only change if the node is removed and
+re-added to the tailnet, and the agent then updates the record. For
+reference, or to create it by hand:
 
 In Cloudflare DNS for your domain, add:
 
 | Type | Name | Value | Proxy |
 |---|---|---|---|
-| `A` | `*.home` | `100.x.x.x` (your Caddy node's Tailscale IP) | DNS only ⚠️ |
+| `A` | `*.home` | `100.x.x.x` (the `homelab` node's Tailscale IP) | DNS only ⚠️ |
 
 > **Critical:** Set proxy to **DNS only** (grey cloud). Enabling the orange cloud routes traffic through Cloudflare's public network, bypassing Tailscale entirely.
 
