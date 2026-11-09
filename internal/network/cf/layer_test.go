@@ -14,7 +14,6 @@ func TestLayer_Identity(t *testing.T) {
 	assert.Equal(t, "cf", l.Name())
 	assert.Equal(t, "Cloudflare Tunnel", l.Label())
 	assert.Equal(t, "homelab_cloudflared", l.ContainerName())
-	assert.Empty(t, l.Profile(), "no compose profile may start a second connector")
 }
 
 func TestLayer_InterfaceImplementation(t *testing.T) {
@@ -52,10 +51,4 @@ func TestLayer_StatusFromSwarmState(t *testing.T) {
 	state = "not found"
 	assert.Equal(t, "not found", l.Status().ContainerState)
 	assert.Equal(t, "not found", New("/r", nil, nil).Status().ContainerState)
-}
-
-func TestLayer_StartStopRefused(t *testing.T) {
-	l := New("/r", nil, nil)
-	assert.ErrorContains(t, l.Start(), "ext start cf")
-	assert.ErrorContains(t, l.Stop(), "ext start cf")
 }

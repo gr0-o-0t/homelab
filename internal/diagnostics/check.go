@@ -135,17 +135,6 @@ func RunInfraChecks(dc *docker.Client) CheckGroup {
 		})
 	}
 
-	_, tunErr := os.Stat("/dev/net/tun")
-	if tunErr == nil {
-		results = append(results, CheckResult{
-			Name: "/dev/net/tun", Status: StatusPass, Message: "/dev/net/tun present",
-		})
-	} else {
-		results = append(results, CheckResult{
-			Name: "/dev/net/tun", Status: StatusWarn, Message: "/dev/net/tun not found (optional)",
-		})
-	}
-
 	results = append(results, checkLogRotation(dockerDaemonConfig))
 
 	return CheckGroup{Title: "Infrastructure", Results: results}
@@ -200,44 +189,6 @@ func checkLogRotation(path string) CheckResult {
 		}
 	}
 	return CheckResult{Name: name, Status: StatusWarn, Message: advice}
-}
-
-// RunCoreStackChecks checks the core infrastructure containers.
-func RunCoreStackChecks(dc *docker.Client, dir string) CheckGroup {
-	var results []CheckResult
-
-	if _, err := os.Stat(run.CoreComposeFile(dir)); os.IsNotExist(err) {
-		results = append(results, CheckResult{
-			Name: "core/docker-compose.yml", Status: StatusFail, Message: "core/docker-compose.yml present",
-		})
-		return CheckGroup{Title: "Core Stack", Results: results}
-	}
-	results = append(results, CheckResult{
-		Name: "core/docker-compose.yml", Status: StatusPass, Message: "core/docker-compose.yml present",
-	})
-
-	if dc == nil {
-		return CheckGroup{Title: "Core Stack", Results: results}
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	for _, name := range []string{"tailscale", "caddy"} {
-		state := dc.ContainerState(ctx, name)
-		r := CheckResult{Name: name + " container"}
-		switch state {
-		case "running":
-			r.Status, r.Message = StatusPass, fmt.Sprintf("%s container %s", name, state)
-		case "":
-			r.Status, r.Message = StatusFail, fmt.Sprintf("%s container not found", name)
-		default:
-			r.Status, r.Message = StatusWarn, fmt.Sprintf("%s container %s", name, state)
-		}
-		results = append(results, r)
-	}
-
-	return CheckGroup{Title: "Core Stack", Results: results}
 }
 
 // RunServiceConfigChecks validates a service's config files and required vars.

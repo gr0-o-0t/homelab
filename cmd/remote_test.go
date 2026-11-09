@@ -26,7 +26,7 @@ func TestRoot_ForwardsNonLocalCommands(t *testing.T) {
 	calls := fakeAgent(t, 7, nil)
 
 	for _, argv := range [][]string{
-		{"up", "web", "--build"},
+		{"up", "web", "-a"},
 		{"--no-color", "status", "web"},
 		{"cf", "route", "add", "web"},
 		{"exec", "web", "ls", "-la"},
@@ -35,7 +35,7 @@ func TestRoot_ForwardsNonLocalCommands(t *testing.T) {
 		assert.Equal(t, 7, executeArgs(argv), "%q: the remote exit code is the process's", argv)
 	}
 	assert.Equal(t, [][]string{
-		{"up", "web", "--build"},
+		{"up", "web", "-a"},
 		{"--no-color", "status", "web"},
 		{"cf", "route", "add", "web"},
 		{"exec", "web", "ls", "-la"},

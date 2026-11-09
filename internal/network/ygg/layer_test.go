@@ -30,20 +30,6 @@ func TestLayer_LegacyConfDir(t *testing.T) {
 	assert.Equal(t, "conf.d-ygg", New("/test/repo", nil, nil).LegacyConfDir())
 }
 
-// Every layer used to hardcode an empty env, so their compose calls ran with no
-// variables at all — visible as "WARN The TS_AUTHKEY variable is not set", and
-// one `Layer.Start()` (a bare `--profile X up -d`, which targets the whole
-// file) away from recreating the tailscale container with a blank auth key.
-func TestLayer_Env_ComesFromInjectedFunc(t *testing.T) {
-	l := New("/test/repo", nil, func() map[string]string {
-		return map[string]string{"TS_AUTHKEY": "tskey-abc"}
-	})
-	assert.Equal(t, "tskey-abc", l.env()["TS_AUTHKEY"])
-
-	// nil stays tolerated — tests build layers without one — but must not panic.
-	assert.Empty(t, New("/test/repo", nil, nil).env())
-}
-
 // enable does what internal/routing does for `homelab enable --ygg`: the
 // daemon side, then the blocks rendered from Sites. The mesh has no naming, so
 // Caddy routes by listening port and only this layer knows it. Each block is

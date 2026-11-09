@@ -1,4 +1,6 @@
-// Package run wraps os/exec for docker and docker compose invocations.
+// Package run wraps os/exec for docker CLI invocations (database dumps and
+// restores, volume helpers, network checks). Service lifecycle goes through
+// the Swarm API (internal/swarm), never docker compose.
 //
 // All subprocess calls use a hardcoded binary (docker). gosec G204 is
 // intentionally suppressed — the binary is never user-controlled.
@@ -32,22 +34,6 @@ func Default() *Commander {
 	}
 }
 
-// DockerComposeEnv runs docker compose with env vars injected directly into
-// the subprocess environment. Vars in env override any same-named vars already
-// present in the parent process environment. Nothing is written to disk.
-func (c *Commander) DockerComposeEnv(composeFile string, env map[string]string, args ...string) error {
-	argv := append([]string{"compose", "-f", composeFile}, args...)
-	cmd := exec.Command("docker", argv...)
-	cmd.Stdout = c.Stdout
-	cmd.Stderr = c.Stderr
-	cmd.Stdin = os.Stdin
-	cmd.Env = MergeEnv(os.Environ(), env)
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("docker: %w", err)
-	}
-	return nil
-}
-
 // DockerExec runs: docker exec <container> <args...>
 func (c *Commander) DockerExec(container string, args ...string) error {
 	return c.run("docker", append([]string{"exec", container}, args...)...)
@@ -66,11 +52,6 @@ func DockerNetworkExists(name string) (bool, error) {
 		return false, err
 	}
 	return true, nil
-}
-
-// DockerNetworkCreate creates a named Docker network.
-func (c *Commander) DockerNetworkCreate(name string) error {
-	return c.run("docker", "network", "create", name)
 }
 
 // ContainerStatus returns the Docker container state for the given container
@@ -143,30 +124,7 @@ func (c *Commander) RunFrom(r io.Reader, name string, args ...string) error {
 	return nil
 }
 
-// MergeEnv returns a new env slice starting from base, with each entry in
-// overrides replacing any same-named key. Our vars always win.
-func MergeEnv(base []string, overrides map[string]string) []string {
-	merged := make(map[string]string, len(base)+len(overrides))
-	for _, kv := range base {
-		k, v, _ := strings.Cut(kv, "=")
-		merged[k] = v
-	}
-	for k, v := range overrides {
-		merged[k] = v
-	}
-	out := make([]string, 0, len(merged))
-	for k, v := range merged {
-		out = append(out, k+"="+v)
-	}
-	return out
-}
-
 // --- Path helpers ---
-
-// CoreComposeFile returns the path to core/docker-compose.yml inside configDir.
-func CoreComposeFile(configDir string) string {
-	return filepath.Join(configDir, "core", "docker-compose.yml")
-}
 
 // ServiceComposeFile returns the path to services/<name>/docker-compose.yml inside configDir.
 func ServiceComposeFile(configDir, name string) string {

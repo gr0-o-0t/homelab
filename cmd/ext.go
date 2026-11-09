@@ -2,12 +2,10 @@ package cmd
 
 import (
 	"fmt"
-	"slices"
 	"strings"
 
 	"github.com/groot/homelab/internal/config"
 	"github.com/groot/homelab/internal/network"
-	"github.com/groot/homelab/internal/run"
 	"github.com/groot/homelab/internal/tui/styles"
 	"github.com/spf13/cobra"
 )
@@ -15,35 +13,27 @@ import (
 var extCmd = &cobra.Command{
 	Use:   "ext",
 	Short: "Manage network extensions",
-	Long: `Manage network extensions that add exposure layers to the core stack.
+	Long: `Manage network extensions that add exposure layers beside the tailnet.
 
 Extensions:
-  cf   Cloudflare Tunnel  (public internet via cloudflared)
-  tor  Tor onion service  (.onion addresses)
-  i2p  I2P eepsite proxy  (.i2p addresses)
-  ygg  Yggdrasil mesh     (IPv6 mesh)
+  cf   Cloudflare Tunnel  (public internet via cloudflared, a Swarm service)
+
+Tor, I2P and Yggdrasil are not available in cluster mode yet.
 
 Commands:
-  ext enable <ext>         Turn an extension on and start its container
-  ext disable <ext>        Stop its container and turn it off
+  ext enable <ext>         Turn an extension on and deploy it
+  ext disable <ext>        Remove it and turn it off
   ext list                 List extensions and their enabled/disabled status
-  ext status [ext]         Show container status for all or one extension
+  ext status [ext]         Show the state of all or one extension
   ext logs [ext]           Stream logs for all or one extension
-  ext start [ext]          Start extension containers
-  ext stop [ext]           Stop extension containers
 
-Extension-specific management (Cloudflare DNS routes, per-layer status/logs)
-lives under each extension's own top-level command, not under "ext":
+Extension-specific management lives under its own top-level command:
   homelab cf route add <svc>     Add a Cloudflare DNS route
-  homelab tor status             Tor-specific status
-  homelab i2p status             I2P-specific status
-  homelab ygg status             Yggdrasil-specific status
+  homelab cf status              Cloudflare Tunnel status
 
 Service-level exposure is managed via the root enable/disable command:
-  homelab enable <svc> --i2p    expose via I2P eepsite
-  homelab enable <svc> --tor    expose as Tor .onion service
-  homelab enable <svc> --ygg    expose on Yggdrasil mesh
-  homelab disable <svc> --i2p   remove I2P eepsite`,
+  homelab enable <svc> --cf     expose via Cloudflare Tunnel
+  homelab disable <svc> --cf    remove it`,
 }
 
 // ── valid extensions ─────────────────────────────────────────────────────────
@@ -88,8 +78,8 @@ var extListCmd = &cobra.Command{
 
 var extStatusCmd = &cobra.Command{
 	Use:   "status [extension]",
-	Short: "Show extension container status",
-	Long: `Show whether each extension's container is running.
+	Short: "Show extension status",
+	Long: `Show whether each extension runs.
 
 Without an argument, shows status for every enabled extension.
 With an extension name, show status for that specific extension.`,
@@ -106,7 +96,7 @@ With an extension name, show status for that specific extension.`,
 		}
 		fmt.Println()
 		for _, l := range targets {
-			state := containerStatus(l.ContainerName())
+			state := l.Status().ContainerState
 			if state == containerStateRunning {
 				fmt.Printf("  %s  %s  %s\n",
 					styles.Success.Render("✓"),
@@ -129,8 +119,8 @@ With an extension name, show status for that specific extension.`,
 
 var extLogsCmd = &cobra.Command{
 	Use:   "logs [extension]",
-	Short: "Stream extension container logs",
-	Long: `Stream logs from extension containers.
+	Short: "Stream extension logs",
+	Long: `Stream logs from extensions.
 
 Without an argument, shows logs for all enabled extensions.
 With an extension name, shows logs for that specific extension.`,
@@ -144,46 +134,15 @@ With an extension name, shows logs for that specific extension.`,
 		if len(targets) == 0 {
 			return fmt.Errorf("no extensions enabled or specified")
 		}
-
-		logArgs := []string{"logs", "-f"}
+		// Every extension available in cluster mode is a Swarm service
+		// (cloudflared): its logs come from `docker service logs`.
 		for _, l := range targets {
-			logArgs = append(logArgs, l.ContainerName())
+			if err := serviceLogsCLI(cmdContext(), []string{"service", cmdLogs, "--follow", l.ContainerName()},
+				cmd.OutOrStdout(), cmd.ErrOrStderr()); err != nil {
+				return err
+			}
 		}
-		return coreCompose(logArgs...)
-	},
-}
-
-// ── start ─────────────────────────────────────────────────────────────────────
-
-var extBuild bool
-
-var extStartCmd = &cobra.Command{
-	Use:   "start [extension]",
-	Short: "Start extension containers",
-	Long: `Start extension Docker containers.
-
-  homelab ext start          # start all enabled extensions
-  homelab ext start tor      # start Tor container`,
-	Args:              cobra.MaximumNArgs(1),
-	ValidArgsFunction: completeExtNames,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return runExtStartStop(args, false, extBuild)
-	},
-}
-
-// ── stop ─────────────────────────────────────────────────────────────────────
-
-var extStopCmd = &cobra.Command{
-	Use:   "stop [extension]",
-	Short: "Stop extension containers",
-	Long: `Stop extension Docker containers.
-
-  homelab ext stop           # stop all enabled extensions
-  homelab ext stop tor       # stop Tor container`,
-	Args:              cobra.MaximumNArgs(1),
-	ValidArgsFunction: completeExtNames,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return runExtStartStop(args, true, false)
+		return nil
 	},
 }
 
@@ -213,7 +172,7 @@ func resolveExtTargets(args []string) ([]network.NetworkLayer, error) {
 }
 
 // optionalLayer resolves an `ext` argument to a layer an ext command may
-// start and stop — never the private tailnet, which is core.
+// turn on and off — never the private tailnet, which is the agent's own.
 func optionalLayer(name string) (network.NetworkLayer, error) {
 	l, err := layerByName(name)
 	if err == nil && l.Flag() == "" {
@@ -222,69 +181,11 @@ func optionalLayer(name string) (network.NetworkLayer, error) {
 	return l, err
 }
 
-// runExtStartStop starts or stops extension containers via docker compose.
-// build forces image rebuild before starting (no-op for stop).
-func runExtStartStop(args []string, stop bool, build bool) error {
-	dir := configDir()
-	env := buildEnv(dir, "")
-
-	// Determine which extension(s) to act on.
-	targets, err := resolveExtTargets(args)
-	if err != nil {
-		return err
-	}
-	if len(targets) == 0 {
-		return fmt.Errorf("no extensions enabled or specified")
-	}
-
-	// cloudflared is a Swarm service, not a compose container.
-	cfTarget := slices.ContainsFunc(targets, func(l network.NetworkLayer) bool { return l.Name() == cloudflaredLayer })
-	if cfTarget {
-		targets = slices.DeleteFunc(targets, func(l network.NetworkLayer) bool { return l.Name() == cloudflaredLayer })
-		verb, do := "Starting", func() error { return startCloudflared(dir, env) }
-		if stop {
-			verb, do = "Stopping", func() error { return stopCloudflared(dir) }
-		}
-		fmt.Printf("%s %s cloudflared…\n", styles.Primary.Render("→"), verb)
-		if err := do(); err != nil {
-			return err
-		}
-	}
-	if len(targets) == 0 {
-		return nil
-	}
-
-	if stop {
-		fmt.Printf("%s Stopping extension containers…\n", styles.Warning.Render("→"))
-		args := []string{"stop"}
-		for _, l := range targets {
-			args = append(args, l.ContainerName())
-		}
-		return run.Default().DockerComposeEnv(run.CoreComposeFile(dir), env, args...)
-	}
-
-	// Collect unique profiles.
-	seen := make(map[string]bool)
-	var upArgs []string
-	for _, l := range targets {
-		if p := l.Profile(); p != "" && !seen[p] {
-			seen[p] = true
-			upArgs = append(upArgs, "--profile", p)
-		}
-	}
-	fmt.Printf("%s Starting extension containers…\n", styles.Primary.Render("→"))
-	upArgs = append(upArgs, "up", "-d")
-	if build {
-		upArgs = append(upArgs, "--build")
-	}
-	return run.Default().DockerComposeEnv(run.CoreComposeFile(dir), env, upArgs...)
-}
-
 // ── enable / disable ─────────────────────────────────────────────────────────
 
 var extEnableCmd = &cobra.Command{
 	Use:               "enable <ext>",
-	Short:             "Turn an extension on and start its container",
+	Short:             "Turn an extension on and deploy it",
 	Args:              cobra.ExactArgs(1),
 	ValidArgsFunction: completeExtNames,
 	RunE:              func(_ *cobra.Command, args []string) error { return setExtEnabled(args[0], true) },
@@ -292,15 +193,15 @@ var extEnableCmd = &cobra.Command{
 
 var extDisableCmd = &cobra.Command{
 	Use:               "disable <ext>",
-	Short:             "Stop an extension's container and turn it off",
+	Short:             "Remove an extension and turn it off",
 	Args:              cobra.ExactArgs(1),
 	ValidArgsFunction: completeExtNames,
 	RunE:              func(_ *cobra.Command, args []string) error { return setExtEnabled(args[0], false) },
 }
 
 // setExtEnabled records the extension in config.yaml — the same list `homelab
-// setup` edits — and starts or stops its container to match. Services still
-// need `homelab enable <svc> --<ext>` to be exposed on it.
+// setup` edits — and deploys or removes it to match. Services still need
+// `homelab enable <svc> --<ext>` to be exposed on it.
 func setExtEnabled(ext string, on bool) error {
 	if _, err := optionalLayer(ext); err != nil {
 		return err
@@ -314,9 +215,13 @@ func setExtEnabled(ext string, on bool) error {
 	if cfg == nil {
 		return fmt.Errorf("no config.yaml — run homelab setup first")
 	}
+	root := configDir()
 	if !on {
-		if err := runExtStartStop([]string{ext}, true, false); err != nil {
-			return err
+		if ext == cloudflaredLayer {
+			fmt.Printf("%s Stopping cloudflared…\n", styles.Primary.Render("→"))
+			if err := stopCloudflared(root); err != nil {
+				return err
+			}
 		}
 		cfg.DisableExtension(ext)
 		return config.Save(cfgFile, cfg)
@@ -325,8 +230,11 @@ func setExtEnabled(ext string, on bool) error {
 	if err := config.Save(cfgFile, cfg); err != nil {
 		return err
 	}
-	if err := runExtStartStop([]string{ext}, false, false); err != nil {
-		return err
+	if ext == cloudflaredLayer {
+		fmt.Printf("%s Starting cloudflared…\n", styles.Primary.Render("→"))
+		if err := startCloudflared(root, buildEnv(root, "")); err != nil {
+			return err
+		}
 	}
 	fmt.Printf("%s %s enabled — expose a service with %s\n", styles.Success.Render("✓"),
 		extLabel(ext), styles.Primary.Render("homelab enable <svc> --"+ext))
@@ -336,24 +244,14 @@ func setExtEnabled(ext string, on bool) error {
 // ── init ──────────────────────────────────────────────────────────────────────
 
 func init() {
-	extStartCmd.Flags().BoolVar(&extBuild, "build", false, "Rebuild images before starting")
-
 	extCmd.AddCommand(
 		extEnableCmd,
 		extDisableCmd,
 		extListCmd,
 		extStatusCmd,
 		extLogsCmd,
-		extStartCmd,
-		extStopCmd,
 	)
 
-	// Register full per-layer commands at root level for extension-specific
-	// subcommands (route management, per-layer status/logs, etc.) alongside
-	// the "ext" hub for cross-extension list/status/logs/start/stop.
 	rootCmd.AddCommand(extCmd)
 	rootCmd.AddCommand(cfCmd)
-	rootCmd.AddCommand(torCmd)
-	rootCmd.AddCommand(i2pCmd)
-	rootCmd.AddCommand(yggCmd)
 }

@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/groot/homelab/internal/run"
 	"github.com/groot/homelab/internal/swarm"
 	"github.com/groot/homelab/internal/tui/styles"
 	"github.com/spf13/cobra"
@@ -12,12 +11,11 @@ import (
 var pullFlags = batchFlags{}
 
 var pullCmd = &cobra.Command{
-	Use:   "pull [service...]",
+	Use:   "pull <service...>",
 	Short: "Pull latest Docker images",
-	Long: `Pull the latest Docker images for services or the core stack.
-Does NOT recreate containers — use 'homelab up' after pulling, or 'homelab update'.
+	Long: `Pull the latest Docker images for services.
+Does NOT redeploy — use 'homelab up' after pulling, or 'homelab update'.
 
-  homelab pull                  # core stack images
   homelab pull jellyfin immich  # these services
   homelab pull -a               # every installed service
   homelab pull --group media    # a service group`,
@@ -25,10 +23,6 @@ Does NOT recreate containers — use 'homelab up' after pulling, or 'homelab upd
 	ValidArgsFunction: completeServiceNames,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		root := configDir()
-		if len(args) == 0 && !pullFlags.all && pullFlags.group == "" {
-			fmt.Printf("%s Pulling core stack images…\n", styles.Primary.Render("→"))
-			return run.Default().DockerComposeEnv(run.CoreComposeFile(root), buildEnv(root, ""), withProfiles(root, "pull")...)
-		}
 		names, err := resolveTargets(root, pullFlags.all, pullFlags.group, args)
 		if err != nil {
 			return err

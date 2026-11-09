@@ -54,7 +54,7 @@ func TestResolveTargets_NoArgNoFlags_Errors(t *testing.T) {
 	root := t.TempDir()
 	_, err := resolveTargets(root, false, "", nil)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "required")
+	assert.Contains(t, err.Error(), "name a service, or use -a/--all")
 }
 
 func TestResolveTargets_AllAndGroupMutuallyExclusive(t *testing.T) {
@@ -249,4 +249,17 @@ func TestPublicHostname_NoSubdomainPrefix(t *testing.T) {
 		"DOMAIN": "myhomelab.io",
 	}
 	assert.Equal(t, "gitea.myhomelab.io", publicHostname("gitea", env))
+}
+
+// With the Compose core stack gone, a lifecycle verb with no service has
+// nothing to act on: it refuses rather than guessing.
+func TestLifecycleVerbs_NoServiceRefuses(t *testing.T) {
+	for _, verb := range []string{"up", "down", "start", "stop", "restart", "pull", "update"} {
+		resetFlags()
+		rootCmd.SetArgs([]string{"--config-dir", t.TempDir(), verb})
+		err := rootCmd.Execute()
+		require.Error(t, err, verb)
+		assert.Contains(t, err.Error(), "name a service, or use -a/--all", verb)
+	}
+	resetFlags()
 }

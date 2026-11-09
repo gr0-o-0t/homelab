@@ -4,17 +4,12 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"io/fs"
 	"os"
-	"path/filepath"
 	"strings"
 
-	"github.com/groot/homelab/assets"
 	"github.com/groot/homelab/internal/config"
 	"github.com/groot/homelab/internal/db"
-	"github.com/groot/homelab/internal/run"
 	"github.com/groot/homelab/internal/secrets"
-	"github.com/groot/homelab/internal/tui/spinner"
 	"github.com/groot/homelab/internal/tui/styles"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -93,52 +88,12 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 	step(styles.Success.Render("✓"), "config.yaml written to "+dir)
 	step(styles.Success.Render("✓"), "Secrets stored in keyring")
 
-	// ── Install core assets ───────────────────────────────────────────────────
-	fmt.Printf("\n  %s\n\n", styles.Accent.Render("─── Installing core files ──────────────────────────"))
-	if err := installAssets(dir); err != nil {
-		step(styles.Err.Render("✗"), fmt.Sprintf("Installing assets: %v", err))
-	} else {
-		step(styles.Success.Render("✓"), "core/ installed to "+filepath.Join(dir, "core"))
-		step(styles.Success.Render("✓"), "caddy/ installed to "+filepath.Join(dir, "caddy"))
-		step(styles.Success.Render("✓"), "tor/ installed to "+filepath.Join(dir, "tor"))
-		step(styles.Success.Render("✓"), "i2p/ installed to "+filepath.Join(dir, "i2p"))
-		step(styles.Success.Render("✓"), "yggdrasil/ installed to "+filepath.Join(dir, "yggdrasil"))
-	}
-
-	// ── Infrastructure ────────────────────────────────────────────────────────
-	fmt.Printf("\n  %s\n\n", styles.Accent.Render("─── Infrastructure ─────────────────────────────────"))
-
-	exists, err := run.DockerNetworkExists("home-services")
-	if err != nil {
-		step(styles.Warning.Render("!"), fmt.Sprintf("Could not check Docker network: %v", err))
-	} else if exists {
-		step(styles.Success.Render("✓"), "Docker network 'home-services' already exists")
-	} else {
-		if spinErr := spinner.Run("Creating Docker network 'home-services'…", func() error {
-			return run.Default().DockerNetworkCreate("home-services")
-		}); spinErr != nil {
-			step(styles.Err.Render("✗"), fmt.Sprintf("Creating network failed: %v", spinErr))
-		} else {
-			step(styles.Success.Render("✓"), "Docker network 'home-services' created")
-		}
-	}
-
-	if _, err := os.Stat("/dev/net/tun"); os.IsNotExist(err) {
-		step(styles.Warning.Render("!"), "/dev/net/tun not found — run: sudo modprobe tun")
-	} else {
-		step(styles.Success.Render("✓"), "/dev/net/tun present")
-	}
-
 	// ── Next steps ────────────────────────────────────────────────────────────
 	fmt.Printf("\n%s\n", styles.Header.Render("Setup complete — next steps:"))
 	fmt.Printf("  1. %s\n", styles.Primary.Render("homelab add <name>   # install a bundled service"))
 	fmt.Printf("  2. %s\n", styles.Primary.Render("homelab setup <name>"))
-	fmt.Printf("  3. %s\n", styles.Primary.Render("homelab start"))
-	fmt.Printf("  4. %s   %s\n",
-		styles.Primary.Render("homelab status"),
-		styles.Muted.Render("— verify Tailscale joined your tailnet"))
-	fmt.Printf("  5. %s\n", styles.Primary.Render("homelab up <name>"))
-	fmt.Printf("  6. %s\n\n", styles.Primary.Render("homelab enable <name>"))
+	fmt.Printf("  3. %s\n", styles.Primary.Render("homelab up <name>"))
+	fmt.Printf("  4. %s\n\n", styles.Primary.Render("homelab enable <name>"))
 	return nil
 }
 
@@ -446,49 +401,6 @@ func init() {
 
 func step(icon, msg string) {
 	fmt.Printf("  %s  %s\n", icon, msg)
-}
-
-// installAssets copies the embedded core trees from assets.CoreFS into
-// configDir. Files homelab owns outright are overwritten so re-running setup,
-// or `homelab update`, picks up a new version; the rest are only created when
-// missing — see assetIsManaged.
-func installAssets(configDir string) error {
-	// Pre-create services/ so Docker (running as root) doesn't create it
-	// via the Caddy volume mount, which would make it root-owned and break
-	// `homelab add <service>`.
-	if err := os.MkdirAll(filepath.Join(configDir, "services"), 0o750); err != nil {
-		return fmt.Errorf("creating services dir: %w", err)
-	}
-	return fs.WalkDir(assets.CoreFS, ".", func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		dest := filepath.Join(configDir, path)
-		if d.IsDir() {
-			return os.MkdirAll(dest, 0o750)
-		}
-		if _, err := os.Stat(dest); err == nil && !assetIsManaged(path) {
-			return nil
-		}
-		data, err := assets.CoreFS.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		if err := os.MkdirAll(filepath.Dir(dest), 0o750); err != nil {
-			return err
-		}
-		return os.WriteFile(dest, data, 0o600)
-	})
-}
-
-// assetIsManaged reports whether an embedded core file is homelab's to
-// overwrite: the compose file, Dockerfiles and entrypoints, the Caddyfile, and
-// READMEs. Everything else under tor/, i2p/ and yggdrasil/ is a starting point
-// that becomes the user's — i2p/tunnels.conf holds every service's eepsite
-// tunnel, and torrc, i2pd.conf and yggdrasil.conf are meant to be edited — so
-// overwriting them on update would silently drop exposure or local changes.
-func assetIsManaged(path string) bool {
-	return strings.HasPrefix(path, "core/") || path == "caddy/Caddyfile" || filepath.Base(path) == "README"
 }
 
 // ── prompt helpers ────────────────────────────────────────────────────────────

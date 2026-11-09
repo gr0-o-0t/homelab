@@ -24,8 +24,8 @@ const (
 	// Global actions concern the whole stack and take no target: overview,
 	// batch operations over all services or a group, scaffolding, version.
 	Global Scope = iota
-	// Core actions act on the core stack (Tailscale + Caddy + enabled
-	// extensions) — the CLI's no-service forms.
+	// Core actions act on the edge (the leader agent: its Caddy and tailnet
+	// node) — the CLI's no-service forms of logs, doctor and reload.
 	Core
 	// Service actions act on one installed service.
 	Service
@@ -142,7 +142,7 @@ func ServiceTarget(s service.Service, layers []string) Target {
 	return t
 }
 
-// CoreTarget is the core stack row.
+// CoreTarget is the edge row.
 func CoreTarget(layers []string) Target { return Target{Scope: Core, Layers: layers} }
 
 // GlobalTarget is the stack as a whole.
@@ -205,7 +205,7 @@ type Action struct {
 	Available func(Target) bool
 
 	// Commands lists the cobra command paths (without "homelab") and flags
-	// ("up --build") this action exercises, for the parity test.
+	// ("images --quiet") this action exercises, for the parity test.
 	Commands []string
 }
 
@@ -224,7 +224,7 @@ func (a Action) Build(t Target, in Inputs) []string {
 }
 
 // single folds a one-service selection into Name for an action that is not
-// Multi, so it never runs its no-service (core stack) form by accident.
+// Multi, so it never runs its no-service (edge) form by accident.
 func (a Action) single(t Target) Target {
 	if !a.Multi {
 		if t.Name == "" && len(t.Names) == 1 {

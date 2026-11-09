@@ -48,7 +48,7 @@ func clampFrame(s string, w, h int) string {
 // ── Header ────────────────────────────────────────────────────────────────────
 
 func (m Model) renderHeader() string {
-	pills := []string{m.corePill(styles.Icon("box"), caddyContainer, m.core[caddyContainer])}
+	pills := []string{m.corePill(styles.Icon("box"), "agent", m.core[agentContainer])}
 	for _, l := range m.offeredLayers() {
 		pills = append(pills, m.corePill(styles.Icon(layerIcon(l.Name())), l.Name(), m.core[l.ContainerName()]))
 	}
@@ -253,7 +253,7 @@ func (m Model) renderRow(i int, sel bool, w int) string {
 		if i == 0 {
 			c := m.coreService()
 			return cursorMark(sel) + styles.StateGlyph(c.Running, c.Total) + " " +
-				nameStyle(sel).Width(max(w-12, 4)).Render("core stack") + styles.Muted.Render(fmt.Sprintf("%d/%d", c.Running, c.Total))
+				nameStyle(sel).Width(max(w-12, 4)).Render("edge") + styles.Muted.Render(fmt.Sprintf("%d/%d", c.Running, c.Total))
 		}
 		l := m.extensions()[i-1]
 		state := styles.Muted.Render("off")
@@ -441,7 +441,7 @@ func (m Model) logTail(svc *service.Service, w int) []string {
 
 func (m Model) coreDetail(w int) []string {
 	c := m.coreService()
-	lines := titleLine(styles.Icon("core"), "core stack", stateTag(c.Running, c.Total), w)
+	lines := titleLine(styles.Icon("core"), "edge", stateTag(c.Running, c.Total), w)
 	lines = append(lines, "", section("Containers"))
 	for _, name := range m.coreHeaderContainers() {
 		st := m.core[name]

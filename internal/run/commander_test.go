@@ -1,8 +1,7 @@
 package run_test
 
 import (
-	"os"
-	"path/filepath"
+	"bytes"
 	"strings"
 	"testing"
 
@@ -11,94 +10,6 @@ import (
 
 	"github.com/groot/homelab/internal/run"
 )
-
-func sliceToMap(slice []string) map[string]string {
-	m := make(map[string]string)
-	for _, s := range slice {
-		k, v, _ := strings.Cut(s, "=")
-		m[k] = v
-	}
-	return m
-}
-
-func TestMergeEnv_EmptyOverrides(t *testing.T) {
-	base := []string{"PATH=/usr/bin", "HOME=/home/user"}
-	env := map[string]string{}
-
-	result := run.MergeEnv(base, env)
-	m := sliceToMap(result)
-
-	assert.Equal(t, "/usr/bin", m["PATH"])
-	assert.Equal(t, "/home/user", m["HOME"])
-}
-
-func TestMergeEnv_OverridesReplaceExisting(t *testing.T) {
-	base := []string{"PATH=/usr/bin", "HOME=/home/user"}
-	env := map[string]string{"HOME": "/new/home", "NEW_VAR": "new_value"}
-
-	result := run.MergeEnv(base, env)
-	m := sliceToMap(result)
-
-	assert.Equal(t, "/new/home", m["HOME"], "override should replace existing")
-	assert.Equal(t, "new_value", m["NEW_VAR"])
-	assert.Equal(t, "/usr/bin", m["PATH"])
-}
-
-func TestMergeEnv_NewVarsAdded(t *testing.T) {
-	base := []string{"PATH=/usr/bin"}
-	env := map[string]string{"A": "1", "B": "2"}
-
-	result := run.MergeEnv(base, env)
-	m := sliceToMap(result)
-
-	assert.Equal(t, "1", m["A"])
-	assert.Equal(t, "2", m["B"])
-	assert.Equal(t, "/usr/bin", m["PATH"])
-}
-
-func TestMergeEnv_EmptyBase(t *testing.T) {
-	var base []string
-	env := map[string]string{"KEY": "value"}
-
-	result := run.MergeEnv(base, env)
-	m := sliceToMap(result)
-
-	assert.Equal(t, "value", m["KEY"])
-}
-
-func TestMergeEnv_EmptyEnv(t *testing.T) {
-	base := []string{"KEY=value"}
-	var env map[string]string
-
-	result := run.MergeEnv(base, env)
-	m := sliceToMap(result)
-
-	assert.Equal(t, "value", m["KEY"])
-}
-
-func TestMergeEnv_EmptyBoth(t *testing.T) {
-	var base []string
-	var env map[string]string
-
-	result := run.MergeEnv(base, env)
-
-	assert.Empty(t, result)
-}
-
-func TestMergeEnv_ValuesWithEquals(t *testing.T) {
-	base := []string{"KEY=value=with=equals"}
-	env := map[string]string{}
-
-	result := run.MergeEnv(base, env)
-	m := sliceToMap(result)
-
-	assert.Equal(t, "value=with=equals", m["KEY"])
-}
-
-func TestCoreComposeFile(t *testing.T) {
-	result := run.CoreComposeFile("/home/user/.config/homelab")
-	assert.Equal(t, "/home/user/.config/homelab/core/docker-compose.yml", result)
-}
 
 func TestServiceComposeFile(t *testing.T) {
 	result := run.ServiceComposeFile("/home/user/.config/homelab", "uptime-kuma")
@@ -117,30 +28,15 @@ func TestCommander_Default(t *testing.T) {
 	require.NotNil(t, cmd.Stderr)
 }
 
-func TestCommander_DockerComposeEnv_ConstructsCorrectArgs(t *testing.T) {
-	dir := t.TempDir()
-	composePath := filepath.Join(dir, "docker-compose.yml")
-	require.NoError(t, os.WriteFile(composePath, []byte("services: {}"), 0o644))
+func TestCommander_RunToAndRunFrom(t *testing.T) {
+	var out bytes.Buffer
+	c := &run.Commander{Stdout: &out, Stderr: &out}
+	require.NoError(t, c.RunFrom(strings.NewReader("piped\n"), "cat"))
+	assert.Equal(t, "piped\n", out.String())
 
-	var stdoutCaptured []byte
-	cmd := &run.Commander{
-		Stdout: &capturingWriter{buf: &stdoutCaptured},
-		Stderr:  os.Stderr,
-	}
-
-	// `config` renders the file without contacting a daemon, so the test needs
-	// docker installed but never touches a running one.
-	err := cmd.DockerComposeEnv(composePath, map[string]string{"TEST_VAR": "test_value"}, "config")
-	assert.NoError(t, err)
-}
-
-type capturingWriter struct {
-	buf *[]byte
-}
-
-func (w *capturingWriter) Write(p []byte) (n int, err error) {
-	*w.buf = append(*w.buf, p...)
-	return len(p), nil
+	var to bytes.Buffer
+	require.NoError(t, c.RunTo(&to, "echo", "streamed"))
+	assert.Equal(t, "streamed\n", to.String())
 }
 
 func TestDockerNetworkExists_NonexistentNetwork(t *testing.T) {

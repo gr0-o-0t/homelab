@@ -26,12 +26,12 @@ var Mutating = map[string]bool{
 	"add": true, "setup": true, "up": true, "down": true, "start": true, "stop": true,
 	"restart": true, "pull": true, "update": true, "delete": true, "enable": true,
 	"disable": true, "reload": true, "backup": true, "restore": true, "prune": true,
-	"ext": true, "cf": true, "migrate": true, "new": true, "cluster": true, "files": true,
+	"ext": true, "cf": true, "new": true, "cluster": true, "files": true,
 }
 
 // ReadOnly are the canonical paths of observing subcommands under a
-// Mutating command; their siblings (cf route add/rm, ext enable/disable/
-// start/stop) take the lock.
+// Mutating command; their siblings (cf route add/rm, ext enable/disable)
+// take the lock.
 var ReadOnly = map[string]bool{
 	"cf status": true, "cf logs": true,
 	"ext list": true, "ext status": true, "ext logs": true,

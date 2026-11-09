@@ -409,3 +409,16 @@ func TestTranslate_ContainerLabelsNameStackAndContainer(t *testing.T) {
 		assert.False(t, has, "%s has no container_name", s.Name)
 	}
 }
+
+// LoadProject names the stack after the directory and interpolates env, as
+// Translate does: what `homelab config` and `images` show is what deploys.
+func TestLoadProject_InterpolatesAndNamesStack(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "web")
+	require.NoError(t, os.MkdirAll(dir, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "docker-compose.yml"),
+		[]byte("services:\n  app:\n    image: nginx:${TAG:-latest}\n"), 0o600))
+	p, err := swarm.LoadProject(dir, map[string]string{"TAG": "1.27"})
+	require.NoError(t, err)
+	assert.Equal(t, "web", p.Name)
+	assert.Equal(t, "nginx:1.27", p.Services["app"].Image)
+}

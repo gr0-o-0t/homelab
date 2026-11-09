@@ -1288,9 +1288,9 @@ func (a *app) networkView() {
 	if card("##core", 0, 0, imgui.ChildFlagsAutoResizeY) {
 		withFont(nil, 18, func() { textC(cPrimary, Glyph("shield")) })
 		imgui.SameLineV(0, a.px(10))
-		heading("Core stack", 18)
+		heading("Edge", 18)
 		imgui.SameLineV(0, a.px(10))
-		textC(cMuted, "Tailscale + Caddy + enabled extensions — every route goes through it")
+		textC(cMuted, "The leader agent (Caddy, tailnet node) + enabled extensions — every route goes through it")
 		imgui.Dummy(v2(0, a.px(2)))
 		for i, c := range a.v.core {
 			if i > 0 {

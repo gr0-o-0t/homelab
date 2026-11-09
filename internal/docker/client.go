@@ -1,6 +1,5 @@
 // Package docker wraps the Docker SDK client for read-only status queries.
-// Lifecycle operations (up/down/restart) are still delegated to the
-// docker compose CLI via internal/run to preserve Compose reconciliation logic.
+// Lifecycle operations go through the Swarm API (internal/swarm), not here.
 package docker
 
 import (

@@ -162,5 +162,3 @@ func runServiceStatus(dir, name string, env map[string]string) error {
 	fmt.Println()
 	return nil
 }
-
-// tailscaleFQDN returns the Tailscale node FQDN.

@@ -83,27 +83,8 @@ var (
 func (l *Layer) Name() string          { return "i2p" }
 func (l *Layer) Label() string         { return "I2P router + eepsite proxy" }
 func (l *Layer) ContainerName() string { return containerName }
-func (l *Layer) Profile() string       { return "i2p" }
 func (l *Layer) Flag() string          { return "i2p" }
 func (l *Layer) LegacyConfDir() string { return "conf.d-i2p" }
-
-// ── Lifecycle ─────────────────────────────────────────────────────────────────
-
-func (l *Layer) Start() error {
-	return l.runner.DockerComposeEnv(
-		run.CoreComposeFile(l.repoRoot),
-		l.env(),
-		"--profile", "i2p", "up", "-d",
-	)
-}
-
-func (l *Layer) Stop() error {
-	return l.runner.DockerComposeEnv(
-		run.CoreComposeFile(l.repoRoot),
-		l.env(),
-		"stop", containerName,
-	)
-}
 
 func (l *Layer) Status() network.Status {
 	state := l.runner.ContainerStatus(containerName)

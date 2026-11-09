@@ -47,13 +47,6 @@ func TestRunInfraChecks_NilClient(t *testing.T) {
 	assert.Equal(t, diagnostics.StatusFail, g.Results[0].Status)
 }
 
-func TestRunCoreStackChecks_NilClient(t *testing.T) {
-	g := diagnostics.RunCoreStackChecks(nil, "/nonexistent")
-	assert.Equal(t, "Core Stack", g.Title)
-	// No compose file should fail
-	assert.NotEmpty(t, g.Results)
-}
-
 func TestRunServiceConfigChecks_NonExistentService(t *testing.T) {
 	g := diagnostics.RunServiceConfigChecks("/nonexistent", "nosuchservice")
 	assert.Equal(t, "Service Configuration", g.Title)

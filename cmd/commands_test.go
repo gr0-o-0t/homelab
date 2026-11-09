@@ -51,22 +51,6 @@ func TestCoreStop_MissingCoreStack(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestTailscaleStatus_MissingConfigDir(t *testing.T) {
-	tmp := t.TempDir()
-	nonexistent := filepath.Join(tmp, "nonexistent")
-
-	rootCmd := cmd.RootCmd()
-	rootCmd.SetArgs([]string{
-		"--config-dir", nonexistent,
-		"ts", "status",
-	})
-
-	err := rootCmd.Execute()
-	// The ts status command does not error on missing config — it renders status
-	// (which may show "not found" when no docker container is running).
-	assert.NoError(t, err)
-}
-
 func TestCaddyValidate_MissingCaddyfile(t *testing.T) {
 	tmp := t.TempDir()
 

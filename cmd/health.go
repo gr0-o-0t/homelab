@@ -1,44 +1,13 @@
 package cmd
 
 import (
-	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 
-	"github.com/groot/homelab/internal/network/tor"
-	"github.com/groot/homelab/internal/swarm"
 	"github.com/groot/homelab/internal/tui/styles"
 )
 
 // ── Health / status helpers ─────────────────────────────────────────────────
-
-func fileExistsAt(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
-}
-
-func dockerDaemonUp() bool {
-	cmd := exec.Command("docker", "info")
-	cmd.Stdout = io.Discard
-	cmd.Stderr = io.Discard
-	return cmd.Run() == nil
-}
-
-// containerStatus returns the Docker container state ("running", "exited", "not found", etc.).
-func containerStatus(name string) string {
-	if name == swarm.CloudflaredService { // a Swarm service, not a container
-		return cloudflaredState(configDir())
-	}
-	out, err := exec.Command( // nosec G204 -- binary is "docker", name is service name constant
-		"docker", "inspect", "--format={{.State.Status}}", name,
-	).Output()
-	if err != nil {
-		return "not found"
-	}
-	return strings.TrimSpace(string(out))
-}
 
 func stateLabel(state string) string {
 	switch state {
@@ -49,31 +18,6 @@ func stateLabel(state string) string {
 	default:
 		return styles.Warning.Render(state)
 	}
-}
-
-func tailscaleIP() (string, bool) {
-	out, err := exec.Command(
-		"docker", "exec", "tailscale", "tailscale", "ip", "-4",
-	).Output()
-	if err != nil {
-		return "", false
-	}
-	ip := strings.TrimSpace(string(out))
-	return ip, ip != ""
-}
-
-// torOnionAddress returns the real .onion address for a Tor hidden service.
-// Falls back to empty string if Tor container not running or service not ready.
-func torOnionAddress(name string) string {
-	layer, ok := extRegistry().Get("tor")
-	if !ok {
-		return ""
-	}
-	l, ok := layer.(*tor.Layer)
-	if !ok {
-		return ""
-	}
-	return l.OnionAddress(name)
 }
 
 // removeBrokenSymlinks scans dir for symlinks whose targets no longer exist.

@@ -36,10 +36,9 @@ func TestStatusTable_EmptyDir(t *testing.T) {
 	assert.NoError(t, err, "status command must not error on empty config dir")
 }
 
-func TestStatusCoreTable_RendersCoreSection(t *testing.T) {
+func TestStatusEdgeTable_RendersEdgeSection(t *testing.T) {
 	tmp := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(tmp, "services"), 0o755))
-	require.NoError(t, os.MkdirAll(filepath.Join(tmp, "caddy", "conf.d"), 0o755))
 
 	// Create a service so the full command path is exercised
 	svcDir := filepath.Join(tmp, "services", "testapp")
@@ -70,7 +69,9 @@ func TestStatusCoreTable_RendersCoreSection(t *testing.T) {
 
 	assert.Contains(t, output, "SERVICE", "table header must contain SERVICE column label")
 	assert.Contains(t, output, "STATE", "table header must contain STATE column label")
-	assert.Contains(t, output, "caddy", "caddy must appear in core table")
+	assert.Contains(t, output, "Edge", "the edge section replaces the core stack")
+	assert.Contains(t, output, "caddy", "the agent's caddy must appear in the edge table")
+	assert.NotContains(t, output, "Core Stack")
 
 	// TestApp should appear in the services section
 	assert.Contains(t, output, "testapp", "test service must appear in output")

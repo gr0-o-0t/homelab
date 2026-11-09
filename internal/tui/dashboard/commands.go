@@ -15,7 +15,6 @@ import (
 
 	"github.com/groot/homelab/internal/actions"
 	"github.com/groot/homelab/internal/backup"
-	"github.com/groot/homelab/internal/run"
 	"github.com/groot/homelab/internal/service"
 )
 
@@ -90,17 +89,17 @@ func inspectTickCmd() tea.Cmd {
 // fetchLogsCmd tails the selected service's logs for the detail pane.
 func (m Model) fetchLogsCmd() tea.Cmd {
 	svc := m.selectedService()
-	if m.view != viewServices || svc == nil || !svc.Installed || isCore(svc) || m.opt.Docker == nil {
+	if m.view != viewServices || svc == nil || !svc.Installed || isCore(svc) || m.opt.Docker == nil || len(m.opt.CLI) == 0 {
 		return nil
 	}
-	name, root, buildEnv := svc.Name, m.opt.Root, m.opt.BuildEnv
+	name := svc.Name
+	argv := m.argv([]string{"logs", "--tail", fmt.Sprintf("%d", logTailLines), name})
 	return func() tea.Msg {
-		var buf bytes.Buffer
-		r := &run.Commander{Stdout: &buf, Stderr: &buf}
-		_ = r.DockerComposeEnv(run.ServiceComposeFile(root, name), resolveEnv(buildEnv, name),
-			"logs", "--tail", fmt.Sprintf("%d", logTailLines), "--no-color")
+		// The CLI's own `logs`: every container of the stack, from whichever
+		// node runs it.
+		out, _ := exec.Command(argv[0], argv[1:]...).CombinedOutput() // #nosec G204 -- argv is the CLI plus fixed args
 		var kept []string
-		for _, l := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		for _, l := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 			if l != "" {
 				kept = append(kept, l)
 			}

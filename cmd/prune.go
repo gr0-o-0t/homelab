@@ -1,22 +1,28 @@
 package cmd
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"maps"
+	"path/filepath"
+	"slices"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
-	"github.com/groot/homelab/internal/backup"
 	"github.com/groot/homelab/internal/desired"
 	"github.com/groot/homelab/internal/run"
+	"github.com/groot/homelab/internal/swarm"
 	"github.com/groot/homelab/internal/tui/styles"
 )
 
 var pruneCmd = &cobra.Command{
 	Use:   "prune [service...]",
 	Short: "Stop a service and reclaim its images and volumes",
-	Long: `Bring a service down and reclaim what it was using: its containers, the
-images they came from, and its named volumes.
+	Long: `Bring a service down and reclaim what it was using: its Swarm services, the
+images they came from (on the leader) and its volumes.
 
   homelab prune jellyfin            # containers + images + volumes
   homelab prune jellyfin --keep-volumes
@@ -79,35 +85,37 @@ func runPrune(_ *cobra.Command, args []string) error {
 	// surprises you is the one that loses the photo library.
 	fmt.Printf("\n%s\n\n", styles.Header.Render("Prune"))
 
+	plans := make(map[string]prunePlan, len(names))
 	volumeCount := 0
 	for _, name := range names {
 		if err := validateService(root, name); err != nil {
 			return err
 		}
-		plan, err := backup.PlanFor(root, name)
+		plan, err := planPrune(root, name)
 		if err != nil {
 			return err
 		}
+		plans[name] = plan
 
-		fmt.Printf("  %s %s\n", styles.Bold.Render(name), styles.Muted.Render("— containers"))
+		fmt.Printf("  %s %s\n", styles.Bold.Render(name), styles.Muted.Render("— Swarm services, env secrets and configs"))
 		if !pruneFlags.keepImages {
-			fmt.Printf("      %s images\n", styles.Muted.Render("—"))
+			for _, img := range plan.images {
+				fmt.Printf("      %s image %s\n", styles.Muted.Render("—"), img)
+			}
 		}
 		if !pruneFlags.keepVolumes {
-			for _, v := range plan.Volumes {
+			for _, v := range plan.volumes {
 				fmt.Printf("      %s volume %s\n", styles.Err.Render("✗"), styles.Err.Render(v))
 				volumeCount++
 			}
 		}
 	}
 
-	// Any run that removes volumes gets the typed confirmation, not just one
-	// whose plan lists some: the plan only knows volumes with an explicit
-	// name:, while `compose down --volumes` also removes anonymous and
-	// default-named ones. A plan saying "0 volumes" is not evidence of no data.
+	// Any run that removes volumes gets the typed confirmation, even one whose
+	// plan lists none: a mistyped target is still worth stopping.
 	if !pruneFlags.keepVolumes {
 		fmt.Printf("\n  %s\n", styles.Err.Render(fmt.Sprintf(
-			"%d named volume(s), plus any unnamed ones, will be DELETED. This destroys data and cannot be undone.", volumeCount)))
+			"%d volume(s) will be DELETED. This destroys data and cannot be undone.", volumeCount)))
 		fmt.Printf("  %s Back up first: %s\n",
 			styles.Muted.Render("→"), styles.Primary.Render("homelab backup "+joinNames(names)))
 
@@ -141,23 +149,9 @@ func runPrune(_ *cobra.Command, args []string) error {
 	fmt.Println()
 
 	for _, name := range names {
-		// `compose down` already expresses exactly this: stop + remove
-		// containers, optionally the images they came from and the named volumes
-		// declared in the same file. Reimplementing it with docker rm/rmi/volume
-		// rm would just be a worse version that can drift from the compose file.
-		downArgs := []string{"down", "--remove-orphans"}
-		if !pruneFlags.keepImages {
-			downArgs = append(downArgs, "--rmi", "all")
-		}
-		if !pruneFlags.keepVolumes {
-			downArgs = append(downArgs, "--volumes")
-		}
-
 		recordService(root, name, desired.Removed)
 		fmt.Printf("  %s Pruning %s…\n", styles.Primary.Render("→"), styles.Bold.Render(name))
-		if err := run.Default().DockerComposeEnv(
-			run.ServiceComposeFile(root, name), buildEnv(root, name), downArgs...,
-		); err != nil {
+		if err := pruneOne(root, name, plans[name]); err != nil {
 			return fmt.Errorf("pruning %s: %w", name, err)
 		}
 		fmt.Printf("  %s %s pruned\n", styles.Success.Render("✓"), name)
@@ -184,4 +178,89 @@ func pruneDangling() error {
 // joinNames renders a target list as `homelab backup` arguments.
 func joinNames(names []string) string {
 	return strings.Join(names, " ")
+}
+
+// prunePlan is what pruning a service removes besides its Swarm services:
+// the volumes and images its compose file names.
+type prunePlan struct {
+	volumes []string
+	images  []string
+}
+
+// planPrune reads the volumes and images from the service's compose file, as
+// it deploys: a volume's name is its `name:`, or <service>_<key>.
+func planPrune(root, name string) (prunePlan, error) {
+	p, err := swarm.LoadProject(filepath.Join(root, "services", name), buildEnv(root, name))
+	if err != nil {
+		return prunePlan{}, err
+	}
+	var plan prunePlan
+	for _, key := range slices.Sorted(maps.Keys(p.Volumes)) {
+		if v := p.Volumes[key]; !bool(v.External) {
+			plan.volumes = append(plan.volumes, v.Name)
+		}
+	}
+	seen := map[string]bool{}
+	for _, key := range slices.Sorted(maps.Keys(p.Services)) {
+		if img := p.Services[key].Image; img != "" && !seen[img] {
+			seen[img] = true
+			plan.images = append(plan.images, img)
+		}
+	}
+	return plan, nil
+}
+
+// pruneOne takes a service's Swarm services down, waits for their containers
+// to stop, removes them (with their env secrets and configs), then the
+// volumes and images the plan names. Volumes live on the leader, where this
+// runs; images are removed from the leader only — other nodes keep theirs
+// until `docker image prune` there.
+func pruneOne(root, name string, plan prunePlan) error {
+	if err := withDeployer(root, false, func(ctx context.Context, d *swarm.Deployer) error {
+		if err := d.Down(ctx, name); err != nil {
+			return err
+		}
+		if err := d.WaitStopped(ctx, name, 2*time.Minute); err != nil {
+			return err
+		}
+		return d.Remove(ctx, name)
+	}); err != nil {
+		return err
+	}
+	r := run.Default()
+	var errs []error
+	if !pruneFlags.keepVolumes {
+		for _, v := range plan.volumes {
+			if err := removeVolume(r, v); err != nil {
+				errs = append(errs, fmt.Errorf("volume %s: %w", v, err))
+			}
+		}
+	}
+	if !pruneFlags.keepImages {
+		for _, img := range plan.images {
+			// An image another service still uses, or one never pulled
+			// here, stays: that is not a failed prune.
+			if _, err := r.Output("docker", "image", "rm", img); err != nil {
+				fmt.Printf("    %s image %s kept (in use or not on this node)\n", styles.Muted.Render("·"), img)
+			}
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// removeVolume removes a volume, retrying while the removed tasks' containers
+// are still being cleaned up and hold it. A volume that does not exist is
+// already gone.
+func removeVolume(r *run.Commander, v string) error {
+	if _, err := r.Output("docker", "volume", "inspect", v); err != nil {
+		return nil
+	}
+	var err error
+	for range 15 {
+		if _, err = r.Output("docker", "volume", "rm", v); err == nil {
+			return nil
+		}
+		time.Sleep(2 * time.Second)
+	}
+	return err
 }

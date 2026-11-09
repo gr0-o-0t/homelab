@@ -82,7 +82,7 @@ func enabledExtensions(root string) map[string]bool {
 // runLogTUI launches the fullscreen log viewer for a single service.
 //
 // The in-app "q"/ctrl+c keypress already cleans up the underlying
-// `docker compose logs -f` process via the model's own Update handling, but
+// `homelab logs -f` process via the model's own Update handling, but
 // that path is only reached through Bubble Tea's terminal raw-mode key
 // capture. A SIGINT/SIGTERM delivered outside that (a `kill <pid>`, a
 // dropped SSH session) bypasses it entirely — Go's default action for those
@@ -92,11 +92,11 @@ func enabledExtensions(root string) map[string]bool {
 func runLogTUI(root, serviceName, container string) error {
 	// The viewer streams `homelab logs -f`, so it shows exactly what the CLI
 	// would: every container of the stack, key-prefixed, or -c's only. An
-	// empty service name means the core stack.
+	// empty service name means the leader agent.
 	title, args := serviceName, []string{"logs", "-f", "-n", "500"}
 	switch {
 	case serviceName == "":
-		title = "core"
+		title = "agent"
 	case container != "":
 		title = serviceName + " / " + container
 		args = append(args, "-c", container, serviceName)

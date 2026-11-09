@@ -1,5 +1,5 @@
 // Package config handles config-dir resolution, YAML config loading, and
-// building the environment map passed to docker compose.
+// building the environment map a service is deployed with.
 package config
 
 import (
@@ -714,7 +714,8 @@ func ServiceConfigFile(configDir, svcName string) string {
 	return filepath.Join(configDir, "services", svcName, configFileName)
 }
 
-// BuildEnv returns the combined environment map for docker compose.
+// BuildEnv returns the combined environment map a service is deployed with:
+// compose interpolation and the env secret (internal/swarm).
 //
 // Loading order (later wins — service overrides root):
 //  1. Root config.yaml vars

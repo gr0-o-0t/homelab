@@ -60,7 +60,6 @@ func rootPreRun(c *cobra.Command, _ []string) error {
 		}
 		return errForwarded{code: code}
 	}
-	migratePreRun(c)
 	return nil
 }
 

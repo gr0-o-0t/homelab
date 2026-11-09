@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/groot/homelab/internal/bootstrap"
 	"github.com/groot/homelab/internal/docker"
 	"github.com/groot/homelab/internal/gui"
 	"github.com/groot/homelab/internal/network"
@@ -31,8 +32,11 @@ func runGUI(root string) error {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
-			out := []gui.ContainerState{{Name: "caddy", State: dc.ContainerState(ctx, "caddy")}}
+			out := []gui.ContainerState{{Name: bootstrap.AgentContainer, State: dc.ContainerState(ctx, bootstrap.AgentContainer)}}
 			for _, l := range all {
+				if l.ContainerName() == bootstrap.AgentContainer {
+					continue // the tailnet layer is the agent's
+				}
 				out = append(out, gui.ContainerState{Name: l.ContainerName(), State: dc.ContainerState(ctx, l.ContainerName())})
 			}
 			return out

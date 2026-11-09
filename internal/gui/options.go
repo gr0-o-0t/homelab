@@ -19,8 +19,9 @@ type Options struct {
 	AllLayers []network.NetworkLayer
 	Env       func(svc string) map[string]string
 	CLI       []string
-	// Core reports the state of each core container by name: caddy first,
-	// then each layer's container.
+	// Core reports the state of each edge container by name: the leader
+	// agent first (it runs Caddy and the tailnet node), then each other
+	// layer's container.
 	Core func() []ContainerState
 }
 

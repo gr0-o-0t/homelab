@@ -26,17 +26,10 @@ type Status struct {
 	ContainerState string // "running", "stopped", "not found"
 }
 
-// EnvFunc supplies the environment for a layer's docker compose calls: root
-// vars plus keyring secrets, i.e. cmd's buildEnv.
-//
-// A function rather than a map because it is called only when a layer actually
-// shells out to compose. Building the map reads the system keyring, which can
-// prompt for an unlock — not something `homelab ygg list` should trigger.
-//
-// Layers used to hardcode an empty map here. Compose then substituted "" for
-// every variable, so `Layer.Start()` — a bare `--profile X up -d`, which
-// targets the whole file — would recreate the tailscale container with a blank
-// TS_AUTHKEY and drop the host off the tailnet.
+// EnvFunc supplies a layer the root environment: root vars plus keyring
+// secrets, i.e. cmd's buildEnv. A function rather than a map because it is
+// called only when a layer needs a value: building the map reads the system
+// keyring, which can prompt for an unlock.
 type EnvFunc func() map[string]string
 
 // PortSelection is one resolved port of a service, as declared in its
@@ -94,25 +87,16 @@ type NetworkLayer interface {
 	// commands act on.
 	Flag() string
 
-	// ContainerName returns the Docker container name for this layer.
+	// ContainerName returns the Docker container (or, for cloudflared, the
+	// Swarm service) that serves this layer.
 	ContainerName() string
-
-	// Profile returns the Docker Compose profile name for this layer, "" when
-	// the container is part of the always-on core.
-	Profile() string
 
 	// LegacyConfDir returns the directory under caddy/ that held this layer's
 	// generated site blocks before they moved into one caddy/sites/<svc>.conf
 	// per service (e.g. "conf.d-tor"). Only migration reads it.
 	LegacyConfDir() string
 
-	// ── Lifecycle ────────────────────────────────────────────────────────
-
-	// Start brings the layer's container(s) up.
-	Start() error
-
-	// Stop brings the layer's container(s) down.
-	Stop() error
+	// ── State ────────────────────────────────────────────────────────────
 
 	// Status returns the current operational state.
 	Status() Status

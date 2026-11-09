@@ -20,9 +20,6 @@ type fakeLayer struct {
 func (f *fakeLayer) Name() string           { return f.name }
 func (f *fakeLayer) Label() string          { return f.label }
 func (f *fakeLayer) ContainerName() string  { return f.containerName }
-func (f *fakeLayer) Profile() string        { return f.name }
-func (f *fakeLayer) Start() error           { return nil }
-func (f *fakeLayer) Stop() error            { return nil }
 func (f *fakeLayer) Status() network.Status { return network.Status{ContainerState: "running"} }
 func (f *fakeLayer) Flag() string           { return f.name }
 func (f *fakeLayer) LegacyConfDir() string  { return "conf.d-" + f.name }

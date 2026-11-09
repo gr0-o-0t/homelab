@@ -52,7 +52,7 @@ func DataDir(root string) string { return filepath.Join(root, "caddy-data") }
 // (admin on the unix socket, storage under root) with every caddy/l4/*.conf
 // inlined in the global `layer4 { }` block and every caddy/sites/*.conf
 // appended, each sorted by filename. Nothing is imported from disk at load
-// time, and the legacy conf.d* directories are not read.
+// time.
 func Assemble(root string) (string, error) {
 	base, err := assets.CoreFS.ReadFile("caddy/Caddyfile")
 	if err != nil {
@@ -88,8 +88,6 @@ func Assemble(root string) (string, error) {
 					b.WriteString("\n")
 				}
 			}
-		case strings.HasPrefix(trimmed, "import /homelab/"):
-			// legacy conf.d* globs: migrated away, never loaded
 		default:
 			b.WriteString(line)
 		}

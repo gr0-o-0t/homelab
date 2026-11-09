@@ -157,6 +157,17 @@ func Translate(svcDir string, env map[string]string, secretValues []string, cfg 
 	return st, nil
 }
 
+// LoadProject loads <svcDir>/docker-compose.yml as Translate does — the
+// stack named after the directory, ${VAR} interpolated from env — for
+// commands that show or inspect it (`homelab config`, `images`, `prune`).
+func LoadProject(svcDir string, env map[string]string) (*types.Project, error) {
+	abs, err := filepath.Abs(svcDir)
+	if err != nil {
+		return nil, err
+	}
+	return loadCompose(abs, filepath.Base(abs), env)
+}
+
 func loadCompose(dir, name string, env map[string]string) (*types.Project, error) {
 	file := filepath.Join(dir, "docker-compose.yml")
 	data, err := os.ReadFile(file)
@@ -251,7 +262,7 @@ func translateService(stack, dir string, proj *types.Project, svc types.ServiceC
 	role := Place(svc, cfg, dbProvider)
 	spec := swarm.ServiceSpec{
 		Annotations: swarm.Annotations{
-			Name: specName,
+			Name:   specName,
 			Labels: serviceLabels(stack, role, svc.ContainerName),
 		},
 		TaskTemplate: swarm.TaskSpec{

@@ -24,12 +24,11 @@ var shortcuts = map[actions.Scope][]shortcut{
 		{"t", "service.shell"}, {"b", "service.backup"},
 	},
 	actions.Core: {
-		{"u", "core.up"}, {"S", "core.start"}, {"s", "core.stop"}, {"r", "core.restart"},
-		{"x", "core.down"}, {"U", "core.update"}, {"l", "core.logs"}, {"v", "core.validate"},
+		{"l", "core.logs"}, {"v", "core.validate"},
 	},
 	actions.CatalogEntry: {{"i", "catalog.add"}},
 	actions.Layer: {
-		{"e", "layer.enable"}, {"d", "layer.disable"}, {"u", "layer.start"}, {"s", "layer.stop"},
+		{"e", "layer.enable"}, {"d", "layer.disable"},
 		{"l", "layer.logs"},
 	},
 	actions.Global: {{"n", "global.new"}, {"b", "global.backup"}, {"r", "global.restore"}},

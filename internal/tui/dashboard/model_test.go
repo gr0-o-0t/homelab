@@ -76,7 +76,7 @@ func newTestModel(svcs []service.Service) Model {
 	})
 	m.width, m.height = 120, 40
 	m.enabled = map[string]bool{"cf": true, "tor": true}
-	m.core = map[string]string{"caddy": "running", "tailscale": "running", "tor": "running"}
+	m.core = map[string]string{"homelab-agent": "running", "tailscale": "running", "tor": "running"}
 	return m
 }
 
@@ -255,7 +255,8 @@ func Test_Palette_CoreTarget(t *testing.T) {
 	m := newTestModel(stubServices())
 	m.cursor[viewServices] = 0
 	ids := paletteIDs(press(m, ":"))
-	assert.Contains(t, ids, "core.up")
+	assert.Contains(t, ids, "core.logs")
+	assert.NotContains(t, ids, "core.up", "there is no core stack to bring up")
 	assert.Contains(t, ids, "core.validate")
 	assert.NotContains(t, ids, "service.up")
 }
@@ -272,9 +273,9 @@ func Test_Palette_LayerTarget(t *testing.T) {
 	require.Equal(t, "cf", m.selectedLayer().Name())
 	ids := paletteIDs(m)
 	assert.Contains(t, ids, "layer.disable")
-	assert.Contains(t, ids, "layer.start")
+	assert.Contains(t, ids, "layer.container")
 	assert.NotContains(t, ids, "layer.enable")
-	assert.NotContains(t, ids, "layer.list", "cf has no list command")
+	assert.NotContains(t, ids, "layer.start", "cloudflared is deployed by ext enable")
 }
 
 func Test_Palette_MultiTarget(t *testing.T) {
@@ -329,16 +330,16 @@ func Test_Form_Defaults(t *testing.T) {
 
 func Test_Form_RequiredInput(t *testing.T) {
 	m := selectNamed(newTestModel(stubServices()), "caddy")
-	a, _ := actions.ByID("service.port")
+	a, _ := actions.ByID("service.exec")
 	tg, _ := m.target()
 	m, _ = m.start(a, tg, nil, false) // shortcut path still asks: required input
 	require.Equal(t, modeForm, m.mode)
 	m = press(m, "enter")
 	assert.Equal(t, modeForm, m.mode)
 	assert.Contains(t, m.frm.err, "required")
-	m = press(typeText(m, "80"), "enter")
+	m = press(typeText(m, "ls"), "enter")
 	assert.Equal(t, modeNormal, m.mode)
-	assert.Equal(t, "homelab port caddy 80", m.busyMsg)
+	assert.Equal(t, "homelab exec --no-tty caddy ls", m.busyMsg)
 }
 
 func Test_Form_DynamicChoicesAndBackupPrefill(t *testing.T) {
@@ -363,16 +364,16 @@ func Test_Form_DynamicChoicesAndBackupPrefill(t *testing.T) {
 // ── danger ────────────────────────────────────────────────────────────────────
 
 func Test_Danger_Confirm(t *testing.T) {
-	m := newTestModel(stubServices())
-	m.cursor[viewServices] = 0 // core
-	m = press(m, "x")          // core.down: Confirm
+	m := press(newTestModel(stubServices()), "3", "j") // cf: enabled
+	require.Equal(t, "cf", m.selectedLayer().Name())
+	m = press(m, "d") // layer.disable: Confirm
 	require.Equal(t, modeConfirm, m.mode)
 	assert.Equal(t, modeNormal, press(m, "n").mode)
 	assert.Equal(t, 0, press(m, "n").running)
 	m = press(m, "y")
 	assert.Equal(t, modeNormal, m.mode)
 	assert.Equal(t, 1, m.running)
-	assert.Equal(t, "homelab down", m.busyMsg)
+	assert.Equal(t, "homelab ext disable cf", m.busyMsg)
 }
 
 func Test_Danger_TypeName(t *testing.T) {
@@ -414,7 +415,7 @@ func Test_Shortcuts_RunCLIVerbs(t *testing.T) {
 	}
 	m := newTestModel(stubServices())
 	m.cursor[viewServices] = 0
-	assert.Equal(t, "homelab restart", press(m, "r").busyMsg, "core runs the no-service form")
+	assert.Equal(t, "homelab validate", press(m, "v").busyMsg, "the edge row runs the no-service form")
 }
 
 func Test_Shortcut_Unavailable(t *testing.T) {
@@ -621,7 +622,7 @@ func Test_View_80x24_Content(t *testing.T) {
 	assert.Contains(t, f["Services"], "immich")
 	assert.Contains(t, f["Services"], "https://caddy.ts")
 	assert.Contains(t, f["Catalog"], "paperless")
-	assert.Contains(t, f["Network"], "core stack")
+	assert.Contains(t, f["Network"], "edge")
 	assert.Contains(t, f["Network"], "tor")
 	assert.Contains(t, f["Backups"], "caddy")
 	assert.Contains(t, f["Health"], "Status overview")

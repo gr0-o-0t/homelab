@@ -185,15 +185,16 @@ func TestLayerToggle_FindsEnableAndDisable(t *testing.T) {
 func TestNeedsForm(t *testing.T) {
 	get := func(id string) actions.Action { a, ok := actions.ByID(id); require.True(t, ok, id); return a }
 	assert.False(t, needsForm(get("service.up"), true), "quick Up runs with defaults")
-	assert.True(t, needsForm(get("service.up"), false), "Up has a --build input")
-	assert.True(t, needsForm(get("service.port"), true), "required input")
-	assert.True(t, needsForm(get("core.down"), true), "confirm")
+	assert.False(t, needsForm(get("service.up"), false), "Up has no inputs")
+	assert.True(t, needsForm(get("service.images"), false), "Images has a --quiet input")
+	assert.True(t, needsForm(get("service.exec"), true), "required input")
+	assert.True(t, needsForm(get("layer.disable"), true), "confirm")
 	assert.True(t, needsForm(get("service.delete"), true), "type name")
 	assert.False(t, needsForm(get("service.stop"), false))
 
-	port := get("service.port")
-	assert.Equal(t, []string{"Container port"}, missingInputs(port, defaultInputs(port)))
-	assert.Empty(t, missingInputs(port, actions.Inputs{"port": "80"}))
+	exec := get("service.exec")
+	assert.Equal(t, []string{"Command"}, missingInputs(exec, defaultInputs(exec)))
+	assert.Empty(t, missingInputs(exec, actions.Inputs{"command": "ls"}))
 	assert.Equal(t, "200", defaultInputs(get("service.logs"))["tail"])
 }
 

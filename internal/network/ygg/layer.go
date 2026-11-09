@@ -23,7 +23,6 @@ const containerName = "yggdrasil"
 type Layer struct {
 	repoRoot   string
 	runner     *run.Commander
-	envFn      network.EnvFunc
 	reloadHook func() error
 
 	// addrCache memoizes the node address; see network.AddressCache.
@@ -31,8 +30,8 @@ type Layer struct {
 }
 
 // New creates a new Yggdrasil layer.
-func New(repoRoot string, runner *run.Commander, envFn network.EnvFunc) *Layer {
-	return &Layer{repoRoot: repoRoot, runner: runner, envFn: envFn}
+func New(repoRoot string, runner *run.Commander, _ network.EnvFunc) *Layer {
+	return &Layer{repoRoot: repoRoot, runner: runner}
 }
 
 func newForTest(repoRoot string, hook func() error) *Layer {
@@ -47,21 +46,8 @@ var (
 func (l *Layer) Name() string          { return "ygg" }
 func (l *Layer) Label() string         { return "Yggdrasil mesh node" }
 func (l *Layer) ContainerName() string { return containerName }
-func (l *Layer) Profile() string       { return "yggdrasil" }
 func (l *Layer) Flag() string          { return "ygg" }
 func (l *Layer) LegacyConfDir() string { return "conf.d-ygg" }
-
-func (l *Layer) Start() error {
-	return l.runner.DockerComposeEnv(
-		run.CoreComposeFile(l.repoRoot), l.env(),
-		"--profile", "yggdrasil", "up", "-d")
-}
-
-func (l *Layer) Stop() error {
-	return l.runner.DockerComposeEnv(
-		run.CoreComposeFile(l.repoRoot), l.env(),
-		"stop", containerName)
-}
 
 func (l *Layer) Status() network.Status {
 	state := l.runner.ContainerStatus(containerName)
@@ -344,11 +330,4 @@ func (l *Layer) reload() error {
 	}
 	// RunTo(io.Discard): docker kill echoes the container name on stdout.
 	return l.runner.RunTo(io.Discard, "docker", "kill", "-s", "HUP", containerName)
-}
-
-func (l *Layer) env() map[string]string {
-	if l.envFn == nil {
-		return map[string]string{}
-	}
-	return l.envFn()
 }

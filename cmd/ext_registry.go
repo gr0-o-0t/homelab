@@ -10,7 +10,6 @@ import (
 	"github.com/groot/homelab/internal/network/cf"
 	"github.com/groot/homelab/internal/network/layers"
 	"github.com/groot/homelab/internal/run"
-	"github.com/groot/homelab/internal/tui/styles"
 	"github.com/spf13/cobra"
 )
 
@@ -82,7 +81,7 @@ func extLabel(name string) string {
 }
 
 // optionalLayers are the layers an `ext` command can switch on and off: all
-// but the private tailnet, which is part of the core stack.
+// but the private tailnet, which is the agent's own.
 func optionalLayers() []network.NetworkLayer {
 	var out []network.NetworkLayer
 	for _, l := range extRegistry().All() {
@@ -100,65 +99,4 @@ func extNames() []string {
 		names = append(names, l.Name())
 	}
 	return names
-}
-
-// extCommandFor creates a root-level cobra command that delegates lifecycle
-// and status operations to the named network layer in the registry. Only the
-// label is read at construction time (from layers.Static, which needs no
-// config dir); the layer itself is looked up inside each RunE, so
-// --config-dir/--config are honored.
-func extCommandFor(name string) *cobra.Command {
-	label := ""
-	for _, l := range layers.Static() {
-		if l.Name() == name {
-			label = l.Label()
-		}
-	}
-	if label == "" {
-		return nil
-	}
-
-	cmd := &cobra.Command{
-		Use:   name,
-		Short: fmt.Sprintf("Manage %s", label),
-		Long:  fmt.Sprintf("Manage the %s network extension layer.", label),
-	}
-
-	cmd.AddCommand(&cobra.Command{
-		Use:     "status",
-		Aliases: []string{"ps"},
-		Short:   fmt.Sprintf("Show %s status", label),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			layer, ok := extRegistry().Get(name)
-			if !ok {
-				return fmt.Errorf("extension %q not registered", name)
-			}
-			status := layer.Status()
-			fmt.Printf("\n%s\n\n", styles.Header.Render(layer.Label()))
-			switch status.ContainerState {
-			case "running":
-				fmt.Printf("  %s  %s  %s\n", styles.Success.Render("✓"), styles.Bold.Render(layer.Name()), styles.StateTag(status.ContainerState))
-			case "not found":
-				fmt.Printf("  %s  %s  %s\n", styles.Err.Render("✗"), styles.Bold.Render(layer.Name()), styles.Muted.Render("not installed"))
-			default:
-				fmt.Printf("  %s  %s  %s\n", styles.Warning.Render("!"), styles.Bold.Render(layer.Name()), styles.StateTag(status.ContainerState))
-			}
-			fmt.Println()
-			return nil
-		},
-	})
-
-	cmd.AddCommand(&cobra.Command{
-		Use:   "logs",
-		Short: fmt.Sprintf("Stream %s container logs", label),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			layer, ok := extRegistry().Get(name)
-			if !ok {
-				return fmt.Errorf("extension %q not registered", name)
-			}
-			return coreCompose("logs", "-f", layer.ContainerName())
-		},
-	})
-
-	return cmd
 }

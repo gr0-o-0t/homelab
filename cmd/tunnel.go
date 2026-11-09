@@ -104,7 +104,7 @@ var tunnelStatusCmd = &cobra.Command{
 			fmt.Printf("  %s  cloudflared  %s\n", styles.Success.Render("✓"), styles.StateTag(state))
 		} else {
 			fmt.Printf("  %s  cloudflared  %s\n", styles.Err.Render("✗"), styles.StateTag(state))
-			fmt.Printf("\n  Start with: %s\n\n", styles.Primary.Render("homelab ext start cf"))
+			fmt.Printf("\n  Start with: %s\n\n", styles.Primary.Render("homelab ext enable cf"))
 			return nil
 		}
 

@@ -1,5 +1,11 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# Main Caddyfile
+# The leader agent's Caddyfile (internal/edge.Assemble)
+#
+# Caddy runs inside the agent. Assemble starts from this file, replaces the
+# admin line with the agent's unix admin socket and storage, inlines every
+# caddy/l4/*.conf of the state root in the layer4 block and every
+# caddy/sites/*.conf at the import below. Nothing is imported from disk at
+# load time.
 #
 # TLS strategy: wildcard certificate via Cloudflare DNS-01 challenge.
 # This lets us get a single cert for *.home.<domain> without exposing
@@ -15,28 +21,27 @@
 	email {$ACME_EMAIL}
 
 	# Obtain & renew ALL certificates via Cloudflare DNS-01.
-	# The `cloudflare` directive comes from the caddy-dns/cloudflare plugin
-	# compiled into our custom image (see core/Dockerfile.caddy).
+	# The `cloudflare` directive comes from the caddy-dns/cloudflare module
+	# compiled into the homelab binary.
 	acme_dns cloudflare {$CLOUDFLARE_API_TOKEN}
 
 	# Optional: use Let's Encrypt staging while testing to avoid rate limits.
 	# Comment out for production.
 	# acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
 
-	# Disable the Caddy admin API on the public interface; bind only to
-	# localhost inside the container's network namespace (= Tailscale namespace)
+	# Replaced by the agent's unix admin socket when assembled.
 	admin localhost:2019
 
-	# No automatic http→https redirects. :80 is shared with the tunnels
-	# (cloudflared, i2p), and the redirect for a tailnet-only site would
-	# answer a tunnel client with that private hostname. Tailnet clients use
-	# https:// directly; unmatched plain-HTTP hosts hit the catch-alls below.
+	# No automatic http→https redirects. :80 is the Cloudflare Tunnel's
+	# listener, and the redirect for a tailnet-only site would answer a
+	# tunnel client with that private hostname. Tailnet clients use https://
+	# directly; unmatched plain-HTTP hosts hit the catch-alls below.
 	auto_https disable_redirects
 
 	# Raw TCP/UDP listeners (caddy-l4): one file per service with a port
 	# declared as <listen>:<port>, e.g. gitea's ssh on :22 → gitea:2222.
-	# Rendered by `homelab enable` alongside caddy/sites. A layer4 server binds
-	# every interface of the tailscale netns, like the HTTP sites do.
+	# Rendered by `homelab enable` alongside caddy/sites; they listen on the
+	# agent's tailnet node only.
 	layer4 {
 		import /homelab/caddy/l4/*.conf
 	}
@@ -54,42 +59,16 @@
 
 # ── Service sites ─────────────────────────────────────────────────────────────
 # One file per service, caddy/sites/<name>.conf, holding the site blocks of
-# every layer it is enabled on (tailnet, Cloudflare, I2P, Tor, Yggdrasil).
-# Rendered by `homelab enable|disable|reload <name>` from
-# services/<name>/exposure.yaml. Tor sites are http://<onion>:8081: tor's
-# HiddenServicePort targets tailscale:8081, a listener that serves only onion
-# vhosts, since sharing :80 would let a Tor client send the Host header of a
-# cf/i2p-only site and reach it.
+# every layer it is enabled on (tailnet, Cloudflare). Rendered by
+# `homelab enable|disable|reload <name>` from the service's exposure.yaml.
 import /homelab/caddy/sites/*.conf
 
-# ── Legacy per-layer directories ──────────────────────────────────────────────
-# Where routes lived before caddy/sites. `homelab update` migrates them and
-# leaves these empty; the imports remain so an install that has not migrated
-# yet keeps routing.
-
-# ── Private site blocks (tailnet only) ───────────────────────────────────────
-# Each file handles <service>.{$HOME_SUBDOMAIN}.{$DOMAIN}.
-import /homelab/caddy/conf.d/*.conf
-
-# ── Public site blocks (Cloudflare Tunnel) ───────────────────────────────────
-# Each file handles <service>.{$DOMAIN}.
-# Traffic arrives via cloudflared → http://homelab-edge:80, TLS is terminated at Cloudflare edge.
-import /homelab/caddy/conf.d-cf/*.conf
-
-# ── I2P eepsite blocks ────────────────────────────────────────────────────────
-import /homelab/caddy/conf.d-i2p/*.conf
-
-# ── Tor onion service blocks ───────────────────────────────────────────────────
-import /homelab/caddy/conf.d-tor/*.conf
-
-# ── Yggdrasil mesh blocks ─────────────────────────────────────────────────────
-import /homelab/caddy/conf.d-ygg/*.conf
-
 # ── Catch-alls for the plain-HTTP listeners ──────────────────────────────────
-# cloudflared and i2p reach Caddy on :80, tor on :8081. A Host that matches no
-# site there is closed rather than answered: without these, Caddy replies with
-# an empty 200, and on :80 redirects private hostnames to https, which tells a
-# tunnel client the names of tailnet-only services. Specific sites above win.
+# cloudflared reaches Caddy on :80. A Host that matches no site there is
+# closed rather than answered: without these, Caddy replies with an empty
+# 200, and on :80 redirects private hostnames to https, which tells a tunnel
+# client the names of tailnet-only services. Specific sites above win.
+# :8081 is the onion listener a later Tor layer will use.
 http://:80 {
 	abort
 }

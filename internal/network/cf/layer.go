@@ -5,7 +5,6 @@
 package cf
 
 import (
-	"errors"
 	"fmt"
 
 	"github.com/groot/homelab/internal/configgen"
@@ -24,16 +23,15 @@ const containerName = "homelab_cloudflared"
 type Layer struct {
 	network.HostTemplate
 	repoRoot string
-	runner   *run.Commander
-	envFn    network.EnvFunc
 	state    func() string
 }
 
-// New creates a new Cloudflare layer.
-func New(repoRoot string, runner *run.Commander, envFn network.EnvFunc) *Layer {
+// New creates a new Cloudflare layer. The runner and env func are unused:
+// cloudflared is deployed by swarm.Deployer, not by the layer.
+func New(repoRoot string, _ *run.Commander, _ network.EnvFunc) *Layer {
 	return &Layer{
 		HostTemplate: network.HostTemplate{Prefix: "http://", Suffix: ".{$DOMAIN}"},
-		repoRoot:     repoRoot, runner: runner, envFn: envFn,
+		repoRoot:     repoRoot,
 	}
 }
 
@@ -42,19 +40,11 @@ var _ network.NetworkLayer = (*Layer)(nil)
 func (l *Layer) Name() string          { return "cf" }
 func (l *Layer) Label() string         { return "Cloudflare Tunnel" }
 func (l *Layer) ContainerName() string { return containerName }
-func (l *Layer) Profile() string       { return "" } // no compose profile: it is a Swarm service
 func (l *Layer) Flag() string          { return "cf" }
 
 // WithState sets where Status reads cloudflared's state: its Swarm task, not
-// a compose container.
+// a container of its own.
 func (l *Layer) WithState(fn func() string) *Layer { l.state = fn; return l }
-
-var errSwarmService = errors.New("cloudflared runs as a Swarm service — use homelab ext start cf")
-
-// Start and Stop are not how cloudflared runs: it is a Swarm service,
-// deployed with `homelab ext start|stop cf`.
-func (l *Layer) Start() error { return errSwarmService }
-func (l *Layer) Stop() error  { return errSwarmService }
 
 func (l *Layer) Status() network.Status {
 	if l.state == nil {

@@ -4,42 +4,23 @@ import (
 	"fmt"
 
 	"github.com/groot/homelab/internal/desired"
-	"github.com/groot/homelab/internal/run"
 	"github.com/groot/homelab/internal/swarm"
 	"github.com/groot/homelab/internal/tui/styles"
 	"github.com/spf13/cobra"
 )
 
 var stopCmd = &cobra.Command{
-	Use:   "stop [service...]",
-	Short: "Stop containers without removing them (no service: the core stack)",
-	Long: `Stop running service containers without removing them.
-Use 'down' to stop and remove containers.
+	Use:   "stop <service...>",
+	Short: "Stop services (on Swarm, the same as down)",
+	Long: `Stop services. Swarm keeps no stopped-but-kept containers, so stop is the
+same as 'homelab down': scaled to zero, configuration and volumes kept.
 
-  homelab stop              # core stack (stop containers)
   homelab stop jellyfin immich  # these services
-  homelab stop -a           # every installed service
-  homelab stop --group media  # all services in the "media" group
-
-Note: for the core stack this runs 'docker compose stop' — containers are
-stopped but not removed. Services run on Swarm, which keeps no stopped
-containers: for them stop is the same as 'homelab down' (scaled to zero,
-configuration and volumes kept).`,
+  homelab stop -a               # every installed service
+  homelab stop --group media    # all services in the "media" group`,
 	Args:              cobra.ArbitraryArgs,
 	ValidArgsFunction: completeServiceNames,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		dir := configDir()
-		if len(args) > 0 || stopFlags.all || stopFlags.group != "" {
-			return runServiceStop(cmd, args)
-		}
-		env := buildEnv(dir, "")
-		fmt.Printf("%s Stopping core stack…\n", styles.Warning.Render("→"))
-		return run.Default().DockerComposeEnv(
-			run.CoreComposeFile(dir),
-			env,
-			withProfiles(dir, "stop")...,
-		)
-	},
+	RunE:              runServiceStop,
 }
 
 var stopFlags = batchFlags{}

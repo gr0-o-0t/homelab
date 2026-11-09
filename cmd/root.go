@@ -88,7 +88,6 @@ func init() {
 	rootCmd.AddCommand(execCmd)
 	rootCmd.AddCommand(configCmd)
 	rootCmd.AddCommand(imagesCmd)
-	rootCmd.AddCommand(portCmd)
 	rootCmd.AddCommand(restartCmd)
 	rootCmd.AddCommand(logsCmd)
 	rootCmd.AddCommand(statusCmd)
@@ -96,15 +95,6 @@ func init() {
 	rootCmd.AddCommand(doctorCmd)
 	rootCmd.AddCommand(reloadCmd)
 	rootCmd.AddCommand(validateCmd)
-
-	// Register root-level commands for layers without full cmd trees.
-	// cf/tor/i2p/ygg register their own full commands via ext.go init().
-	// extCommandFor builds this command's shell from a static label and
-	// defers all registry/layer access to its RunE closures — see
-	// extRegistry() in ext_registry.go for why that matters.
-	if cmd := extCommandFor("ts"); cmd != nil {
-		rootCmd.AddCommand(cmd)
-	}
 }
 
 // configDir returns the effective homelab config directory.
@@ -143,7 +133,7 @@ func extEnabled(cfgDir, name string) bool {
 	return hasResolvedExtension(rootCfg, config.ResolveExtension(name))
 }
 
-// buildEnv assembles the full docker compose environment map.
+// buildEnv assembles the full environment map a service is deployed with.
 // Non-fatal errors (keyring unavailable, missing config) are logged to stderr
 // so a partially-configured setup still starts containers.
 func buildEnv(cfgDir, svcName string) map[string]string {

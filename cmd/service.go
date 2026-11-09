@@ -116,20 +116,10 @@ func runServiceUp(_ *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	warnNoBuild(upFlags.build)
 	return forEachService(root, names, func(name string) error {
 		recordService(root, name, desired.Running)
 		return upOne(root, name)
 	})
-}
-
-// warnNoBuild notes that --build only applies to the core stack: services
-// run on Swarm, which deploys pulled images and never builds.
-func warnNoBuild(build bool) {
-	if build {
-		fmt.Fprintf(os.Stderr, "%s --build only applies to the core stack; services run pulled images\n",
-			styles.Warning.Render("!"))
-	}
 }
 
 // upOne is `up` for one service: shared databases first, then deploy it on
@@ -174,7 +164,6 @@ func runServiceRestart(_ *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	warnNoBuild(restartFlags.build)
 	return forEachService(root, names, func(name string) error {
 		recordService(root, name, desired.Running)
 		// Same reasoning as `up`: restarting a service whose database is down
@@ -200,25 +189,6 @@ func runServiceLogs(c *cobra.Command, args []string) error {
 	return runStackLogs(root, name, logsFlags.container, c.OutOrStdout(), c.ErrOrStderr())
 }
 
-// logsArgs translates homelab's logs flags into the core stack's
-// `docker compose logs` flags; they are the same flags, so this is a
-// straight pass-through.
-func logsArgs() []string {
-	a := []string{"logs"}
-	if logsFlags.follow {
-		a = append(a, "-f")
-	}
-	if logsFlags.timestamps {
-		a = append(a, "-t")
-	}
-	for _, kv := range [][2]string{{"--tail", logsFlags.tail}, {"--since", logsFlags.since}, {"--until", logsFlags.until}} {
-		if kv[1] != "" {
-			a = append(a, kv[0], kv[1])
-		}
-	}
-	return a
-}
-
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 // resolveTargets returns the service names to operate on based on --all, --group, or positional args.
@@ -233,7 +203,7 @@ func resolveTargets(root string, all bool, group string, args []string) ([]strin
 		return args, nil
 	}
 	if !all && group == "" {
-		return nil, fmt.Errorf("service name, --all, or --group <name> required\n\n  Examples:\n    homelab up jellyfin\n    homelab up --all\n    homelab up --group media")
+		return nil, fmt.Errorf("name a service, or use -a/--all (or --group <name>)\n\n  Examples:\n    homelab up jellyfin\n    homelab up --all\n    homelab up --group media")
 	}
 
 	svcs, err := service.Discover(root)

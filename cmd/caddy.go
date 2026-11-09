@@ -3,22 +3,25 @@ package cmd
 import (
 	"bytes"
 	"fmt"
-	"os"
-	"path/filepath"
+	"io"
 
+	"github.com/groot/homelab/internal/bootstrap"
 	"github.com/groot/homelab/internal/caddy"
+	"github.com/groot/homelab/internal/edge"
 	"github.com/groot/homelab/internal/run"
 	"github.com/groot/homelab/internal/tui/spinner"
 	"github.com/groot/homelab/internal/tui/styles"
 	"github.com/spf13/cobra"
 )
 
-const caddyContainerName = "caddy"
+// Caddy runs inside the leader agent (internal/edge): there is no Caddy
+// container. `caddy status` asks its admin socket, `caddy logs` reads the
+// agent container's logs, which carry Caddy's.
 
 var caddyCmd = &cobra.Command{
-	Use:   caddyContainerName,
-	Short: "Inspect the Caddy reverse proxy",
-	Long: `Inspect the core Caddy container individually.
+	Use:   "caddy",
+	Short: "Inspect the agent's Caddy reverse proxy",
+	Long: `Inspect the Caddy that runs inside the leader agent.
 
 Use "homelab reload"/"homelab validate" to manage its configuration —
 this command group is read-only status/logs.`,
@@ -27,23 +30,30 @@ this command group is read-only status/logs.`,
 var caddyStatusCmd = &cobra.Command{
 	Use:     "status",
 	Aliases: []string{"ps"},
-	Short:   "Show Caddy container status",
-	RunE: func(cmd *cobra.Command, args []string) error {
+	Short:   "Show whether the agent's Caddy answers on its admin socket",
+	Args:    cobra.NoArgs,
+	RunE: func(_ *cobra.Command, _ []string) error {
 		fmt.Printf("\n%s\n\n", styles.Header.Render("Caddy"))
-		state := containerStatus(caddyContainerName)
-		if state == containerStateRunning {
-			fmt.Printf("  %s  caddy  %s\n", styles.Success.Render("✓"), styles.StateTag(state))
-		} else {
-			fmt.Printf("  %s  caddy  %s\n", styles.Err.Render("✗"), styles.StateTag(state))
-			fmt.Printf("\n  Start with: %s\n", styles.Primary.Render("homelab start"))
+		sock := edge.AdminSocket(configDir())
+		if err := edge.Reachable(sock); err != nil {
+			fmt.Printf("  %s  caddy  %s\n", styles.Err.Render("✗"), styles.StateTag("not running"))
+			fmt.Printf("\n  %s\n\n", styles.Muted.Render(err.Error()))
+			return nil
 		}
-		fmt.Println()
+		fmt.Printf("  %s  caddy  %s  %s\n\n", styles.Success.Render("✓"), styles.StateTag(containerStateRunning),
+			styles.Muted.Render("admin "+sock))
 		return nil
 	},
 }
 
-var caddyLogsCmd = containerLogsCmd(caddyContainerName,
-	"Stream Caddy container logs")
+var caddyLogsCmd = &cobra.Command{
+	Use:   "logs",
+	Short: "Stream the agent's logs, which carry Caddy's",
+	Args:  cobra.NoArgs,
+	RunE: func(c *cobra.Command, _ []string) error {
+		return agentLogs(c.OutOrStdout(), c.ErrOrStderr(), []string{"--follow"})
+	},
+}
 
 func init() {
 	caddyCmd.AddCommand(caddyStatusCmd)
@@ -51,13 +61,21 @@ func init() {
 	rootCmd.AddCommand(caddyCmd)
 }
 
+// agentLogs prints the leader agent container's logs: Caddy, the tailnet
+// node and the agent itself log there. flags are `docker logs` flags.
+func agentLogs(stdout, stderr io.Writer, flags []string) error {
+	args := append(append([]string{"logs"}, flags...), bootstrap.AgentContainer)
+	return serviceLogsCLI(cmdContext(), args, stdout, stderr)
+}
+
 var reloadCmd = &cobra.Command{
 	Use:   "reload [service]",
 	Short: "Reload Caddy config or a service's routing",
 	Long: `Reload configuration changes.
 
-Without arguments, reloads the Caddy config (validate + graceful reload).
-With a service name, re-renders the service's Caddy file
+Without arguments, assembles every service's routes and loads them into the
+agent's Caddy (validated by the load: a rejected config leaves the running one
+in place). With a service name, re-renders the service's Caddy file
 (caddy/sites/<service>.conf) from its exposure.yaml — every layer it is
 enabled on, keeping its --name and --ports — and reloads Caddy once: picks up
 edits to its config.yaml ports or caddy.routes.conf without redeploying.`,
@@ -80,19 +98,18 @@ edits to its config.yaml ports or caddy.routes.conf without redeploying.`,
 
 var validateCmd = &cobra.Command{
 	Use:   "validate",
-	Short: "Validate Caddyfile syntax without reloading",
+	Short: "Check the Caddy config adapts, without loading it",
+	Long: `Assemble the agent's Caddy config from every service's routes and adapt it,
+as a reload would, without loading it into the running Caddy.`,
+	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		dir := configDir()
-		caddyfilePath := filepath.Join(dir, "caddy", "Caddyfile")
-		if _, err := os.Stat(caddyfilePath); os.IsNotExist(err) {
-			return fmt.Errorf("caddyfile not found at %s: run 'homelab setup' first", caddyfilePath)
-		}
-		if err := runWithSpinner("Validating Caddyfile…", func(r *run.Commander) error {
+		if err := runWithSpinner("Validating the Caddy config…", func(r *run.Commander) error {
 			return caddy.NewWithRunner(dir, r).Validate()
 		}); err != nil {
 			return err
 		}
-		fmt.Printf("%s Caddyfile is valid\n", styles.Success.Render("✓"))
+		fmt.Printf("%s Caddy config is valid\n", styles.Success.Render("✓"))
 		return nil
 	},
 }
@@ -101,7 +118,7 @@ func runServiceReload(root, name string) error {
 	if err := validateService(root, name); err != nil {
 		return err
 	}
-	if err := requireSitesLayout(root, name); err != nil {
+	if err := requireMigrated(root, name); err != nil {
 		return err
 	}
 	if err := runWithSpinner(

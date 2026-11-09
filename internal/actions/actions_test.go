@@ -98,12 +98,15 @@ func TestBuild_FillsDefaultsAndAppendsYes(t *testing.T) {
 
 	up, _ := ByID("global.up")
 	assert.Equal(t, []string{"up", "--all"}, up.Build(GlobalTarget(nil), nil))
-	assert.Equal(t, []string{"up", "--group", "media", "--build"}, up.Build(GlobalTarget(nil), Inputs{"group": "media", "build": "true"}))
+	assert.Equal(t, []string{"up", "--group", "media"}, up.Build(GlobalTarget(nil), Inputs{"group": "media"}))
 	gp, _ := ByID("global.prune")
 	assert.Equal(t, "all", gp.Token(GlobalTarget(nil)))
 
-	coreUp, _ := ByID("core.up")
-	assert.Equal(t, []string{"up"}, coreUp.Build(CoreTarget(nil), nil))
+	coreLogs, _ := ByID("core.logs")
+	assert.Equal(t, []string{"logs", "--follow", "--tail", "200"}, coreLogs.Build(CoreTarget(nil), nil),
+		"the edge row runs the no-service form: the agent's logs")
+	_, ok := ByID("core.up")
+	assert.False(t, ok, "there is no core stack to bring up")
 
 	exec, _ := ByID("service.exec")
 	assert.Equal(t, []string{"exec", "--no-tty", "--user", "root", "web", "ls", "-la"},
@@ -116,8 +119,8 @@ func TestLayerTarget(t *testing.T) {
 	assert.NotContains(t, off, "layer.disable")
 	on := ids(For(LayerTarget("cf", true, true)))
 	assert.Contains(t, on, "layer.disable")
-	assert.Contains(t, on, "layer.stop")
-	assert.NotContains(t, on, "layer.list", "cf has no list command")
+	assert.Contains(t, on, "layer.container")
+	assert.NotContains(t, on, "layer.stop", "cloudflared is deployed by ext enable, not started separately")
 }
 
 func TestChoices_Groups(t *testing.T) {

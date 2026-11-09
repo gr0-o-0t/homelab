@@ -1,48 +1,22 @@
 package cmd
 
 import (
-	"fmt"
-	"os"
-
 	"github.com/groot/homelab/internal/desired"
-	"github.com/groot/homelab/internal/run"
-	"github.com/groot/homelab/internal/tui/styles"
 	"github.com/spf13/cobra"
 )
 
 var startCmd = &cobra.Command{
-	Use:   "start [service...]",
-	Short: "Start existing stopped containers (no service: the core stack)",
-	Long: `Start existing service containers without creating them first.
-Use 'up' to create and start containers.
+	Use:   "start <service...>",
+	Short: "Start services (on Swarm, the same as up)",
+	Long: `Start services. Swarm keeps no stopped containers to resume, so start is
+the same as 'homelab up'.
 
-  homelab start              # core stack (start existing containers)
   homelab start jellyfin immich  # these services
-  homelab start -a           # every installed service
-  homelab start --group media  # all services in the "media" group
-
-Note: for the core stack this runs 'docker compose start' — containers must
-already exist. Services run on Swarm, which keeps no stopped containers:
-for them start is the same as 'homelab up'.`,
+  homelab start -a               # every installed service
+  homelab start --group media    # all services in the "media" group`,
 	Args:              cobra.ArbitraryArgs,
 	ValidArgsFunction: completeServiceNames,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		dir := configDir()
-		if len(args) > 0 || startFlags.all || startFlags.group != "" {
-			return runServiceStart(cmd, args)
-		}
-		env := buildEnv(dir, "")
-		composeFile := run.CoreComposeFile(dir)
-		if _, err := os.Stat(composeFile); err != nil {
-			return err
-		}
-		fmt.Printf("%s Starting core stack…\n", styles.Primary.Render("→"))
-		return run.Default().DockerComposeEnv(
-			composeFile,
-			env,
-			withProfiles(dir, "start")...,
-		)
-	},
+	RunE:              runServiceStart,
 }
 
 var startFlags = batchFlags{}

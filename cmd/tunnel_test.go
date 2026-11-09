@@ -162,14 +162,12 @@ func TestCloudflaredState_FromSwarmTask(t *testing.T) {
 		DesiredState: dswarm.TaskStateRunning, Status: dswarm.TaskStatus{State: dswarm.TaskStateRunning}})
 
 	assert.Equal(t, "running", cloudflaredState(root))
-	assert.Equal(t, "running", containerStatus(swarm.CloudflaredService))
 
 	l, ok := extRegistry().Get("cf")
 	require.True(t, ok)
 	assert.Equal(t, swarm.CloudflaredService, l.ContainerName())
 	assert.Equal(t, "running", l.Status().ContainerState)
 	assert.Equal(t, "running", extLayerState(l, nil))
-	assert.Empty(t, l.Profile(), "no compose profile may start a second connector")
 
 	require.NoError(t, stopCloudflared(root))
 	f.SetTasks(nil)

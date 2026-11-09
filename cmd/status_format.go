@@ -1,37 +1,17 @@
 package cmd
 
 import (
-	"encoding/json"
 	"fmt"
-	"os/exec"
-	"strings"
 
 	"github.com/groot/homelab/internal/service"
 	"github.com/groot/homelab/internal/tui/styles"
 )
 
 // State formatting shared by the status views: merging a container's state with
-// its health into one column, and the tailnet identity lookups the core table
-// shows.
-
-// tailscaleFQDN returns the Tailscale node FQDN.
-func tailscaleFQDN() (string, bool) {
-	out, err := exec.Command(
-		"docker", "exec", "tailscale",
-		"tailscale", "status", "--self", "--json",
-	).Output()
-	if err != nil {
-		return "", false
-	}
-	var self struct{ DNSName string }
-	if json.Unmarshal(out, &self) != nil || self.DNSName == "" {
-		return "", false
-	}
-	return strings.TrimSuffix(self.DNSName, "."), true
-}
+// its health into one column.
 
 // mergedCoreState returns a styled state string that merges container state
-// with Docker healthcheck status for core table entries.
+// with Docker healthcheck status for per-container rows.
 func mergedCoreState(state, health string) string {
 	switch {
 	case state != "running":

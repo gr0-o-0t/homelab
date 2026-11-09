@@ -1,12 +1,11 @@
-// Package tailscale implements the NetworkLayer interface for Tailscale mesh VPN.
-// Tailscale is the always-on default extension: it provides the tailnet network
-// interface that Caddy shares via network_mode: service:tailscale. The layer
-// manages the tailscale container's compose lifecycle (start/stop/status) and
-// provides node identity information (tailnet IP, FQDN).
+// Package tailscale implements the NetworkLayer interface for the private
+// tailnet: the default layer of `homelab enable <svc>`. The tailnet node is
+// the leader agent's own tsnet node "homelab", and its Caddy serves the sites
+// on it, so this layer has no container of its own: its state is the agent
+// container's.
 //
 // Unlike other network layers, tailscale does NOT manage per-service tunnel
-// config — it provides network-level connectivity. Service exposure through
-// the tailnet is the default for `homelab enable <svc>`.
+// config — it provides network-level connectivity.
 package tailscale
 
 import (
@@ -17,9 +16,11 @@ import (
 	"github.com/groot/homelab/internal/run"
 )
 
-const containerName = "tailscale"
+// containerName is the leader agent's container, which runs the tailnet node
+// and Caddy (internal/bootstrap.AgentContainer).
+const containerName = "homelab-agent"
 
-// Layer implements network.NetworkLayer for the Tailscale mesh VPN node.
+// Layer implements network.NetworkLayer for the tailnet.
 //
 // Its sites are <host>.<home>.<domain>, served with the wildcard cert. It has
 // no per-service daemon state, so it implements no network.Configurer.
@@ -27,14 +28,14 @@ type Layer struct {
 	network.HostTemplate
 	repoRoot string
 	runner   *run.Commander
-	envFn    network.EnvFunc
 }
 
-// New creates a new Tailscale layer.
-func New(repoRoot string, runner *run.Commander, envFn network.EnvFunc) *Layer {
+// New creates a new Tailscale layer. The env func is unused: the layer reads
+// nothing from the environment but the ServiceAddresses argument.
+func New(repoRoot string, runner *run.Commander, _ network.EnvFunc) *Layer {
 	return &Layer{
 		HostTemplate: network.HostTemplate{Suffix: ".{$HOME_SUBDOMAIN}.{$DOMAIN}", TLS: true, Bind: network.TailnetBind},
-		repoRoot:     repoRoot, runner: runner, envFn: envFn,
+		repoRoot:     repoRoot, runner: runner,
 	}
 }
 
@@ -44,29 +45,14 @@ var _ network.NetworkLayer = (*Layer)(nil)
 func (l *Layer) Name() string          { return "ts" }
 func (l *Layer) Label() string         { return "Tailscale mesh VPN" }
 func (l *Layer) ContainerName() string { return containerName }
-func (l *Layer) Profile() string       { return "" }
 func (l *Layer) Flag() string          { return "" } // the default: bare `homelab enable`
 
-// Start brings the tailscale container up via its compose file.
-func (l *Layer) Start() error {
-	return l.runner.DockerComposeEnv(
-		run.CoreComposeFile(l.repoRoot), l.env(),
-		"up", "-d", containerName,
-	)
-}
-
-// Stop brings the tailscale container down.
-func (l *Layer) Stop() error {
-	return l.runner.DockerComposeEnv(
-		run.CoreComposeFile(l.repoRoot), l.env(),
-		"stop", containerName,
-	)
-}
-
-// Status returns the tailscale container state.
+// Status returns the agent container's state.
 func (l *Layer) Status() network.Status {
-	state := l.runner.ContainerStatus(containerName)
-	return network.Status{ContainerState: state}
+	if l.runner == nil {
+		return network.Status{ContainerState: "not found"}
+	}
+	return network.Status{ContainerState: l.runner.ContainerStatus(containerName)}
 }
 
 // LegacyConfDir is the main conf.d/: the tailnet is the default exposure
@@ -83,11 +69,4 @@ func (l *Layer) ServiceAddresses(svcName string, env map[string]string) []networ
 		return []network.ServiceAddress{{Note: "HOME_SUBDOMAIN/DOMAIN not set — run homelab setup"}}
 	}
 	return []network.ServiceAddress{{URL: fmt.Sprintf("https://%s.%s.%s", configgen.ServiceHost(l.repoRoot, svcName), sub, dom)}}
-}
-
-func (l *Layer) env() map[string]string {
-	if l.envFn == nil {
-		return map[string]string{}
-	}
-	return l.envFn()
 }

@@ -41,7 +41,6 @@ const (
 type Layer struct {
 	repoRoot string
 	runner   *run.Commander
-	envFn    network.EnvFunc
 
 	// reloadHook, if non-nil, replaces reload() for testing.
 	reloadHook func() error
@@ -55,8 +54,8 @@ type Layer struct {
 }
 
 // New creates a new Tor layer.
-func New(repoRoot string, runner *run.Commander, envFn network.EnvFunc) *Layer {
-	return &Layer{repoRoot: repoRoot, runner: runner, envFn: envFn}
+func New(repoRoot string, runner *run.Commander, _ network.EnvFunc) *Layer {
+	return &Layer{repoRoot: repoRoot, runner: runner}
 }
 
 // newForTest creates a Tor layer with an injected reload hook for testing.
@@ -79,27 +78,8 @@ var (
 func (l *Layer) Name() string          { return "tor" }
 func (l *Layer) Label() string         { return "Tor onion service proxy" }
 func (l *Layer) ContainerName() string { return containerName }
-func (l *Layer) Profile() string       { return "tor" }
 func (l *Layer) Flag() string          { return "tor" }
 func (l *Layer) LegacyConfDir() string { return "conf.d-tor" }
-
-// ── Lifecycle ─────────────────────────────────────────────────────────────────
-
-func (l *Layer) Start() error {
-	return l.runner.DockerComposeEnv(
-		run.CoreComposeFile(l.repoRoot),
-		l.env(),
-		"--profile", "tor", "up", "-d",
-	)
-}
-
-func (l *Layer) Stop() error {
-	return l.runner.DockerComposeEnv(
-		run.CoreComposeFile(l.repoRoot),
-		l.env(),
-		"stop", containerName,
-	)
-}
 
 func (l *Layer) Status() network.Status {
 	state := l.runner.ContainerStatus(containerName)
@@ -319,10 +299,3 @@ func (l *Layer) reload() error {
 }
 
 // ── env ───────────────────────────────────────────────────────────────────────
-
-func (l *Layer) env() map[string]string {
-	if l.envFn == nil {
-		return map[string]string{}
-	}
-	return l.envFn()
-}

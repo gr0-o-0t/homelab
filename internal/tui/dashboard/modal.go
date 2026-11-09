@@ -315,7 +315,7 @@ func (m Model) helpLines() []string {
 
 func scopeTitle(sc actions.Scope) string {
 	return map[actions.Scope]string{
-		actions.Service: "Service", actions.Core: "Core stack", actions.CatalogEntry: "Catalog entry",
+		actions.Service: "Service", actions.Core: "Edge", actions.CatalogEntry: "Catalog entry",
 		actions.Layer: "Network layer", actions.Global: "Anywhere (stack)",
 	}[sc]
 }

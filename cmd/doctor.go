@@ -13,9 +13,11 @@ import (
 	"github.com/groot/homelab/internal/configgen"
 	"github.com/groot/homelab/internal/diagnostics"
 	"github.com/groot/homelab/internal/docker"
+	"github.com/groot/homelab/internal/edge"
 	"github.com/groot/homelab/internal/network"
 	"github.com/groot/homelab/internal/run"
 	"github.com/groot/homelab/internal/service"
+	"github.com/groot/homelab/internal/swarm"
 	"github.com/groot/homelab/internal/tui/spinner"
 	"github.com/groot/homelab/internal/tui/styles"
 	"github.com/spf13/cobra"
@@ -32,7 +34,7 @@ var doctorCmd = &cobra.Command{
 	Long: `Runs health checks. Without arguments, checks the homelab environment.
 With a service name, checks that specific service.
 
-  homelab doctor          # core stack + environment
+  homelab doctor          # environment, the agent's Caddy, routing
   homelab doctor jellyfin # single service
   homelab doctor --all    # all installed services
 
@@ -97,10 +99,12 @@ func runDoctor(_ *cobra.Command, args []string) error {
 	renderCheckGroup(diagnostics.RunConfigChecks(cfgFile), &pass)
 	renderCheckGroup(diagnostics.RunInfraChecks(dc), &pass)
 
-	// --fix: create Docker network if missing
+	// --fix: create the overlay network if missing, as `up` would.
 	if !pass && doctorFixFlag && dc != nil {
-		if err := spinner.Run("Creating Docker network 'home-services'…", func() error {
-			return run.Default().DockerNetworkCreate("home-services")
+		if err := spinner.Run("Creating overlay network 'home-services'…", func() error {
+			return withDeployer(dir, false, func(ctx context.Context, d *swarm.Deployer) error {
+				return d.EnsureNetwork(ctx)
+			})
 		}); err != nil {
 			fmt.Printf("  %s  Could not create network: %v\n", styles.Warning.Render("!"), err)
 		} else {
@@ -109,35 +113,20 @@ func runDoctor(_ *cobra.Command, args []string) error {
 		}
 	}
 
-	renderCheckGroup(diagnostics.RunCoreStackChecks(dc, dir), &pass)
-	renderCheckGroup(diagnostics.RunPortChecks(dir, buildEnv(dir, ""), activeProfiles(dir), dc), &pass)
-
-	// Core stack extras — Caddy config validate + Tailscale connectivity
-	if dc != nil {
-		caddyCtx, caddyCancel := context.WithTimeout(context.Background(), 3*time.Second)
-		caddyState := dc.ContainerState(caddyCtx, "caddy")
-		caddyCancel()
-		if caddyState == containerStateRunning {
-			var buf strings.Builder
-			r := &run.Commander{Stdout: &buf, Stderr: &buf}
-			if caddy.NewWithRunner(dir, r).Validate() == nil {
-				fmt.Printf("  %s  Caddy config valid\n", styles.Success.Render("✓"))
-			} else {
-				fmt.Printf("  %s  Caddy config valid\n", styles.Err.Render("✗"))
-				pass = false
-			}
-		}
-		tsCtx, tsCancel := context.WithTimeout(context.Background(), 3*time.Second)
-		tsState := dc.ContainerState(tsCtx, "tailscale")
-		tsCancel()
-		if tsState == containerStateRunning {
-			ip, ok := tailscaleIP()
-			if ok {
-				fmt.Printf("  %s  Tailscale connected (%s)\n", styles.Success.Render("✓"), styles.Primary.Render(ip))
-			} else {
-				fmt.Printf("  %s  Tailscale not connected\n", styles.Err.Render("✗"))
-				pass = false
-			}
+	// The edge: the agent's Caddy answers, and the routes adapt.
+	fmt.Printf("\n  %s\n", styles.Bold.Render("Edge"))
+	if err := edge.Reachable(edge.AdminSocket(dir)); err != nil {
+		fmt.Printf("  %s  Agent's Caddy not reachable: %v\n", styles.Err.Render("✗"), err)
+		pass = false
+	} else {
+		fmt.Printf("  %s  Agent's Caddy answers on its admin socket\n", styles.Success.Render("✓"))
+		var buf strings.Builder
+		r := &run.Commander{Stdout: &buf, Stderr: &buf}
+		if err := caddy.NewWithRunner(dir, r).Validate(); err == nil {
+			fmt.Printf("  %s  Caddy config valid\n", styles.Success.Render("✓"))
+		} else {
+			fmt.Printf("  %s  Caddy config valid: %v\n", styles.Err.Render("✗"), err)
+			pass = false
 		}
 	}
 
@@ -189,18 +178,14 @@ func renderCheckGroup(g diagnostics.CheckGroup, pass *bool) {
 	}
 }
 
-// caddyRoutingCheck checks the Caddy route directories — caddy/sites, and the
-// legacy conf.d/conf.d-cf the Caddyfile still imports — and with --fix removes
-// dangling symlinks: installs from before the static caddy.conf scheme was
-// retired can still hold links into service directories, and a dangling one
-// makes Caddy's import fail.
-// Returns results and handles --fix repair.
+// caddyRoutingCheck checks the routes directory, caddy/sites, and with --fix
+// creates it and removes dangling symlinks: a config dir from before the
+// static caddy.conf scheme was retired can still hold links into service
+// directories.
 func caddyRoutingCheck(dir string, fix bool, pass *bool) []diagnostics.CheckResult {
 	var results []diagnostics.CheckResult
 	for _, d := range []string{
 		configgen.SitesDir(dir),
-		filepath.Join(dir, "caddy", "conf.d"),
-		filepath.Join(dir, "caddy", "conf.d-cf"),
 	} {
 		rel, _ := filepath.Rel(dir, d)
 		if _, err := os.Stat(d); os.IsNotExist(err) {

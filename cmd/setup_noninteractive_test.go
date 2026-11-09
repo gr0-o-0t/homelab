@@ -179,5 +179,5 @@ func TestSetupSet_Root(t *testing.T) {
 	assert.Equal(t, "tskey-x", v)
 	assert.False(t, sm.IsSet("", "CLOUDFLARE_API_TOKEN"), "an empty value leaves the secret unchanged")
 	_, err = os.Stat(filepath.Join(root, "core"))
-	assert.NoError(t, err, "core files are installed as in interactive setup")
+	assert.True(t, os.IsNotExist(err), "no Compose core files are installed")
 }

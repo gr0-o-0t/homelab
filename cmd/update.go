@@ -2,21 +2,18 @@ package cmd
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/groot/homelab/internal/desired"
-	"github.com/groot/homelab/internal/run"
 	"github.com/groot/homelab/internal/tui/styles"
 	"github.com/spf13/cobra"
 )
 
 var serviceUpdateCmd = &cobra.Command{
-	Use:   "update [service...]",
-	Short: "Pull latest images and recreate the core stack or services",
-	Long: `Pull the latest Docker images and recreate containers
-(docker compose pull && docker compose up -d).
+	Use:   "update <service...>",
+	Short: "Pull latest images and redeploy services",
+	Long: `Pull the latest Docker images and redeploy services on Swarm, each tag
+resolved to its current digest.
 
-  homelab update                  # core stack: refresh core files, pull, rebuild, recreate
   homelab update jellyfin immich  # these services
   homelab update -a               # every installed service
   homelab update --group media    # all services in the "media" group`,
@@ -29,9 +26,6 @@ var updateFlags = batchFlags{}
 
 func runServiceUpdate(_ *cobra.Command, args []string) error {
 	root := configDir()
-	if len(args) == 0 && !updateFlags.all && updateFlags.group == "" {
-		return updateCoreStack(root)
-	}
 	names, err := resolveTargets(root, updateFlags.all, updateFlags.group, args)
 	if err != nil {
 		return err
@@ -39,51 +33,10 @@ func runServiceUpdate(_ *cobra.Command, args []string) error {
 	return forEachService(root, names, func(name string) error {
 		recordService(root, name, desired.Running)
 		// Up pulls, resolves each tag to its current digest and removes
-		// containers no longer in the compose file: it is the update.
+		// services no longer in the compose file: it is the update.
 		fmt.Printf("%s Updating %s\n", styles.Primary.Render("→"), styles.Bold.Render(name))
 		return upOne(root, name)
 	})
-}
-
-func updateCoreStack(root string) error {
-	fmt.Printf("%s Updating core stack…\n", styles.Primary.Render("→"))
-	// The compose file, Dockerfiles and Caddyfile in the config dir are copies
-	// of the ones embedded in this binary, written by `homelab setup`. Without
-	// refreshing them here, upgrading homelab would keep running the old core
-	// until someone re-ran the interactive wizard. They are static assets: no
-	// identities or secrets live in them.
-	if _, err := os.Stat(rootConfigFile()); err != nil {
-		return fmt.Errorf("no homelab config in %s — run `homelab setup` first", root)
-	}
-	if err := installAssets(root); err != nil {
-		return fmt.Errorf("refreshing core files: %w", err)
-	}
-	env := buildEnv(root, "")
-	composeFile := run.CoreComposeFile(root)
-	// withProfiles: the extension containers are profile-gated, and without
-	// their profiles compose neither pulls nor recreates them.
-	if err := run.Default().DockerComposeEnv(composeFile, env, withProfiles(root, "pull")...); err != nil {
-		return fmt.Errorf("pulling core images: %w", err)
-	}
-	// --build: Caddy, i2p and yggdrasil are built from the refreshed Dockerfiles.
-	if err := run.Default().DockerComposeEnv(composeFile, env, withProfiles(root, "up", "-d", "--build", "--remove-orphans")...); err != nil {
-		return fmt.Errorf("recreating core stack: %w", err)
-	}
-	fmt.Printf("%s Core stack updated\n", styles.Success.Render("✓"))
-	// The recreated caddy now mounts caddy/sites, so routes still in the old
-	// per-layer files can move there.
-	if err := sitesReady(root); err != nil {
-		fmt.Printf("%s Route migration skipped: %v\n", styles.Warning.Render("!"), err)
-		return nil
-	}
-	n, err := runMigration(root, os.Stdout)
-	if n > 0 {
-		// Same routes, new files: a reload only confirms Caddy reads them.
-		if rerr := caddyReload(); rerr != nil {
-			fmt.Printf("%s Caddy reload: %v\n", styles.Warning.Render("!"), rerr)
-		}
-	}
-	return err
 }
 
 func init() {

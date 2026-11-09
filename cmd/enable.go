@@ -9,6 +9,7 @@ import (
 	"github.com/groot/homelab/internal/configgen"
 	"github.com/groot/homelab/internal/network"
 	"github.com/groot/homelab/internal/network/layers"
+	"github.com/groot/homelab/internal/routing"
 	"github.com/groot/homelab/internal/run"
 	"github.com/groot/homelab/internal/tui/styles"
 	"github.com/spf13/cobra"
@@ -99,7 +100,7 @@ func runEnable(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	if err := requireSitesLayout(root, svcName); err != nil {
+	if err := requireMigrated(root, svcName); err != nil {
 		return err
 	}
 
@@ -192,4 +193,14 @@ func quietCaddy(root string) (*caddy.Manager, *run.Commander, func(error) error)
 		return fmt.Errorf("%w\n%s", err, strings.Join(lines, "\n"))
 	}
 	return caddy.NewWithRunner(root, r), r, explain
+}
+
+// requireMigrated refuses to change a service still routed by the old
+// per-layer Caddy files (caddy/conf.d*): both would define its sites. An
+// import (`homelab init --import`) migrates them.
+func requireMigrated(root, svc string) error {
+	if routing.HasLegacy(root, layers.Legacy(root, nil, nil), svc) {
+		return fmt.Errorf("%s is still routed by the old per-layer Caddy files (caddy/conf.d*) — import the config dir with `homelab init --import`", svc)
+	}
+	return nil
 }

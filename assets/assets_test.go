@@ -1,6 +1,7 @@
 package assets_test
 
 import (
+	"io/fs"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -10,27 +11,17 @@ import (
 	"github.com/groot/homelab/assets"
 )
 
-func TestCoreFS_ContainsExpectedFiles(t *testing.T) {
-	entries, err := assets.CoreFS.ReadDir("caddy")
-	require.NoError(t, err, "should be able to read caddy directory")
-
-	caddyFiles := make(map[string]bool)
-	for _, e := range entries {
-		caddyFiles[e.Name()] = true
-	}
-
-	assert.True(t, caddyFiles["Caddyfile"], "should have Caddyfile")
-	assert.True(t, caddyFiles["conf.d"], "should have conf.d subdirectory")
-
-	confDEntries, err := assets.CoreFS.ReadDir("caddy/conf.d")
-	require.NoError(t, err, "should be able to read caddy/conf.d")
-
-	confDFiles := make(map[string]bool)
-	for _, e := range confDEntries {
-		confDFiles[e.Name()] = true
-	}
-
-	assert.True(t, confDFiles["README"], "conf.d should have README")
+// CoreFS is only the Caddyfile internal/edge assembles from: the Compose
+// core stack, its Dockerfiles and the per-layer conf.d* trees are gone.
+func TestCoreFS_IsOnlyTheCaddyfile(t *testing.T) {
+	var files []string
+	require.NoError(t, fs.WalkDir(assets.CoreFS, ".", func(path string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() {
+			files = append(files, path)
+		}
+		return err
+	}))
+	assert.Equal(t, []string{"caddy/Caddyfile"}, files)
 }
 
 func TestCatalogFS_ContainsServices(t *testing.T) {

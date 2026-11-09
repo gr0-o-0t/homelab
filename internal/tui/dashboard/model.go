@@ -115,7 +115,7 @@ type (
 	}
 )
 
-// EnvBuilderFn returns the docker compose environment map for a service name.
+// EnvBuilderFn returns the environment map for a service name.
 type EnvBuilderFn func(svcName string) map[string]string
 
 // Options is what the dashboard needs from its host (cmd).
@@ -295,21 +295,26 @@ func (m Model) extensions() []network.NetworkLayer {
 	return out
 }
 
-// coreContainers is caddy plus every layer's container.
+// coreContainers is the agent plus every layer's container, each once (the
+// tailnet layer is the agent's).
 func (m Model) coreContainers() []string {
-	names := []string{caddyContainer}
+	names := []string{agentContainer}
 	for _, l := range m.opt.Layers {
-		names = append(names, l.ContainerName())
+		if !slices.Contains(names, l.ContainerName()) {
+			names = append(names, l.ContainerName())
+		}
 	}
 	return names
 }
 
-// coreHeaderContainers is caddy plus the offered layers' containers: what the
-// core stack runs right now.
+// coreHeaderContainers is the agent plus the offered layers' containers, each
+// once: what the edge runs right now.
 func (m Model) coreHeaderContainers() []string {
-	names := []string{caddyContainer}
+	names := []string{agentContainer}
 	for _, l := range m.offeredLayers() {
-		names = append(names, l.ContainerName())
+		if !slices.Contains(names, l.ContainerName()) {
+			names = append(names, l.ContainerName())
+		}
 	}
 	return names
 }
@@ -332,9 +337,10 @@ func layerIcon(name string) string {
 
 // ── rows of each view ─────────────────────────────────────────────────────────
 
-// Core container name and the docker state the core header counts as up.
+// The leader agent's container — it runs Caddy and the tailnet node — and the
+// docker state the core header counts as up.
 const (
-	caddyContainer        = "caddy"
+	agentContainer        = "homelab-agent"
 	containerStateRunning = "running"
 )
 
@@ -343,7 +349,8 @@ const coreDir = "@core"
 
 func isCore(svc *service.Service) bool { return svc != nil && svc.Dir == coreDir }
 
-// coreService is the core stack as a list row, counted from container states.
+// coreService is the edge (the agent and extensions) as a list row, counted
+// from container states.
 func (m Model) coreService() service.Service {
 	s := service.Service{Name: "core", Installed: true, Dir: coreDir}
 	for _, c := range m.coreHeaderContainers() {
@@ -616,13 +623,6 @@ func (m Model) rootEnv() map[string]string {
 		return map[string]string{}
 	}
 	return m.opt.BuildEnv("")
-}
-
-func resolveEnv(fn EnvBuilderFn, name string) map[string]string {
-	if fn == nil {
-		return nil
-	}
-	return fn(name)
 }
 
 // withMark returns a copy of the marks with name toggled; Models are values,
