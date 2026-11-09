@@ -139,13 +139,15 @@ func (e *Engine) checkRestorable(rec ServiceRecord, srcDir string, restoreConfig
 		return fmt.Errorf("the backup of %s does not match the service: backup has volumes %v and databases %v, "+
 			"the service declares %v and %v — refusing to restore", rec.Name, haveVols, haveDBs, wantVols, wantDBs)
 	}
-	if e.CreateVolumes {
-		return nil
-	}
 	for _, v := range rec.Volumes {
-		if !e.volumeExists(v.Volume) {
+		if !e.CreateVolumes && !e.volumeExists(v.Volume) {
 			return fmt.Errorf("volume %q is not on this node — refusing to create it; "+
 				"pass --create-volumes to restore into a new volume (a fresh cluster)", v.Volume)
+		}
+		// Before anything is stopped: a helper still at work on a volume
+		// refuses the whole restore, not half of it.
+		if err := e.clearStaleHelpers(v.Volume); err != nil {
+			return err
 		}
 	}
 	return nil

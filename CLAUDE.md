@@ -113,10 +113,14 @@ in the leader agent at `/var/lib/homelab-backups` (never inside the state volume
 `--out` and restore's `<backup-dir>` must resolve under it (relative = relative to
 it). Volume helpers run the agent's own image (by image ID, entrypoint
 overridden) detached — `docker run -d`, `docker wait`, `docker rm -f` — mounting
-the data volume and the backups volume; a backup refuses a volume not on this
+the data volume and the backups volume, labelled `homelab.helper.volume=<vol>`: a
+helper still running on that volume (an earlier failed wait, an agent restart)
+refuses the run, exited ones are removed first. A backup refuses a volume not on this
 node. `backup` and `restore` are `remote.Detached`: when the client disconnects
 (or Ctrl-C on the PC, which prints where it went on) the agent lets them run to
-completion, logging their output and holding the lock. `backup --fetch` runs on
+completion, logging their output and holding the lock (a TTY child at a prompt
+is sent ^U^D, so restore's confirm reads EOF and answers no). Non-replicated
+(global) services are refused up front. `backup --fetch` runs on
 the PC (not forwarded): it streams the hidden, lock-free `backup-export <name>`
 tar from the leader and unpacks it — regular files and directories only,
 confined by `os.Root` — into a temp dir renamed into place once complete.

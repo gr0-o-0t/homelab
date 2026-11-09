@@ -561,3 +561,17 @@ func TestDeploy_ScaleChangesOnlyReplicas(t *testing.T) {
 		assert.NotContains(t, c, "ImageInspect")
 	}
 }
+
+// A global-mode service has no count to scale to zero: refused up front,
+// not after a stop that never finishes.
+func TestDeploy_ReplicasRefusesGlobalMode(t *testing.T) {
+	ctx := context.Background()
+	d, f, _ := newDeployer(t)
+	_, err := f.ServiceCreate(ctx, dswarm.ServiceSpec{
+		Annotations: dswarm.Annotations{Name: "agentish_agent", Labels: map[string]string{swarm.LabelService: "agentish"}},
+		Mode:        dswarm.ServiceMode{Global: &dswarm.GlobalService{}},
+	}, dswarm.ServiceCreateOptions{})
+	require.NoError(t, err)
+	_, err = d.Replicas(ctx, "agentish")
+	assert.ErrorContains(t, err, "agentish_agent is not a replicated Swarm service")
+}

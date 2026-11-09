@@ -1,9 +1,11 @@
 package remote
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -53,6 +55,13 @@ func helperMain(args []string) {
 		sort.Strings(env)
 		fmt.Println(strings.Join(env, "\n"))
 		fmt.Println("ARGV=" + strings.Join(os.Args[1:], " "))
+		os.Exit(0)
+	case "restore": // restore <id>: prompts like confirm and reads one line, then records its answer
+		id := args[len(args)-1]
+		_ = os.WriteFile(filepath.Join(dir, id+".pid"), []byte(strconv.Itoa(os.Getpid())), 0o600)
+		fmt.Print("Proceed with restore? [y/N]: ")
+		line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+		_ = os.WriteFile(filepath.Join(dir, id+".answer"), fmt.Appendf(nil, "%q %v", line, err), 0o600)
 		os.Exit(0)
 	case "cat": // echoes stdin
 		var buf bytes.Buffer
@@ -121,7 +130,7 @@ func testResolve(argv []string) ([]string, bool) {
 		return []string{"cf", argv[1]}, true
 	}
 	switch name {
-	case "help", "completion", "__complete", "status", "ls", "cat", "up", "delete", "session", "agent", "envshim", "version", "login", "join", "backup":
+	case "help", "completion", "__complete", "status", "ls", "cat", "up", "delete", "session", "agent", "envshim", "version", "login", "join", "backup", "restore":
 		return []string{name}, true
 	}
 	return nil, false
@@ -399,7 +408,6 @@ func TestLoadClient(t *testing.T) {
 	assert.Contains(t, err.Error(), "CLUSTER_SECRET")
 }
 
-
 // A backup or restore stopped midway leaves a service scaled to zero or a
 // volume half-replaced: when its client drops it runs to completion, its
 // output goes to the agent log, and it holds the lock until it exits.
@@ -439,4 +447,42 @@ func (s *syncBuf) Write(p []byte) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.b.Write(p)
+}
+
+// A detached restore that loses its client at the TTY confirmation prompt
+// must not wait there forever holding the lock: the server types EOF into
+// its terminal, the prompt reads "no" and the command exits.
+func TestRemote_DetachedTTYPromptGetsEOFOnDisconnect(t *testing.T) {
+	e := newTestServer(t, func(c *ServerConfig) { c.DetachLog = &syncBuf{} })
+	c := e.client(testSecret, "1.4.2")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		// Stdin stays open (never sends EOF), like a terminal at a prompt.
+		pr, _ := io.Pipe()
+		_, _ = c.Run(ctx, RunOptions{Argv: []string{"restore", "rs"}, TTY: true, Rows: 24, Cols: 80,
+			Stdin: pr, Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}})
+	}()
+	pidFile := filepath.Join(e.stateDir, "rs.pid")
+	require.Eventually(t, func() bool { _, err := os.Stat(pidFile); return err == nil }, 10*time.Second, 20*time.Millisecond)
+	b, _ := os.ReadFile(pidFile)
+	pid, _ := strconv.Atoi(string(b))
+	require.NotZero(t, pid)
+	time.Sleep(200 * time.Millisecond) // at the prompt
+	cancel()
+	<-done
+
+	assert.Eventually(t, func() bool { return syscall.Kill(pid, 0) != nil }, 5*time.Second, 20*time.Millisecond,
+		"the prompting child exited")
+	answer, err := os.ReadFile(filepath.Join(e.stateDir, "rs.answer"))
+	require.NoError(t, err)
+	assert.Contains(t, string(answer), "EOF", "the prompt read end of input, not an answer")
+
+	start := time.Now()
+	code, _, _, err := run(t, c, RunOptions{Argv: []string{"up", "after", "10"}})
+	require.NoError(t, err)
+	assert.Equal(t, 0, code)
+	assert.Less(t, time.Since(start), 3*time.Second, "the lock was released")
 }

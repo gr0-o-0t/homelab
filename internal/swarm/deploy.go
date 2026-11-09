@@ -184,8 +184,15 @@ func (d *Deployer) Replicas(ctx context.Context, svc string) (map[string]uint64,
 	}
 	out := make(map[string]uint64, len(list))
 	for i := range list {
+		r := list[i].Spec.Mode.Replicated
+		if r == nil {
+			// Global (or job) mode has no count to set to zero: refused
+			// here rather than as a stop that never finishes.
+			return nil, fmt.Errorf("%s is not a replicated Swarm service, so it cannot be scaled to zero "+
+				"to stop it — back it up with --live, or stop it by hand first", list[i].Spec.Name)
+		}
 		var n uint64
-		if r := list[i].Spec.Mode.Replicated; r != nil && r.Replicas != nil {
+		if r.Replicas != nil {
 			n = *r.Replicas
 		}
 		out[list[i].Spec.Name] = n

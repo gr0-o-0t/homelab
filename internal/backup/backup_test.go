@@ -33,6 +33,8 @@ type fakeExec struct {
 	err      error
 	// missing volumes fail `docker volume inspect`.
 	missing map[string]bool
+	// ps is what `docker ps` prints for helpers on a volume.
+	ps map[string]string
 	// waitCode is what `docker wait` prints for a helper (default 0).
 	waitCode string
 }
@@ -78,6 +80,9 @@ func (f *fakeExec) Output(name string, args ...string) ([]byte, error) {
 			return []byte(f.waitCode + "\n"), nil
 		}
 		return []byte("0\n"), nil
+	case len(args) > 0 && args[0] == "ps":
+		vol := args[len(args)-3][strings.LastIndex(args[len(args)-3], "=")+1:]
+		return []byte(f.ps[vol]), nil
 	case len(args) > 0 && args[0] == "logs":
 		return []byte("tar: short read\n"), nil
 	}

@@ -333,7 +333,7 @@ func TestRestore_DownRestoreUp(t *testing.T) {
 	downAt, _ := strconv.Atoi(strings.Split(life.log[1], "@")[1])
 	assert.Equal(t, []string{"app@" + itoa(downAt)}, prepared, "the shared DB is readied after the stop, before restoring")
 	for _, c := range fx.calls[callsBefore:downAt] {
-		assert.Equal(t, "volume", c.Args[0], "only volume checks run before the service is stopped")
+		assert.Contains(t, []string{"volume", "ps"}, c.Args[0], "only checks run before the service is stopped")
 	}
 
 	runs := helpers(fx)
@@ -506,4 +506,75 @@ func TestList_FromBackupsVolume(t *testing.T) {
 	require.Len(t, got, 1)
 	b, _ := json.Marshal(got[0])
 	assert.Contains(t, string(b), `"dir":"`+filepath.Join(root, "20260101-000000"))
+}
+
+// A helper left by an earlier run (failed wait, agent restart) and still
+// running would interleave with a new one on the same volume: refuse.
+func TestRestore_RefusesWhileEarlierHelperRunsOnVolume(t *testing.T) {
+	fx := &fakeExec{ps: map[string]string{"app_data": "abc123 running\n"}}
+	e, life, src := restoreFixture(t, fx)
+	err := e.RestoreService(context.Background(), appRecord(), src, false)
+	require.ErrorContains(t, err, `a helper container (abc123, running) from an earlier backup or restore is still working on volume "app_data"`)
+	assert.ErrorContains(t, err, "docker logs -f abc123")
+	assert.Empty(t, helpers(fx), "no helper started, on this volume or any other")
+	assert.Empty(t, life.log, "refused before the service was stopped")
+	_, removed := fx.find("docker rm abc123")
+	assert.False(t, removed, "a running helper is never removed")
+}
+
+// Finished helpers are removed first, so they never hold the volume.
+func TestBackup_RemovesExitedHelpersFirst(t *testing.T) {
+	fx := &fakeExec{ps: map[string]string{"app_data": "old1 exited\nold2 created\n"}}
+	e, backups := newSwarmEngine(t, fx)
+	p, err := PlanFor(e.ConfigDir, "app")
+	require.NoError(t, err)
+	_, err = e.Backup(p, filepath.Join(backups, "b"), false)
+	require.NoError(t, err)
+
+	idx := func(s string) int {
+		for i, c := range fx.calls {
+			if strings.Contains(c.line(), s) {
+				return i
+			}
+		}
+		return -1
+	}
+	assert.GreaterOrEqual(t, idx("docker rm old1"), 0)
+	assert.GreaterOrEqual(t, idx("docker rm old2"), 0)
+	assert.Less(t, idx("docker rm old1"), idx("app_data:/from:ro"), "removed before the new helper starts")
+	run, ok := fx.find("app_data:/from:ro")
+	require.True(t, ok)
+	assert.Contains(t, run.line(), "--label homelab.helper=backup --label homelab.helper.volume=app_data")
+}
+
+// The same guard in the helper itself covers backups (and a helper that
+// appeared after restore's check).
+func TestBackup_RefusesWhileEarlierHelperRunsOnVolume(t *testing.T) {
+	fx := &fakeExec{ps: map[string]string{"app_data": "abc123 running\n"}}
+	e, backups := newSwarmEngine(t, fx)
+	p, err := PlanFor(e.ConfigDir, "app")
+	require.NoError(t, err)
+	_, err = e.Backup(p, filepath.Join(backups, "b"), false)
+	require.ErrorContains(t, err, "still working on volume \"app_data\"")
+	_, ran := fx.find("app_data:/from:ro")
+	assert.False(t, ran)
+}
+
+type globalLife struct{ fakeLife }
+
+func (globalLife) Replicas(context.Context, string) (map[string]uint64, error) {
+	return nil, errors.New("app_app is not a replicated Swarm service")
+}
+
+func TestBackup_RefusesNonReplicatedUpFront(t *testing.T) {
+	fx := &fakeExec{}
+	e, backups := newSwarmEngine(t, fx)
+	life := &globalLife{fakeLife{fx: fx}}
+	e.Life = life
+	p, err := PlanFor(e.ConfigDir, "app")
+	require.NoError(t, err)
+	_, err = e.BackupService(context.Background(), p, filepath.Join(backups, "x"), false)
+	assert.ErrorContains(t, err, "not a replicated Swarm service")
+	assert.Empty(t, life.log, "nothing scaled, nothing waited on")
+	assert.Empty(t, fx.calls)
 }

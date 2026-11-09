@@ -459,6 +459,22 @@ func (s *Server) runChild(ctx context.Context, ss *session, h Handshake, ch *chi
 		ch.ptmx = ptmx
 		ch.mu.Unlock()
 		go func() { _, _ = io.Copy(ptmx, stdin) }()
+		if detach {
+			// A detached child outlives its client and is never signalled:
+			// one waiting at a prompt (restore's confirm) would wait forever,
+			// holding the lock. Ending the copy above gives a pty no EOF, so
+			// type one: ^U drops any partial line, ^D on the empty line is
+			// EOF in canonical mode, and the prompt answers no.
+			finished := make(chan struct{})
+			defer close(finished)
+			go func() {
+				select {
+				case <-ctx.Done():
+					_, _ = ptmx.Write([]byte{0x15, 0x04})
+				case <-finished:
+				}
+			}()
+		}
 		go func() {
 			defer close(outDone)
 			_, _ = io.Copy(out(false), ptmx)

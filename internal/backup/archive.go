@@ -221,7 +221,7 @@ func (e *Engine) archiveVolume(vol, helperDir, file string) error {
 		return fmt.Errorf("volume %q is not on this node: backups run on the leader, where data volumes live "+
 			"— has the service run here yet?", vol)
 	}
-	err := e.runHelper(
+	err := e.runHelper(vol,
 		"-v", vol+":/from:ro",
 		"-v", e.BackupsVolume+":"+helperMount,
 		"--entrypoint", "tar",
@@ -240,17 +240,21 @@ func (e *Engine) volumeExists(vol string) bool {
 	return err == nil
 }
 
-// runHelper runs a one-shot helper container detached and waits for it.
-// Detached, no signal reaching this process (or its attached docker CLI)
-// can stop the helper midway through clearing or unpacking a volume. Not
-// --rm: an auto-removed container that exits before `docker wait` attaches
-// makes the wait fail on a missing container, so the exit code would be
-// lost; it is removed explicitly once its code is read.
-func (e *Engine) runHelper(args ...string) error {
+// runHelper runs a one-shot helper container for volume vol detached and
+// waits for it. Detached, no signal reaching this process (or its attached
+// docker CLI) can stop the helper midway through clearing or unpacking a
+// volume. Not --rm: an auto-removed container that exits before `docker
+// wait` attaches makes the wait fail on a missing container, so the exit
+// code would be lost; it is removed explicitly once its code is read.
+func (e *Engine) runHelper(vol string, args ...string) error {
 	if e.HelperImage == "" {
 		return errors.New("no helper image configured")
 	}
-	out, err := e.Exec.Output("docker", append([]string{"run", "-d", "--label", helperLabel}, args...)...)
+	if err := e.clearStaleHelpers(vol); err != nil {
+		return err
+	}
+	out, err := e.Exec.Output("docker", append([]string{"run", "-d",
+		"--label", helperLabel, "--label", helperVolumeLabel + "=" + vol}, args...)...)
 	if err != nil {
 		return fmt.Errorf("starting the helper container: %w", err)
 	}
@@ -261,8 +265,10 @@ func (e *Engine) runHelper(args ...string) error {
 	out, err = e.Exec.Output("docker", "wait", id)
 	if err != nil {
 		// Not removed: `rm -f` would kill it if it is still clearing or
-		// unpacking a volume. It is labelled for finding it by hand.
-		return fmt.Errorf("waiting for the helper container %s (left in place, label %s): %w", id, helperLabel, err)
+		// unpacking a volume. Its label finds it, and the next run on this
+		// volume refuses to start beside it.
+		return fmt.Errorf("waiting for the helper container %s (left in place, label %s=%s): %w",
+			id, helperVolumeLabel, vol, err)
 	}
 	defer func() { _, _ = e.Exec.Output("docker", "rm", "-f", id) }()
 	if code := strings.TrimSpace(string(out)); code != "0" {
@@ -272,8 +278,41 @@ func (e *Engine) runHelper(args ...string) error {
 	return nil
 }
 
-// helperLabel marks helper containers, so a leftover one is recognisable.
-const helperLabel = "homelab.helper=backup"
+// clearStaleHelpers deals with helpers an earlier run left on vol (a failed
+// `docker wait`, an agent restart): one still working refuses this run — two
+// helpers clearing and unpacking one volume would interleave — and finished
+// ones are removed, so they never hold the volume against `docker volume rm`.
+func (e *Engine) clearStaleHelpers(vol string) error {
+	out, err := e.Exec.Output("docker", "ps", "-a", "--filter", "label="+helperVolumeLabel+"="+vol,
+		"--format", "{{.ID}} {{.State}}")
+	if err != nil {
+		return fmt.Errorf("looking for earlier helper containers on volume %q: %w", vol, err)
+	}
+	for line := range strings.Lines(string(out)) {
+		id, state, _ := strings.Cut(strings.TrimSpace(line), " ")
+		switch state {
+		case "":
+			continue
+		case "exited", "dead", "created":
+			if _, err := e.Exec.Output("docker", "rm", id); err != nil {
+				return fmt.Errorf("removing the finished helper container %s on volume %q: %w", id, vol, err)
+			}
+		default:
+			return fmt.Errorf("a helper container (%s, %s) from an earlier backup or restore is still working on volume %q "+
+				"— refusing to start another beside it. Follow it with `docker logs -f %s`; once it has exited, "+
+				"`docker rm %s` (`docker rm -f %s` stops it midway, which may leave the volume half-written)",
+				id, state, vol, id, id, id)
+		}
+	}
+	return nil
+}
+
+// helperLabel marks helper containers, so a leftover one is recognisable;
+// helperVolumeLabel names the volume it works on.
+const (
+	helperLabel       = "homelab.helper=backup"
+	helperVolumeLabel = "homelab.helper.volume"
+)
 
 // Restore puts a service's volumes and databases back from srcDir.
 //
@@ -335,7 +374,7 @@ func (e *Engine) restoreVolume(v VolumeRecord, helperDir string) error {
 		return fmt.Errorf("volume %q is not on this node — refusing to create it; "+
 			"pass --create-volumes to restore into a new volume (a fresh cluster)", v.Volume)
 	}
-	err := e.runHelper(
+	err := e.runHelper(v.Volume,
 		"-v", v.Volume+":/to",
 		"-v", e.BackupsVolume+":"+helperMount+":ro",
 		"--entrypoint", "sh",
