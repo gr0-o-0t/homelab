@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 
@@ -285,17 +284,7 @@ func discoverServices(root string) ([]service.Service, error) {
 	return service.DiscoverWithDocker(root, dc)
 }
 
-// serviceNameRE is what a service name may look like. Names become path
-// segments, Caddy site addresses and compose project names, so anything else
-// ("../core", "*", a space) is refused before it reaches any of them.
-var serviceNameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
-
-func validName(name string) error {
-	if !serviceNameRE.MatchString(name) {
-		return fmt.Errorf("invalid service name %q: use lowercase letters, digits, '-' and '_'", name)
-	}
-	return nil
-}
+func validName(name string) error { return config.ValidServiceName(name) }
 
 // forEachService runs fn for every target and keeps going past failures, the
 // way `docker compose` does: one broken service must not leave the rest of a

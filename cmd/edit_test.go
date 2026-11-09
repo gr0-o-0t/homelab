@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -109,4 +110,49 @@ func TestEditorCommand(t *testing.T) {
 	assert.Equal(t, []string{"nano"}, editorCommand())
 	t.Setenv("VISUAL", "code -w")
 	assert.Equal(t, []string{"code", "-w"}, editorCommand())
+}
+
+func TestEdit_RefusesInvalidServiceNames(t *testing.T) {
+	t.Setenv("HOMELAB_AGENT", "")
+	calls := stubEdit(t, "x", 0, nil)
+	for _, svc := range []string{"../core", "a/b", "..", ".", "Foo"} {
+		require.Error(t, runEdit(context.Background(), svc, "config/x", io.Discard), svc)
+	}
+	assert.Empty(t, *calls, "nothing is sent to the leader")
+}
+
+func TestFiles_RefuseInvalidServiceNames(t *testing.T) {
+	t.Setenv("HOMELAB_AGENT", "1")
+	for _, svc := range []string{"../core", "a/b", "..", ".", "Foo"} {
+		for _, verb := range []string{"get", "put"} {
+			resetFlags()
+			assert.Equal(t, 1, executeArgs([]string{"--config-dir", t.TempDir(), "files", verb, svc, "config/x"}), verb+" "+svc)
+		}
+	}
+	invokedArgs = nil
+}
+
+func TestEdit_CancelRemovesTempDir(t *testing.T) {
+	t.Setenv("HOMELAB_AGENT", "")
+	started := make(chan string, 1)
+	release := make(chan struct{})
+	calls := stubEdit(t, "a", 0, func(f string) error {
+		started <- f
+		<-release
+		return nil
+	})
+	defer close(release)
+	ctx, cancel := context.WithCancel(context.Background())
+	errc := make(chan error, 1)
+	go func() { errc <- runEdit(ctx, "glance", "config/glance.yml", io.Discard) }()
+	file := <-started
+	dir := filepath.Dir(file)
+	fi, err := os.Stat(dir)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o700), fi.Mode().Perm())
+	cancel()
+	require.Error(t, <-errc)
+	_, err = os.Stat(dir)
+	assert.True(t, os.IsNotExist(err), "the temp dir is removed")
+	assert.Len(t, *calls, 1)
 }

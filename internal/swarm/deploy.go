@@ -83,6 +83,9 @@ func (d *Deployer) services(ctx context.Context, svc string) ([]swarm.Service, e
 // more. Volumes are never touched: Swarm creates a missing named volume when
 // a task first starts, on the (pinned) node it runs on.
 func (d *Deployer) Up(ctx context.Context, svc string) error {
+	if err := config.ValidServiceName(svc); err != nil {
+		return err
+	}
 	if d.SM == nil {
 		// Deploying anyway would rotate a working env secret to one
 		// missing every secret (R23).
@@ -172,6 +175,9 @@ func (d *Deployer) Down(ctx context.Context, svc string) error {
 // stopped (scaled to zero) comes back with one replica: restart means
 // running afterwards.
 func (d *Deployer) Restart(ctx context.Context, svc string) error {
+	if err := config.ValidServiceName(svc); err != nil {
+		return err
+	}
 	if d.SM == nil {
 		return ErrNoSecrets
 	}
@@ -186,6 +192,9 @@ func (d *Deployer) Restart(ctx context.Context, svc string) error {
 
 // eachService applies change to every service of svc and updates it.
 func (d *Deployer) eachService(ctx context.Context, svc string, mustExist bool, change func(*swarm.ServiceSpec)) error {
+	if err := config.ValidServiceName(svc); err != nil {
+		return err
+	}
 	list, err := d.services(ctx, svc)
 	if err != nil {
 		return err
@@ -235,6 +244,9 @@ func (d *Deployer) update(ctx context.Context, id string, opts swarm.ServiceUpda
 // Pull pulls every image svc uses onto this node. Nodes running its tasks
 // pull for themselves when the service is updated.
 func (d *Deployer) Pull(ctx context.Context, svc string) error {
+	if err := config.ValidServiceName(svc); err != nil {
+		return err
+	}
 	st, err := d.stack(svc)
 	if err != nil {
 		return err
@@ -256,6 +268,9 @@ func (d *Deployer) Update(ctx context.Context, svc string) error {
 
 // Remove deletes svc's services, env secrets and configs. Volumes are kept.
 func (d *Deployer) Remove(ctx context.Context, svc string) error {
+	if err := config.ValidServiceName(svc); err != nil {
+		return err
+	}
 	list, err := d.services(ctx, svc)
 	if err != nil {
 		return err
@@ -273,6 +288,9 @@ func (d *Deployer) Remove(ctx context.Context, svc string) error {
 
 // Status lists the current tasks of svc, by service name.
 func (d *Deployer) Status(ctx context.Context, svc string) ([]TaskStatus, error) {
+	if err := config.ValidServiceName(svc); err != nil {
+		return nil, err
+	}
 	list, err := d.services(ctx, svc)
 	if err != nil {
 		return nil, err

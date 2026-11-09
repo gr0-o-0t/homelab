@@ -25,6 +25,9 @@ var filesGetCmd = &cobra.Command{
 	Hidden: true,
 	Args:   cobra.ExactArgs(2),
 	RunE: func(c *cobra.Command, args []string) error {
+		if err := validName(args[0]); err != nil {
+			return err
+		}
 		// Read-only: no Docker, no secrets.
 		d := &swarm.Deployer{Root: configDir(), ConfigFile: rootFlags.configFile}
 		data, err := d.ReadConfigFile(args[0], args[1])
@@ -42,6 +45,9 @@ var filesPutCmd = &cobra.Command{
 	Hidden: true,
 	Args:   cobra.ExactArgs(2),
 	RunE: func(c *cobra.Command, args []string) error {
+		if err := validName(args[0]); err != nil {
+			return err
+		}
 		data, err := io.ReadAll(io.LimitReader(c.InOrStdin(), swarm.MaxConfigSize+1))
 		if err != nil {
 			return err

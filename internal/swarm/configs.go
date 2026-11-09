@@ -9,6 +9,8 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+
+	"github.com/groot/homelab/internal/config"
 )
 
 // MaxConfigSize is Swarm's limit for one config (500 KiB).
@@ -24,6 +26,9 @@ var ErrNotConfig = errors.New("not a bind-mounted config of the service")
 // config.yaml, docker-compose.yml or exposure.yaml. No component of the path
 // may be a symlink, so nothing resolves outside the service directory.
 func (d *Deployer) resolveConfigFile(svc, rel string) (string, error) {
+	if err := config.ValidServiceName(svc); err != nil {
+		return "", err
+	}
 	if rel == "" || strings.ContainsRune(rel, 0) || filepath.IsAbs(rel) || strings.HasPrefix(rel, "/") {
 		return "", fmt.Errorf("%q: path must be relative to the service directory", rel)
 	}
@@ -57,6 +62,9 @@ func (d *Deployer) resolveConfigFile(svc, rel string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// Check-then-use: a symlink planted between this walk and the rename
+	// is not a concern. The agent is the sole writer of the state dir, and
+	// rename replaces the directory entry atomically (never following one).
 	cur := real
 	for _, part := range strings.Split(clean, "/") {
 		cur = filepath.Join(cur, part)
@@ -76,6 +84,9 @@ func (d *Deployer) resolveConfigFile(svc, rel string) (string, error) {
 
 // ReadConfigFile returns the content of a bind-mounted config file of svc.
 func (d *Deployer) ReadConfigFile(svc, rel string) ([]byte, error) {
+	if err := config.ValidServiceName(svc); err != nil {
+		return nil, err
+	}
 	abs, err := d.resolveConfigFile(svc, rel)
 	if err != nil {
 		return nil, err
@@ -95,6 +106,9 @@ func (d *Deployer) ReadConfigFile(svc, rel string) ([]byte, error) {
 // Swarm config. If the redeploy fails the file stays written, and the error
 // says so.
 func (d *Deployer) WriteConfigFile(ctx context.Context, svc, rel string, data []byte) error {
+	if err := config.ValidServiceName(svc); err != nil {
+		return err
+	}
 	if len(data) == 0 {
 		return errors.New("refusing an empty file: Swarm configs cannot be empty")
 	}
@@ -135,7 +149,7 @@ func (d *Deployer) WriteConfigFile(ctx context.Context, svc, rel string, data []
 		return err
 	}
 	if err := d.Up(ctx, svc); err != nil {
-		return fmt.Errorf("saved %s, but redeploying %s failed: %w", rel, svc, err)
+		return fmt.Errorf("saved %s, but redeploying %s failed: %w — the file is saved; run `homelab up %s` to retry the rollout", rel, svc, err, svc)
 	}
 	return nil
 }

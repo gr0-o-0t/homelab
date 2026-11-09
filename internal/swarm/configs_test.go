@@ -194,3 +194,25 @@ func TestFilesPut_RejectsOversizeAndEmpty(t *testing.T) {
 	assert.Error(t, d.WriteConfigFile(context.Background(), "glance", "one.conf", nil))
 	assert.Error(t, d.WriteConfigFile(context.Background(), "glance", "one.conf", make([]byte, swarm.MaxConfigSize+1)))
 }
+
+func TestDeployer_RefusesInvalidServiceNames(t *testing.T) {
+	ctx := context.Background()
+	d, _, dir := glanceService(t)
+	root := filepath.Dir(filepath.Dir(dir))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "core", "config"), 0o755))
+	for _, svc := range []string{"../core", "a/b", "..", ".", "Foo", ""} {
+		assert.ErrorContains(t, d.Up(ctx, svc), "invalid service name", svc)
+		assert.ErrorContains(t, d.Down(ctx, svc), "invalid service name", svc)
+		assert.ErrorContains(t, d.Restart(ctx, svc), "invalid service name", svc)
+		assert.ErrorContains(t, d.Pull(ctx, svc), "invalid service name", svc)
+		assert.ErrorContains(t, d.Update(ctx, svc), "invalid service name", svc)
+		assert.ErrorContains(t, d.Remove(ctx, svc), "invalid service name", svc)
+		_, err := d.Status(ctx, svc)
+		assert.ErrorContains(t, err, "invalid service name", svc)
+		_, err = d.ReadConfigFile(svc, "config/glance.yml")
+		assert.ErrorContains(t, err, "invalid service name", svc)
+		assert.ErrorContains(t, d.WriteConfigFile(ctx, svc, "config/x", []byte("x")), "invalid service name", svc)
+	}
+	_, err := os.Stat(filepath.Join(root, "core", "config", "x"))
+	assert.True(t, os.IsNotExist(err))
+}

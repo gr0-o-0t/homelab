@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -158,4 +159,17 @@ func ReleaseRedisDB(configDir, svc, name string) error {
 	}
 	delete(m, key)
 	return saveRedisDBs(configDir, m)
+}
+
+// serviceNameRE is what a service name may look like. Names become path
+// segments, Caddy site addresses and compose project names, so anything else
+// ("../core", "*", a space) is refused before it reaches any of them.
+var serviceNameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
+
+// ValidServiceName reports whether name is a legal service name.
+func ValidServiceName(name string) error {
+	if !serviceNameRE.MatchString(name) {
+		return fmt.Errorf("invalid service name %q: use lowercase letters, digits, '-' and '_'", name)
+	}
+	return nil
 }

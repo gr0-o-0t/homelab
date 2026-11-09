@@ -8,8 +8,10 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/spf13/cobra"
 
@@ -69,26 +71,37 @@ func runEdit(ctx context.Context, svc, rel string, out io.Writer) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if err := validName(svc); err != nil {
+		return err
+	}
 	var orig bytes.Buffer
 	if code, err := editLeader(ctx, []string{"files", "get", svc, rel}, nil, &orig); err != nil || code != 0 {
 		return leaderErr("fetching "+rel, code, err)
 	}
-	tmp, err := os.CreateTemp(os.TempDir(), "homelab-edit-*-"+filepath.Base(rel)) // 0600
+	dir, err := os.MkdirTemp(os.TempDir(), "homelab-edit-*") // 0700
 	if err != nil {
 		return err
 	}
-	defer func() { _ = os.Remove(tmp.Name()) }()
-	if _, err := tmp.Write(orig.Bytes()); err != nil {
-		_ = tmp.Close()
+	defer func() { _ = os.RemoveAll(dir) }()
+	file := filepath.Join(dir, filepath.Base(rel))
+	if err := os.WriteFile(file, orig.Bytes(), 0o600); err != nil {
 		return err
 	}
-	if err := tmp.Close(); err != nil {
-		return err
+	// A closed terminal (SIGHUP) or SIGTERM must not leave the copy behind:
+	// stop waiting for the editor and let the deferred RemoveAll run.
+	sctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	defer stop()
+	done := make(chan error, 1)
+	go func() { done <- editRunEditor(editorCommand(), file) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			return fmt.Errorf("editor failed, nothing sent: %w", err)
+		}
+	case <-sctx.Done():
+		return fmt.Errorf("interrupted, nothing sent: %w", sctx.Err())
 	}
-	if err := editRunEditor(editorCommand(), tmp.Name()); err != nil {
-		return fmt.Errorf("editor failed, nothing sent: %w", err)
-	}
-	edited, err := os.ReadFile(tmp.Name())
+	edited, err := os.ReadFile(file)
 	if err != nil {
 		return err
 	}
