@@ -28,7 +28,7 @@ var Mutating = map[string]bool{
 	"add": true, "setup": true, "up": true, "down": true, "start": true, "stop": true,
 	"restart": true, "pull": true, "update": true, "delete": true, "enable": true,
 	"disable": true, "reload": true, "backup": true, "restore": true, "prune": true,
-	"ext": true, "cf": true, "migrate": true, "new": true, "cluster": true,
+	"ext": true, "cf": true, "migrate": true, "new": true, "cluster": true, "files": true,
 }
 
 // ReadOnly are the canonical paths of observing subcommands under a
@@ -37,6 +37,7 @@ var Mutating = map[string]bool{
 var ReadOnly = map[string]bool{
 	"cf status": true, "cf logs": true,
 	"ext list": true, "ext status": true, "ext logs": true,
+	"files get": true,
 }
 
 // Locks reports whether the canonical command path takes the lock.

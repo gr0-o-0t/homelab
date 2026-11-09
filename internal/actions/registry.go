@@ -326,6 +326,13 @@ func build() []Action {
 				return append([]string{"exec", t.Name}, fields(in["shell"])...)
 			},
 			Available: isRunning, Commands: []string{"exec"}},
+		Action{ID: "service.edit", Label: "Edit config file", Group: GroupConfigure, Icon: "wrench", Scope: Service,
+			Interactive: true, Help: "Edit a file the service bind-mounts in your editor; a changed file is saved on the leader and the service redeployed",
+			Inputs: []Input{{Key: "path", Label: "File (relative to the service directory)", Kind: Text, Required: true}},
+			Args: func(t Target, in Inputs) []string {
+				return []string{"edit", t.Name, in["path"]}
+			},
+			Commands: []string{"edit"}},
 		Action{ID: "service.exec", Label: "Run command", Group: GroupConfigure, Icon: "terminal", Scope: Service,
 			Help: "Run a command in the container and show its output",
 			Inputs: []Input{

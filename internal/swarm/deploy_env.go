@@ -92,9 +92,12 @@ func (d *Deployer) withConfigs(ctx context.Context, svc string, spec *swarm.Serv
 			continue
 		}
 		src := filepath.Join(d.serviceDir(svc), filepath.FromSlash(fc.Source))
-		info, err := os.Stat(src)
+		info, err := os.Lstat(src)
 		if err != nil {
 			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("%s: %s is a symlink; Swarm configs must be regular files", spec.Name, fc.Source)
 		}
 		if !info.IsDir() {
 			if info.Size() == 0 {
@@ -106,14 +109,17 @@ func (d *Deployer) withConfigs(ctx context.Context, svc string, spec *swarm.Serv
 			continue
 		}
 		err = filepath.WalkDir(src, func(p string, e fs.DirEntry, err error) error {
-			if err != nil || !e.Type().IsRegular() {
-				return err
-			}
-			if i, err := e.Info(); err != nil || i.Size() == 0 {
+			if err != nil || e.IsDir() {
 				return err
 			}
 			rel, err := filepath.Rel(src, p)
 			if err != nil {
+				return err
+			}
+			if !e.Type().IsRegular() { // symlinks, sockets, devices
+				return fmt.Errorf("%s: %s/%s is not a regular file; Swarm configs must be", spec.Name, fc.Source, filepath.ToSlash(rel))
+			}
+			if i, err := e.Info(); err != nil || i.Size() == 0 {
 				return err
 			}
 			return d.addConfig(ctx, svc, spec, p, path.Join(fc.Target, filepath.ToSlash(rel)), fc.Mode, keep)
@@ -129,6 +135,9 @@ func (d *Deployer) addConfig(ctx context.Context, svc string, spec *swarm.Servic
 	data, err := os.ReadFile(file) // #nosec G304 -- a file under the service directory
 	if err != nil {
 		return err
+	}
+	if len(data) > MaxConfigSize {
+		return fmt.Errorf("%s is %d bytes; Swarm configs are limited to %d", file, len(data), MaxConfigSize)
 	}
 	sum := sha256.Sum256(data)
 	name := "hl_" + svc + "_cfg_" + hex.EncodeToString(sum[:])[:12]

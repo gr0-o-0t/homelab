@@ -130,6 +130,7 @@ func TestLocks_FollowTheCommandPath(t *testing.T) {
 		"ext enable": true, "ext disable": true, "ext start": true, "ext stop": true,
 		"cf status": false, "cf logs": false, "ext list": false, "ext status": false, "ext logs": false,
 		"status": false, "logs": false, "session run": false,
+		"files put": true, "files get": false,
 	} {
 		assert.Equal(t, want, Locks(strings.Fields(path)), path)
 	}
