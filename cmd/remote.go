@@ -1,9 +1,11 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"strings"
@@ -131,10 +133,24 @@ func forwardToAgent(argv []string) (int, error) {
 func runOnAgent(c *remote.Client, argv []string) (int, error) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
 	in, out := int(os.Stdin.Fd()), int(os.Stdout.Fd()) //nolint:gosec // fds fit in int
 	opts := remote.RunOptions{Argv: argv, Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr,
 		TTY: term.IsTerminal(in) && term.IsTerminal(out)}
+	detached, verb := forwardDetaches(argv)
+	if detached {
+		// In raw mode Ctrl-C would reach the remote terminal and interrupt
+		// the command there: take it as this client's interrupt instead,
+		// which only disconnects — the command runs on to completion.
+		opts.Stdin = &interruptReader{r: os.Stdin, interrupt: cancel}
+		defer func() {
+			if ctx.Err() != nil {
+				fmt.Fprintf(os.Stderr, "\r\nthe %s continues on the leader; follow it with `homelab logs`\r\n", verb)
+			}
+		}()
+	}
 	if opts.TTY {
 		opts.Term = os.Getenv("TERM")
 		if w, h, err := term.GetSize(out); err == nil {
@@ -159,5 +175,44 @@ func runOnAgent(c *remote.Client, argv []string) (int, error) {
 		}()
 		opts.Resize = resize
 	}
-	return c.Run(ctx, opts)
+	code, err := c.Run(ctx, opts)
+	if detached && ctx.Err() != nil {
+		return 130, nil // interrupted here; the note above says where it went on
+	}
+	return code, err
+}
+
+// forwardDetaches reports whether argv is a command the agent keeps running
+// when this client goes away (remote.Detached), and its name.
+func forwardDetaches(argv []string) (bool, string) {
+	path, ok := ResolveCommand(argv)
+	if !ok || !remote.DetachOnDisconnect(path) {
+		return false, ""
+	}
+	return true, path[0]
+}
+
+// interruptReader passes stdin through until Ctrl-C (or Ctrl-\) is typed in
+// raw mode, which it turns into a local interrupt: it calls interrupt and
+// ends the input instead of forwarding the keystroke.
+type interruptReader struct {
+	r         io.Reader
+	interrupt func()
+	done      bool
+}
+
+func (ir *interruptReader) Read(p []byte) (int, error) {
+	if ir.done {
+		return 0, io.EOF
+	}
+	n, err := ir.r.Read(p)
+	if i := bytes.IndexAny(p[:n], "\x03\x1c"); i >= 0 {
+		ir.interrupt()
+		ir.done = true
+		if i == 0 {
+			return 0, io.EOF
+		}
+		return i, nil
+	}
+	return n, err
 }

@@ -53,6 +53,9 @@ type ServerConfig struct {
 	MaxSessions int
 	// Logf logs connection events (default log.Printf). Never secrets.
 	Logf func(format string, args ...any)
+	// DetachLog receives the output of a Detached command once its client
+	// is gone (default os.Stderr: the agent's log).
+	DetachLog io.Writer
 }
 
 // Server runs forwarded homelab commands.
@@ -95,6 +98,9 @@ func NewServer(cfg ServerConfig) *Server {
 	}
 	if cfg.Logf == nil {
 		cfg.Logf = log.Printf
+	}
+	if cfg.DetachLog == nil {
+		cfg.DetachLog = os.Stderr
 	}
 	return &Server{cfg: cfg, lock: make(chan struct{}, 1), sessions: make(chan struct{}, cfg.MaxSessions),
 		upgrader: websocket.Upgrader{HandshakeTimeout: handshakeTimeout}}
@@ -270,9 +276,14 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		defer func() { <-s.lock }()
 	}
 
-	code, err = s.runChild(ctx, ss, h, ch, &chanReader{ch: stdin})
+	detach := DetachOnDisconnect(path)
+	code, err = s.runChild(ctx, ss, h, ch, &chanReader{ch: stdin}, detach)
 	if ctx.Err() != nil {
-		s.cfg.Logf("remote: %s disconnected; %q stopped", r.RemoteAddr, name)
+		if detach {
+			s.cfg.Logf("remote: %s disconnected; %q ran to completion (exit %d)", r.RemoteAddr, name, code)
+		} else {
+			s.cfg.Logf("remote: %s disconnected; %q stopped", r.RemoteAddr, name)
+		}
 		return
 	}
 	msg := ""
@@ -383,9 +394,42 @@ func (s *Server) childEnv(h Handshake) []string {
 	return env
 }
 
+// detachWriter streams to the client while it is there, and to the agent
+// log once it is gone (ctx done, or a write failed), never failing: a
+// detached child must not block on, or die of, a full or broken pipe.
+type detachWriter struct {
+	ctx    context.Context
+	client io.Writer
+	log    io.Writer
+	mu     sync.Mutex
+	gone   bool
+}
+
+func (w *detachWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if !w.gone && w.ctx.Err() == nil {
+		if _, err := w.client.Write(p); err == nil {
+			return len(p), nil
+		}
+	}
+	w.gone = true
+	_, _ = w.log.Write(p)
+	return len(p), nil
+}
+
 // runChild runs the command to completion, or until ctx is cancelled, which
-// stops it: SIGTERM to its process group, SIGKILL after KillGrace.
-func (s *Server) runChild(ctx context.Context, ss *session, h Handshake, ch *child, stdin io.Reader) (int, error) {
+// stops it: SIGTERM to its process group, SIGKILL after KillGrace. A
+// detached command is not stopped: it runs to completion, its output going
+// to DetachLog once the client is gone.
+func (s *Server) runChild(ctx context.Context, ss *session, h Handshake, ch *child, stdin io.Reader, detach bool) (int, error) {
+	out := func(stderr bool) io.Writer {
+		w := frameWriter{ss: ss, stderr: stderr}
+		if !detach {
+			return w
+		}
+		return &detachWriter{ctx: ctx, client: w, log: s.cfg.DetachLog}
+	}
 	args := []string{"--config-dir", s.cfg.StateDir}
 	if !h.TTY {
 		args = append(args, "--no-color")
@@ -417,7 +461,7 @@ func (s *Server) runChild(ctx context.Context, ss *session, h Handshake, ch *chi
 		go func() { _, _ = io.Copy(ptmx, stdin) }()
 		go func() {
 			defer close(outDone)
-			_, _ = io.Copy(frameWriter{ss: ss}, ptmx)
+			_, _ = io.Copy(out(false), ptmx)
 		}()
 	} else {
 		// Own pipes rather than cmd.Stdout = writer, so Wait returns when
@@ -456,11 +500,11 @@ func (s *Server) runChild(ctx context.Context, ss *session, h Handshake, ch *chi
 		errDone := make(chan struct{})
 		go func() {
 			defer close(errDone)
-			_, _ = io.Copy(frameWriter{ss: ss, stderr: true}, errR)
+			_, _ = io.Copy(out(true), errR)
 		}()
 		go func() {
 			defer close(outDone)
-			_, _ = io.Copy(frameWriter{ss: ss}, outR)
+			_, _ = io.Copy(out(false), outR)
 			<-errDone
 		}()
 	}
@@ -470,6 +514,9 @@ func (s *Server) runChild(ctx context.Context, ss *session, h Handshake, ch *chi
 		select {
 		case <-exited:
 		case <-ctx.Done():
+			if detach {
+				return // runs to completion; the lock is held until then
+			}
 			pgid := cmd.Process.Pid
 			_ = syscall.Kill(-pgid, syscall.SIGTERM)
 			select {

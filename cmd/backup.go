@@ -15,6 +15,7 @@ import (
 
 	"github.com/groot/homelab/internal/agentstate"
 	"github.com/groot/homelab/internal/backup"
+	"github.com/groot/homelab/internal/bootstrap"
 	"github.com/groot/homelab/internal/db"
 	"github.com/groot/homelab/internal/remote"
 	"github.com/groot/homelab/internal/run"
@@ -90,7 +91,10 @@ func backupRunsLocally(c *cobra.Command) bool {
 }
 
 func runBackup(c *cobra.Command, args []string) error {
-	if backupFlags.fetch != "" {
+	if c.Flags().Changed("fetch") {
+		if backupFlags.fetch == "" {
+			return errors.New("--fetch needs a backup name (one listed by `homelab backup --list`)")
+		}
 		if os.Getenv("HOMELAB_AGENT") == "1" {
 			return errors.New("run homelab backup --fetch from your PC, not inside the agent")
 		}
@@ -122,14 +126,16 @@ func runBackup(c *cobra.Command, args []string) error {
 		}
 	}
 
-	// Deploying again afterwards needs the secrets: refuse before stopping
-	// anything rather than leave a service down.
-	return withDeployer(root, !backupFlags.live, func(ctx context.Context, d *swarm.Deployer) error {
+	// Scaling back needs no secrets: it only restores the replica counts.
+	return withDeployer(root, false, func(ctx context.Context, d *swarm.Deployer) error {
+		engine, err := newBackupEngine(root, d)
+		if err != nil {
+			return err
+		}
 		dest := filepath.Join(destRoot, time.Now().UTC().Format("20060102-150405"))
 		if err := os.MkdirAll(dest, 0o750); err != nil {
 			return fmt.Errorf("creating %s: %w", dest, err)
 		}
-		engine := newBackupEngine(root, d)
 
 		fmt.Printf("\n%s\n\n", styles.Header.Render("Backup"))
 		fmt.Printf("  %s %s\n\n", styles.Muted.Render("→"), dest)
@@ -195,7 +201,11 @@ func runBackup(c *cobra.Command, args []string) error {
 // newBackupEngine wires the backup engine to the cluster: lifecycle through
 // the Deployer, dumps through the shared providers' task containers on this
 // node, volume tars in helper containers mounting the backups volume.
-func newBackupEngine(root string, d *swarm.Deployer) *backup.Engine {
+func newBackupEngine(root string, d *swarm.Deployer) (*backup.Engine, error) {
+	img, err := agentImage()
+	if err != nil {
+		return nil, fmt.Errorf("finding the agent's image for the volume helpers: %w", err)
+	}
 	p := db.New(root, nil)
 	p.API = d.API
 	return &backup.Engine{
@@ -204,27 +214,45 @@ func newBackupEngine(root string, d *swarm.Deployer) *backup.Engine {
 		BackupsRoot:   backupsRoot,
 		BackupsVolume: agentstate.BackupsVolume,
 		ContainerFor:  p.Container,
-		Life:          swarmLife{d},
+		Life:          swarmLife{d: d, timeout: backupStopTimeout},
+		HelperImage:   img,
+	}, nil
+}
+
+// agentImage is the image ID of the agent container this runs in: already
+// on the node, pinned by version, with busybox tar/sh/rm (docker:<ver>-cli
+// is Alpine). A var so tests need no daemon.
+var agentImage = func() (string, error) {
+	out, err := run.Default().Output("docker", "inspect", "--format", "{{.Image}}", bootstrap.AgentContainer)
+	if err != nil {
+		return "", err
 	}
-}
-
-// swarmLife is backup.Lifecycle on the cluster. Down returns only once the
-// tasks have stopped: scaling to zero merely changes the spec.
-type swarmLife struct{ d *swarm.Deployer }
-
-func (l swarmLife) Running(ctx context.Context, svc string) (bool, error) {
-	tasks, err := l.d.Status(ctx, svc)
-	return len(tasks) > 0, err
-}
-
-func (l swarmLife) Down(ctx context.Context, svc string) error {
-	if err := l.d.Down(ctx, svc); err != nil {
-		return err
+	id := strings.TrimSpace(string(out))
+	if id == "" {
+		return "", errors.New("docker inspect printed no image")
 	}
-	return l.d.WaitStopped(ctx, svc, backupStopTimeout)
+	return id, nil
 }
 
-func (l swarmLife) Up(ctx context.Context, svc string) error { return l.d.Up(ctx, svc) }
+// swarmLife is backup.Lifecycle on the cluster: replica counts and Scale
+// (counts only — no pull, no registry, no re-translated config), and a
+// bounded wait for the tasks to stop, since scaling only changes the spec.
+type swarmLife struct {
+	d       *swarm.Deployer
+	timeout time.Duration
+}
+
+func (l swarmLife) Replicas(ctx context.Context, svc string) (map[string]uint64, error) {
+	return l.d.Replicas(ctx, svc)
+}
+
+func (l swarmLife) Scale(ctx context.Context, svc string, r map[string]uint64) error {
+	return l.d.Scale(ctx, svc, r)
+}
+
+func (l swarmLife) WaitStopped(ctx context.Context, svc string) error {
+	return l.d.WaitStopped(ctx, svc, l.timeout)
+}
 
 // listBackups prints the backups under dir (default: the backups volume),
 // newest first: the directories `homelab restore` accepts.
@@ -339,11 +367,17 @@ func runBackupFetch(ctx context.Context, name, localDir string, out io.Writer) e
 	}
 	r := <-res
 
-	switch {
-	case r.err != nil || r.code != 0:
-		return leaderErr("fetching backup "+name, r.code, r.err)
-	case exErr != nil:
-		return fmt.Errorf("unpacking backup %s: %w", name, exErr)
+	// The local failure (no space left, a refused entry) first: it is the
+	// cause, and the leader then fails only because the pipe was closed.
+	var errs []error
+	if exErr != nil {
+		errs = append(errs, fmt.Errorf("unpacking backup %s: %w", name, exErr))
+	}
+	if r.err != nil || r.code != 0 {
+		errs = append(errs, leaderErr("fetching backup "+name, r.code, r.err))
+	}
+	if len(errs) > 0 {
+		return errors.Join(errs...)
 	}
 	if _, err := backup.ReadManifest(tmp); err != nil {
 		return fmt.Errorf("the fetched copy of %s is not a valid backup: %w", name, err)

@@ -40,6 +40,20 @@ var ReadOnly = map[string]bool{
 	"files get": true,
 }
 
+// Detached are the commands (canonical top-level names) that run to
+// completion when their client disconnects: stopping a backup midway leaves
+// a service scaled to zero, and stopping a restore can kill it in the
+// middle of replacing a volume. The server stops streaming to the vanished
+// client, copies the output to the agent log, and keeps the lock until the
+// command exits.
+var Detached = map[string]bool{"backup": true, "restore": true}
+
+// DetachOnDisconnect reports whether the canonical command path survives
+// its client going away.
+func DetachOnDisconnect(path []string) bool {
+	return len(path) > 0 && Detached[path[0]]
+}
+
 // Locks reports whether the canonical command path takes the lock.
 func Locks(path []string) bool {
 	if len(path) == 0 || ReadOnly[strings.Join(path, " ")] {

@@ -172,6 +172,42 @@ func (d *Deployer) Down(ctx context.Context, svc string) error {
 	})
 }
 
+// Replicas is the replica count of each Swarm service of svc, by name (a
+// service that is down has zeros, one never deployed an empty map).
+func (d *Deployer) Replicas(ctx context.Context, svc string) (map[string]uint64, error) {
+	if err := config.ValidServiceName(svc); err != nil {
+		return nil, err
+	}
+	list, err := d.services(ctx, svc)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]uint64, len(list))
+	for i := range list {
+		var n uint64
+		if r := list[i].Spec.Mode.Replicated; r != nil && r.Replicas != nil {
+			n = *r.Replicas
+		}
+		out[list[i].Spec.Name] = n
+	}
+	return out, nil
+}
+
+// Scale sets the replica count of each named Swarm service of svc and
+// changes nothing else: no pull, no registry query, no re-translation of
+// the config — the current spec with another count. Services not named are
+// left alone. Backup and restore use it to stop a service and bring it back
+// exactly as it was.
+func (d *Deployer) Scale(ctx context.Context, svc string, replicas map[string]uint64) error {
+	return d.eachService(ctx, svc, false, func(spec *swarm.ServiceSpec) {
+		n, ok := replicas[spec.Name]
+		if !ok || spec.Mode.Replicated == nil {
+			return
+		}
+		spec.Mode.Replicated.Replicas = &n
+	})
+}
+
 // stopPoll is how often WaitStopped looks at the tasks.
 var stopPoll = 250 * time.Millisecond
 

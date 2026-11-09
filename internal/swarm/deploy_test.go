@@ -529,3 +529,35 @@ func TestDeploy_WaitStoppedWaitsForTasksToStop(t *testing.T) {
 	f.SetTasks([]dswarm.Task{task(dswarm.TaskStateShutdown), {ID: "t0", ServiceID: svc.ID, Status: dswarm.TaskStatus{State: dswarm.TaskStateFailed}}})
 	assert.NoError(t, d.WaitStopped(ctx, "gitea", time.Second))
 }
+
+// Scale changes only the counts: no pull, no registry query, no new spec
+// from the (possibly edited) compose file.
+func TestDeploy_ScaleChangesOnlyReplicas(t *testing.T) {
+	ctx := context.Background()
+	d, f, root := newDeployer(t)
+	writeService(t, root, "gitea", giteaCompose)
+	require.NoError(t, d.Up(ctx, "gitea"))
+	before := services(t, f, "gitea")[0]
+	name := before.Spec.Name
+	writeService(t, root, "gitea", strings.ReplaceAll(giteaCompose, "gitea/gitea:1", "gitea/gitea:2"))
+	calls := len(f.CallLog())
+
+	reps, err := d.Replicas(ctx, "gitea")
+	require.NoError(t, err)
+	assert.Equal(t, map[string]uint64{name: 1}, reps)
+
+	require.NoError(t, d.Scale(ctx, "gitea", map[string]uint64{name: 0}))
+	got, err := d.Replicas(ctx, "gitea")
+	require.NoError(t, err)
+	assert.Equal(t, map[string]uint64{name: 0}, got)
+
+	require.NoError(t, d.Scale(ctx, "gitea", reps))
+	after := services(t, f, "gitea")[0]
+	assert.Equal(t, uint64(1), replicas(after))
+	assert.Equal(t, before.Spec.TaskTemplate.ContainerSpec.Image, after.Spec.TaskTemplate.ContainerSpec.Image,
+		"the compose edit is not deployed as a side effect")
+	for _, c := range f.CallLog()[calls:] {
+		assert.NotContains(t, c, "ImagePull")
+		assert.NotContains(t, c, "ImageInspect")
+	}
+}

@@ -19,23 +19,47 @@ import (
 	"github.com/groot/homelab/internal/config"
 )
 
-// fakeLife stands in for the Swarm Deployer: it records the lifecycle calls
-// and, for each, how many docker commands had run by then.
+// fakeLife stands in for the Swarm Deployer: it records each lifecycle call
+// and how many docker commands had run by then.
 type fakeLife struct {
-	running bool
-	fx      *fakeExec
-	log     []string
-	downErr error
-	upErr   error
+	reps     map[string]uint64
+	fx       *fakeExec
+	log      []string
+	scaleErr error // for the scale-down only
+	waitErr  error
+	backErr  error // for the scale-back
 }
 
 func (l *fakeLife) note(what string) { l.log = append(l.log, what+"@"+itoa(len(l.fx.calls))) }
 
 func itoa(n int) string { return strconv.Itoa(n) }
 
-func (l *fakeLife) Running(context.Context, string) (bool, error) { return l.running, nil }
-func (l *fakeLife) Down(context.Context, string) error            { l.note("down"); return l.downErr }
-func (l *fakeLife) Up(context.Context, string) error              { l.note("up"); return l.upErr }
+func (l *fakeLife) Replicas(context.Context, string) (map[string]uint64, error) {
+	out := map[string]uint64{}
+	for k, v := range l.reps {
+		out[k] = v
+	}
+	return out, nil
+}
+
+func (l *fakeLife) Scale(_ context.Context, _ string, r map[string]uint64) error {
+	total := uint64(0)
+	for _, n := range r {
+		total += n
+	}
+	if total == 0 {
+		l.note("down")
+		return l.scaleErr
+	}
+	l.note("back" + strconv.FormatUint(total, 10))
+	return l.backErr
+}
+
+func (l *fakeLife) WaitStopped(context.Context, string) error { l.note("wait"); return l.waitErr }
+
+func running(fx *fakeExec) *fakeLife {
+	return &fakeLife{reps: map[string]uint64{"app_app": 1, "app_worker": 2}, fx: fx}
+}
 
 // newSwarmEngine is an Engine whose backups volume is a temp dir.
 func newSwarmEngine(t *testing.T, fx *fakeExec) (*Engine, string) {
@@ -47,6 +71,7 @@ func newSwarmEngine(t *testing.T, fx *fakeExec) (*Engine, string) {
 		ConfigDir: root, Exec: fx, BackupsRoot: backups, BackupsVolume: "homelab-backups",
 		ContainerFor: func(config.DBType) (string, error) { return "pg-task-123", nil },
 		Now:          func() time.Time { return time.Unix(0, 0).UTC() },
+		HelperImage:  "sha256:agentimage",
 	}
 	return e, backups
 }
@@ -54,7 +79,7 @@ func newSwarmEngine(t *testing.T, fx *fakeExec) (*Engine, string) {
 func TestBackup_ScalesDownAndUp(t *testing.T) {
 	fx := &fakeExec{dumpBody: "PGDMP"}
 	e, backups := newSwarmEngine(t, fx)
-	life := &fakeLife{running: true, fx: fx}
+	life := running(fx)
 	e.Life = life
 	p, err := PlanFor(e.ConfigDir, "app")
 	require.NoError(t, err)
@@ -62,56 +87,95 @@ func TestBackup_ScalesDownAndUp(t *testing.T) {
 	rec, err := e.BackupService(context.Background(), p, filepath.Join(backups, "20260101-000000"), false)
 	require.NoError(t, err)
 	assert.False(t, rec.Live)
-	require.Len(t, life.log, 2)
-	assert.Equal(t, "down@0", life.log[0], "scaled down before any snapshot step")
-	assert.Equal(t, "up@"+itoa(len(fx.calls)), life.log[1], "scaled back up after the last snapshot step")
+	assert.Equal(t, []string{"down@0", "wait@0", "back3@" + itoa(len(fx.calls))}, life.log,
+		"scaled to zero and stopped before any snapshot step, back to the exact counts after the last")
 }
 
-func TestBackup_LiveAndStoppedServicesAreNotTouched(t *testing.T) {
-	for name, tc := range map[string]struct {
-		running, live bool
-	}{"live": {running: true, live: true}, "not running": {running: false}} {
-		t.Run(name, func(t *testing.T) {
-			fx := &fakeExec{}
-			e, backups := newSwarmEngine(t, fx)
-			life := &fakeLife{running: tc.running, fx: fx}
-			e.Life = life
-			p, err := PlanFor(e.ConfigDir, "app")
-			require.NoError(t, err)
-			_, err = e.BackupService(context.Background(), p, filepath.Join(backups, "x"), tc.live)
-			require.NoError(t, err)
-			assert.Empty(t, life.log, "a stopped service is not started, a live one not stopped")
-		})
-	}
+// A service already scaled down (`homelab down` a moment ago) is not started,
+// but its containers may still be in their stop grace period: wait anyway.
+func TestBackup_WaitsStoppedEvenWhenAlreadyDown(t *testing.T) {
+	fx := &fakeExec{}
+	e, backups := newSwarmEngine(t, fx)
+	life := &fakeLife{reps: map[string]uint64{"app_app": 0}, fx: fx}
+	e.Life = life
+	p, err := PlanFor(e.ConfigDir, "app")
+	require.NoError(t, err)
+	_, err = e.BackupService(context.Background(), p, filepath.Join(backups, "x"), false)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"wait@0"}, life.log, "waited, never scaled")
 }
 
-func TestBackup_UpRunsEvenWhenSnapshotFails(t *testing.T) {
+func TestBackup_LiveIsNotTouched(t *testing.T) {
+	fx := &fakeExec{}
+	e, backups := newSwarmEngine(t, fx)
+	life := running(fx)
+	e.Life = life
+	p, err := PlanFor(e.ConfigDir, "app")
+	require.NoError(t, err)
+	_, err = e.BackupService(context.Background(), p, filepath.Join(backups, "x"), true)
+	require.NoError(t, err)
+	assert.Empty(t, life.log)
+}
+
+func TestBackup_ScalesBackEvenWhenSnapshotFails(t *testing.T) {
 	fx := &fakeExec{err: errors.New("tar exploded")}
 	e, backups := newSwarmEngine(t, fx)
-	life := &fakeLife{running: true, fx: fx, upErr: errors.New("up refused")}
+	life := running(fx)
+	life.backErr = errors.New("scale refused")
 	e.Life = life
 	p, err := PlanFor(e.ConfigDir, "app")
 	require.NoError(t, err)
 
 	_, err = e.BackupService(context.Background(), p, filepath.Join(backups, "x"), false)
 	require.Error(t, err)
-	require.Len(t, life.log, 2)
-	assert.True(t, strings.HasPrefix(life.log[1], "up@"), "Up is attempted after a failed snapshot")
+	require.Len(t, life.log, 3)
+	assert.True(t, strings.HasPrefix(life.log[2], "back3@"), "scaled back after a failed snapshot")
 	assert.ErrorContains(t, err, "tar exploded", "the snapshot error is reported")
-	assert.ErrorContains(t, err, "up refused", "and so is the restart error")
+	assert.ErrorContains(t, err, "scale refused", "and so is the scale-back error")
 }
 
-func TestBackup_UpRunsEvenWhenDownFails(t *testing.T) {
-	fx := &fakeExec{}
+func TestBackup_ScalesBackWhenStopFails(t *testing.T) {
+	for name, life := range map[string]*fakeLife{
+		"scale down": {scaleErr: errors.New("scale failed")},
+		"wait":       {waitErr: errors.New("still running")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fx := &fakeExec{}
+			e, backups := newSwarmEngine(t, fx)
+			life.fx, life.reps = fx, map[string]uint64{"app_app": 1}
+			e.Life = life
+			p, err := PlanFor(e.ConfigDir, "app")
+			require.NoError(t, err)
+			_, err = e.BackupService(context.Background(), p, filepath.Join(backups, "x"), false)
+			require.Error(t, err)
+			assert.Empty(t, fx.calls, "no snapshot of a half-stopped service")
+			assert.Equal(t, "back1@0", life.log[len(life.log)-1], "scaled back")
+		})
+	}
+}
+
+// Helpers run detached and are waited on, so no signal can stop one midway.
+func TestBackup_HelperRunsDetachedAndIsWaitedOn(t *testing.T) {
+	fx := &fakeExec{dumpBody: "PGDMP"}
 	e, backups := newSwarmEngine(t, fx)
-	life := &fakeLife{running: true, fx: fx, downErr: errors.New("scale failed")}
-	e.Life = life
 	p, err := PlanFor(e.ConfigDir, "app")
 	require.NoError(t, err)
+	_, err = e.Backup(p, filepath.Join(backups, "b"), false)
+	require.NoError(t, err)
 
-	_, err = e.BackupService(context.Background(), p, filepath.Join(backups, "x"), false)
-	assert.ErrorContains(t, err, "scale failed")
-	assert.Equal(t, []string{"down@0", "up@0"}, life.log, "no snapshot of a half-stopped service; Up still runs")
+	run, ok := fx.find("app_data:/from:ro")
+	require.True(t, ok)
+	assert.True(t, strings.HasPrefix(run.line(), "docker run -d "), run.line())
+	assert.NotContains(t, run.line(), "--rm")
+	assert.Contains(t, run.line(), "--entrypoint tar sha256:agentimage czf", "the agent's own image")
+	_, ok = fx.find("docker wait cid1")
+	assert.True(t, ok)
+	_, ok = fx.find("docker rm -f cid1")
+	assert.True(t, ok, "the helper is removed once its exit code is read")
+
+	fx.waitCode = "1"
+	_, err = e.Backup(p, filepath.Join(backups, "c"), false)
+	assert.ErrorContains(t, err, "helper container exited 1: tar: short read")
 }
 
 // The CLI runs inside the leader agent: a helper container cannot bind its
@@ -129,7 +193,7 @@ func TestBackup_HelperMountsBackupsVolume(t *testing.T) {
 	require.True(t, ok)
 	line := c.line()
 	assert.Contains(t, line, "homelab-backups:/backups ")
-	assert.Contains(t, line, "tar czf /backups/20260101-000000/volumes/app_data.tar.gz -C /from .")
+	assert.Contains(t, line, "czf /backups/20260101-000000/volumes/app_data.tar.gz -C /from .")
 	_, ok = fx.find("volume inspect --format {{.Name}} app_data")
 	assert.True(t, ok, "the volume's presence on this node is checked first")
 
@@ -217,45 +281,138 @@ func TestBackup_ManifestUnchanged(t *testing.T) {
 	}`, string(got))
 }
 
-func TestRestore_DownRestoreUp(t *testing.T) {
-	fx := &fakeExec{}
+// appRecord matches what the app service declares (twoVolCompose, pgRedisCfg).
+func appRecord() ServiceRecord {
+	return ServiceRecord{
+		Name: "app",
+		Volumes: []VolumeRecord{
+			{Volume: "app_cache", File: "app_cache.tar.gz"},
+			{Volume: "app_data", File: "app_data.tar.gz"},
+		},
+		Databases: []DatabaseRecord{{Type: config.DBPostgres, Database: "appdb", User: "appuser", File: "app-appdb.dump"}},
+	}
+}
+
+func restoreFixture(t *testing.T, fx *fakeExec) (*Engine, *fakeLife, string) {
+	t.Helper()
 	e, backups := newSwarmEngine(t, fx)
 	src := filepath.Join(backups, "20260101-000000")
 	require.NoError(t, os.MkdirAll(filepath.Join(src, "databases"), 0o750))
 	require.NoError(t, os.WriteFile(filepath.Join(src, "databases", "app-appdb.dump"), []byte("PGDMP"), 0o600))
-	life := &fakeLife{running: true, fx: fx}
+	life := running(fx)
 	e.Life = life
+	return e, life, src
+}
+
+// helpers are the helper `docker run` lines, in order.
+func helpers(fx *fakeExec) []string {
+	var out []string
+	for _, c := range fx.calls {
+		if len(c.Args) > 0 && c.Args[0] == "run" {
+			out = append(out, c.line())
+		}
+	}
+	return out
+}
+
+func TestRestore_DownRestoreUp(t *testing.T) {
+	fx := &fakeExec{}
+	e, life, src := restoreFixture(t, fx)
 	var prepared []string
 	e.PrepareDB = func(_ context.Context, svc string) error {
 		prepared = append(prepared, svc+"@"+itoa(len(fx.calls)))
 		return nil
 	}
-	rec := ServiceRecord{
-		Name:      "app",
-		Volumes:   []VolumeRecord{{Volume: "app_data", File: "app_data.tar.gz"}},
-		Databases: []DatabaseRecord{{Type: config.DBPostgres, Database: "appdb", User: "appuser", File: "app-appdb.dump"}},
+	callsBefore := 0
+	require.NoError(t, e.RestoreService(context.Background(), appRecord(), src, false))
+
+	require.Len(t, life.log, 3)
+	assert.Equal(t, "down", strings.Split(life.log[0], "@")[0])
+	assert.Equal(t, "wait", strings.Split(life.log[1], "@")[0])
+	assert.Equal(t, "back3@"+itoa(len(fx.calls)), life.log[2], "scaled back to the recorded counts at the end")
+	downAt, _ := strconv.Atoi(strings.Split(life.log[1], "@")[1])
+	assert.Equal(t, []string{"app@" + itoa(downAt)}, prepared, "the shared DB is readied after the stop, before restoring")
+	for _, c := range fx.calls[callsBefore:downAt] {
+		assert.Equal(t, "volume", c.Args[0], "only volume checks run before the service is stopped")
 	}
-	require.NoError(t, e.RestoreService(context.Background(), rec, src, false))
 
-	require.Len(t, fx.calls, 2)
-	assert.Equal(t, []string{"down@0", "up@2"}, life.log)
-	assert.Equal(t, []string{"app@0"}, prepared, "the shared DB is readied after Down, before restoring")
-
-	vol := fx.calls[0].line()
-	assert.Contains(t, vol, "homelab-backups:/backups:ro")
-	assert.True(t, strings.HasSuffix(vol, " sh /backups/20260101-000000/volumes/app_data.tar.gz"), vol)
-	assert.Contains(t, fx.calls[1].line(), "exec -i pg-task-123 pg_restore")
+	runs := helpers(fx)
+	require.Len(t, runs, 2)
+	assert.Contains(t, runs[1], "homelab-backups:/backups:ro")
+	assert.True(t, strings.HasSuffix(runs[1], " sh /backups/20260101-000000/volumes/app_data.tar.gz"), runs[1])
+	pg, ok := fx.find("pg_restore")
+	require.True(t, ok)
+	assert.Contains(t, pg.line(), "exec -i pg-task-123 pg_restore")
 }
 
-func TestRestore_UpRunsEvenWhenRestoreFails(t *testing.T) {
-	fx := &fakeExec{err: errors.New("bad archive")}
-	e, backups := newSwarmEngine(t, fx)
-	life := &fakeLife{running: true, fx: fx}
-	e.Life = life
-	rec := ServiceRecord{Name: "app", Volumes: []VolumeRecord{{Volume: "app_data", File: "app_data.tar.gz"}}}
-	err := e.RestoreService(context.Background(), rec, filepath.Join(backups, "x"), false)
-	assert.ErrorContains(t, err, "bad archive")
-	assert.Equal(t, []string{"down@0", "up@1"}, life.log)
+// A failed restore leaves the service down: scaling it back would start it
+// on half-replaced data.
+func TestRestore_FailureLeavesServiceStopped(t *testing.T) {
+	fx := &fakeExec{waitCode: "1"}
+	e, life, src := restoreFixture(t, fx)
+	err := e.RestoreService(context.Background(), appRecord(), src, false)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "restore failed; app is left stopped")
+	assert.ErrorContains(t, err, "`homelab up app`")
+	assert.ErrorContains(t, err, "helper container exited 1")
+	for _, l := range life.log {
+		assert.False(t, strings.HasPrefix(l, "back"), "not scaled back: %v", life.log)
+	}
+}
+
+func TestRestore_StopFailureScalesBackDataUntouched(t *testing.T) {
+	fx := &fakeExec{}
+	e, life, src := restoreFixture(t, fx)
+	life.waitErr = errors.New("still running")
+	err := e.RestoreService(context.Background(), appRecord(), src, false)
+	assert.ErrorContains(t, err, "still running")
+	assert.Empty(t, helpers(fx), "nothing restored")
+	assert.True(t, strings.HasPrefix(life.log[len(life.log)-1], "back3@"), "nothing was touched, so it is brought back")
+}
+
+func TestRestore_WaitsStoppedEvenWhenAlreadyDown(t *testing.T) {
+	fx := &fakeExec{}
+	e, life, src := restoreFixture(t, fx)
+	life.reps = map[string]uint64{"app_app": 0}
+	require.NoError(t, e.RestoreService(context.Background(), appRecord(), src, false))
+	require.Len(t, life.log, 1)
+	assert.True(t, strings.HasPrefix(life.log[0], "wait@"), "a just-downed service is waited on before rm -rf")
+}
+
+func TestRestore_RefusesMissingVolumeUnlessCreateVolumes(t *testing.T) {
+	fx := &fakeExec{missing: map[string]bool{"app_data": true}}
+	e, life, src := restoreFixture(t, fx)
+	err := e.RestoreService(context.Background(), appRecord(), src, false)
+	assert.ErrorContains(t, err, `volume "app_data" is not on this node — refusing to create it`)
+	assert.ErrorContains(t, err, "--create-volumes")
+	assert.Empty(t, life.log, "refused before anything was stopped")
+	assert.Empty(t, helpers(fx))
+
+	e.CreateVolumes = true
+	require.NoError(t, e.RestoreService(context.Background(), appRecord(), src, false))
+	assert.Len(t, helpers(fx), 2, "both volumes restored, the missing one created by the helper")
+}
+
+func TestRestore_RefusesManifestNotMatchingService(t *testing.T) {
+	for name, mod := range map[string]func(*ServiceRecord){
+		"extra volume": func(r *ServiceRecord) {
+			r.Volumes = append(r.Volumes, VolumeRecord{Volume: "other_data", File: "o.tar.gz"})
+		},
+		"missing volume": func(r *ServiceRecord) { r.Volumes = r.Volumes[:1] },
+		"other database": func(r *ServiceRecord) { r.Databases[0].Database = "otherdb" },
+		"no database":    func(r *ServiceRecord) { r.Databases = nil },
+	} {
+		t.Run(name, func(t *testing.T) {
+			fx := &fakeExec{}
+			e, life, src := restoreFixture(t, fx)
+			rec := appRecord()
+			mod(&rec)
+			err := e.RestoreService(context.Background(), rec, src, false)
+			assert.ErrorContains(t, err, "does not match the service")
+			assert.Empty(t, life.log)
+			assert.Empty(t, fx.calls)
+		})
+	}
 }
 
 // ── fetch: the tar stream from the leader to a PC ─────────────────────────────

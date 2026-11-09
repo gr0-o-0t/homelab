@@ -9,6 +9,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/groot/homelab/internal/config"
@@ -76,6 +77,13 @@ type Engine struct {
 	// PrepareDB readies a service's shared databases before their dumps are
 	// restored into them (optional).
 	PrepareDB func(ctx context.Context, svc string) error
+	// HelperImage runs the volume helpers: the agent's own image, already
+	// on the node and pinned by version (busybox tar, sh and rm). Its
+	// entrypoint is overridden per helper.
+	HelperImage string
+	// CreateVolumes lets a restore create a volume missing on this node
+	// (restore --create-volumes, onto a fresh cluster).
+	CreateVolumes bool
 }
 
 // helperMount is where helper containers mount the backups volume.
@@ -209,21 +217,63 @@ func (e *Engine) dumpDatabase(d DatabaseTarget, path string) error {
 // The volume must already exist here: `docker run -v` would otherwise create
 // an empty one and back that up as if it were the service's data.
 func (e *Engine) archiveVolume(vol, helperDir, file string) error {
-	if _, err := e.Exec.Output("docker", "volume", "inspect", "--format", "{{.Name}}", vol); err != nil {
+	if !e.volumeExists(vol) {
 		return fmt.Errorf("volume %q is not on this node: backups run on the leader, where data volumes live "+
-			"— has the service run here yet? (%w)", vol, err)
+			"— has the service run here yet?", vol)
 	}
-	err := e.Exec.Run("docker", "run", "--rm",
+	err := e.runHelper(
 		"-v", vol+":/from:ro",
 		"-v", e.BackupsVolume+":"+helperMount,
-		helperImage,
-		"tar", "czf", path.Join(helperDir, file), "-C", "/from", ".",
+		"--entrypoint", "tar",
+		e.HelperImage,
+		"czf", path.Join(helperDir, file), "-C", "/from", ".",
 	)
 	if err != nil {
 		return fmt.Errorf("archiving volume %q: %w", vol, err)
 	}
 	return nil
 }
+
+// volumeExists reports whether the named volume is on this node.
+func (e *Engine) volumeExists(vol string) bool {
+	_, err := e.Exec.Output("docker", "volume", "inspect", "--format", "{{.Name}}", vol)
+	return err == nil
+}
+
+// runHelper runs a one-shot helper container detached and waits for it.
+// Detached, no signal reaching this process (or its attached docker CLI)
+// can stop the helper midway through clearing or unpacking a volume. Not
+// --rm: an auto-removed container that exits before `docker wait` attaches
+// makes the wait fail on a missing container, so the exit code would be
+// lost; it is removed explicitly once its code is read.
+func (e *Engine) runHelper(args ...string) error {
+	if e.HelperImage == "" {
+		return errors.New("no helper image configured")
+	}
+	out, err := e.Exec.Output("docker", append([]string{"run", "-d", "--label", helperLabel}, args...)...)
+	if err != nil {
+		return fmt.Errorf("starting the helper container: %w", err)
+	}
+	id := strings.TrimSpace(string(out))
+	if id == "" {
+		return errors.New("starting the helper container: docker printed no container id")
+	}
+	out, err = e.Exec.Output("docker", "wait", id)
+	if err != nil {
+		// Not removed: `rm -f` would kill it if it is still clearing or
+		// unpacking a volume. It is labelled for finding it by hand.
+		return fmt.Errorf("waiting for the helper container %s (left in place, label %s): %w", id, helperLabel, err)
+	}
+	defer func() { _, _ = e.Exec.Output("docker", "rm", "-f", id) }()
+	if code := strings.TrimSpace(string(out)); code != "0" {
+		logs, _ := e.Exec.Output("docker", "logs", "--tail", "20", id)
+		return fmt.Errorf("helper container exited %s: %s", code, strings.TrimSpace(string(logs)))
+	}
+	return nil
+}
+
+// helperLabel marks helper containers, so a leftover one is recognisable.
+const helperLabel = "homelab.helper=backup"
 
 // Restore puts a service's volumes and databases back from srcDir.
 //
@@ -277,14 +327,20 @@ func (e *Engine) Restore(rec ServiceRecord, srcDir string, restoreConfig bool) e
 // cleared, so a missing or truncated archive fails with the volume untouched.
 //
 // helperDir is the archive directory inside the helper's read-only mount of
-// the backups volume. A volume missing on this node is created by the run,
-// as Swarm itself would when the service's task first starts here.
+// the backups volume. A volume missing on this node is refused unless
+// CreateVolumes: silently creating one could restore into a volume the
+// service never uses (another node's, a renamed one).
 func (e *Engine) restoreVolume(v VolumeRecord, helperDir string) error {
-	err := e.Exec.Run("docker", "run", "--rm",
+	if !e.CreateVolumes && !e.volumeExists(v.Volume) {
+		return fmt.Errorf("volume %q is not on this node — refusing to create it; "+
+			"pass --create-volumes to restore into a new volume (a fresh cluster)", v.Volume)
+	}
+	err := e.runHelper(
 		"-v", v.Volume+":/to",
 		"-v", e.BackupsVolume+":"+helperMount+":ro",
-		helperImage,
-		"sh", "-c", restoreVolumeScript, "sh", path.Join(helperDir, v.File),
+		"--entrypoint", "sh",
+		e.HelperImage,
+		"-c", restoreVolumeScript, "sh", path.Join(helperDir, v.File),
 	)
 	if err != nil {
 		return fmt.Errorf("restoring volume %q: %w", v.Volume, err)

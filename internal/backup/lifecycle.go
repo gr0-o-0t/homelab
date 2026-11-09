@@ -6,80 +6,149 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 )
 
-// Lifecycle stops and starts a service around a snapshot or a restore. On
-// the cluster it is the Swarm Deployer: Down scales to zero (keeping the
-// volumes) and returns once the containers have stopped, Up deploys again.
+// Lifecycle stops a service around a snapshot or a restore and brings it
+// back exactly as it was. On the cluster it is the Swarm Deployer: replica
+// counts per Swarm service, Scale (only the counts — no pull, no registry,
+// no re-translated config) and WaitStopped (scaling only changes the spec;
+// containers stop within their grace period).
 type Lifecycle interface {
-	// Running reports whether the service is meant to be up now; a service
-	// that is down is neither stopped nor started.
-	Running(ctx context.Context, svc string) (bool, error)
-	Down(ctx context.Context, svc string) error
-	Up(ctx context.Context, svc string) error
+	Replicas(ctx context.Context, svc string) (map[string]uint64, error)
+	Scale(ctx context.Context, svc string, replicas map[string]uint64) error
+	WaitStopped(ctx context.Context, svc string) error
 }
 
-// around runs fn with the service stopped when it was running: Down first,
-// and Up afterwards whatever happened — a service left down because a tar
-// step failed is a worse outcome than the failed step. Both errors are
-// reported. fn is skipped when Down fails, since a half-stopped service is
-// not a consistent snapshot either.
-func (e *Engine) around(ctx context.Context, svc string, fn func() error) error {
+// stopped records svc's replica counts, scales it to zero and waits for its
+// containers to stop — waiting even when it was already scaled down, since
+// a `homelab down` issued a moment ago leaves containers in their stop
+// grace period. It returns the counts to scale back to (nil: nothing to do).
+// On failure it has already scaled back.
+func (e *Engine) stopped(ctx context.Context, svc string) (map[string]uint64, error) {
 	if e.Life == nil {
-		return errors.New("no way to stop and start services")
+		return nil, errors.New("no way to stop and start services")
 	}
-	running, err := e.Life.Running(ctx, svc)
+	reps, err := e.Life.Replicas(ctx, svc)
 	if err != nil {
-		return fmt.Errorf("checking whether %s is running: %w", svc, err)
+		return nil, fmt.Errorf("reading %s's replica counts: %w", svc, err)
+	}
+	running := false
+	zero := make(map[string]uint64, len(reps))
+	for name, n := range reps {
+		running = running || n > 0
+		zero[name] = 0
 	}
 	if !running {
-		return fn()
+		reps = nil
+	} else if err := e.Life.Scale(ctx, svc, zero); err != nil {
+		return nil, errors.Join(fmt.Errorf("scaling %s down: %w", svc, err), e.scaleBack(ctx, svc, reps))
 	}
-	if err = e.Life.Down(ctx, svc); err != nil {
-		err = fmt.Errorf("stopping %s: %w", svc, err)
-	} else {
-		err = fn()
+	if err := e.Life.WaitStopped(ctx, svc); err != nil {
+		return nil, errors.Join(fmt.Errorf("waiting for %s to stop: %w", svc, err), e.scaleBack(ctx, svc, reps))
 	}
-	// Not cancelled with ctx: an interrupt during the snapshot must still
-	// bring the service back.
-	if upErr := e.Life.Up(context.WithoutCancel(ctx), svc); upErr != nil {
-		err = errors.Join(err, fmt.Errorf("starting %s again: %w", svc, upErr))
-	}
-	return err
+	return reps, nil
 }
 
-// BackupService snapshots one service, stopping it for the duration unless
-// live (a stopped service is backed up as it is).
+// scaleBack restores the recorded counts. Not cancelled with ctx: an
+// interrupt must still bring the service back.
+func (e *Engine) scaleBack(ctx context.Context, svc string, reps map[string]uint64) error {
+	if reps == nil {
+		return nil
+	}
+	if err := e.Life.Scale(context.WithoutCancel(ctx), svc, reps); err != nil {
+		return fmt.Errorf("scaling %s back up: %w", svc, err)
+	}
+	return nil
+}
+
+// BackupService snapshots one service, scaled down for the duration unless
+// live. It is always scaled back to its recorded counts, even when the
+// snapshot failed: a service left down because a tar step failed is a worse
+// outcome than the failed backup. Both errors are reported.
 func (e *Engine) BackupService(ctx context.Context, p Plan, destDir string, live bool) (ServiceRecord, error) {
 	if live {
 		return e.Backup(p, destDir, true)
 	}
-	var rec ServiceRecord
-	err := e.around(ctx, p.Service, func() error {
-		var err error
-		rec, err = e.Backup(p, destDir, false)
-		return err
-	})
-	if rec.Name == "" {
-		rec.Name = p.Service
+	reps, err := e.stopped(ctx, p.Service)
+	if err != nil {
+		return ServiceRecord{Name: p.Service}, err
 	}
-	return rec, err
+	rec, err := e.Backup(p, destDir, false)
+	return rec, errors.Join(err, e.scaleBack(ctx, p.Service, reps))
 }
 
-// RestoreService restores one service: Down, its shared databases readied,
-// volumes and databases replaced, Up — when it was running beforehand.
+// RestoreService restores one service: checked against the installed
+// service, scaled down and stopped, its shared databases readied, volumes
+// and databases replaced, then scaled back to its recorded counts — only
+// when all of that succeeded. A failed restore leaves the service down:
+// starting it on half-replaced data would be worse.
 func (e *Engine) RestoreService(ctx context.Context, rec ServiceRecord, srcDir string, restoreConfig bool) error {
-	return e.around(ctx, rec.Name, func() error {
-		// Dumps are restored into the shared instance, so it has to be up
-		// even though the service itself is stopped.
-		if len(rec.Databases) > 0 && e.PrepareDB != nil {
-			if err := e.PrepareDB(ctx, rec.Name); err != nil {
-				return err
-			}
+	if err := e.checkRestorable(rec, srcDir, restoreConfig); err != nil {
+		return err
+	}
+	reps, err := e.stopped(ctx, rec.Name)
+	if err != nil {
+		return err
+	}
+	// Dumps are restored into the shared instance, so it has to be up even
+	// though the service itself is stopped.
+	if len(rec.Databases) > 0 && e.PrepareDB != nil {
+		err = e.PrepareDB(ctx, rec.Name)
+	}
+	if err == nil {
+		err = e.Restore(rec, srcDir, restoreConfig)
+	}
+	if err != nil {
+		return fmt.Errorf("restore failed; %s is left stopped — rerun `homelab restore %s %s`, "+
+			"or `homelab up %s` to start it on the current data: %w", rec.Name, srcDir, rec.Name, rec.Name, err)
+	}
+	return e.scaleBack(ctx, rec.Name, reps)
+}
+
+// checkRestorable refuses a restore before anything is stopped: the
+// backup's volumes and databases must be the ones the service declares (its
+// archived config with --config, else the installed one), and every volume
+// must exist on this node unless CreateVolumes.
+func (e *Engine) checkRestorable(rec ServiceRecord, srcDir string, restoreConfig bool) error {
+	root := e.ConfigDir
+	if restoreConfig {
+		root = srcDir // a backup holds services/<svc>/ like a config dir
+	}
+	p, err := PlanFor(root, rec.Name)
+	if err != nil {
+		return fmt.Errorf("checking the backup of %s against its config: %w", rec.Name, err)
+	}
+	var haveVols, wantVols, haveDBs, wantDBs []string
+	for _, v := range rec.Volumes {
+		haveVols = append(haveVols, v.Volume)
+	}
+	for _, d := range rec.Databases {
+		haveDBs = append(haveDBs, string(d.Type)+"/"+d.Database)
+	}
+	wantVols = append(wantVols, p.Volumes...)
+	for _, d := range p.Databases {
+		wantDBs = append(wantDBs, string(d.Type)+"/"+d.Database)
+	}
+	for _, s := range [][]string{haveVols, wantVols, haveDBs, wantDBs} {
+		sort.Strings(s)
+	}
+	if !slices.Equal(haveVols, wantVols) || !slices.Equal(haveDBs, wantDBs) {
+		return fmt.Errorf("the backup of %s does not match the service: backup has volumes %v and databases %v, "+
+			"the service declares %v and %v — refusing to restore", rec.Name, haveVols, haveDBs, wantVols, wantDBs)
+	}
+	if e.CreateVolumes {
+		return nil
+	}
+	for _, v := range rec.Volumes {
+		if !e.volumeExists(v.Volume) {
+			return fmt.Errorf("volume %q is not on this node — refusing to create it; "+
+				"pass --create-volumes to restore into a new volume (a fresh cluster)", v.Volume)
 		}
-		return e.Restore(rec, srcDir, restoreConfig)
-	})
+	}
+	return nil
 }
 
 // ResolveUnder resolves p (--out, or a backup to restore) inside the backups

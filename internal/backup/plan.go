@@ -26,11 +26,6 @@ type Executor interface {
 	Output(name string, args ...string) ([]byte, error)
 }
 
-// helperImage is used to read and write volume contents. Volumes are only
-// reachable from inside a container, so a tar step needs a throwaway one.
-// Pinned to a major so backups do not silently change format with :latest.
-const helperImage = "alpine:3"
-
 // DatabaseTarget is one dumpable database on a shared instance.
 type DatabaseTarget struct {
 	Type      config.DBType

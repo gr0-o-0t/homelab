@@ -59,12 +59,18 @@ func helperMain(args []string) {
 		_, _ = buf.ReadFrom(os.Stdin)
 		fmt.Print("got:" + buf.String())
 		os.Exit(0)
-	case "up", "rm", "cf": // up|rm|cf <sub…> <id> <sleep-ms>: records its interval in dir
+	case "up", "rm", "cf", "backup": // up|rm|cf|backup <sub…> <id> <sleep-ms>: records its interval in dir
 		id := args[len(args)-2]
 		ms, _ := strconv.Atoi(args[len(args)-1])
 		_ = os.WriteFile(filepath.Join(dir, id+".pid"), []byte(strconv.Itoa(os.Getpid())), 0o600)
 		start := time.Now().UnixNano()
 		time.Sleep(time.Duration(ms) * time.Millisecond)
+		if args[0] == "backup" {
+			// More than a pipe buffer, all written after a disconnect: a
+			// detached child must not block on its output.
+			fmt.Print(strings.Repeat("x", 256<<10))
+			fmt.Println("\nbackup done")
+		}
 		end := time.Now().UnixNano()
 		_ = os.WriteFile(filepath.Join(dir, id+".span"), fmt.Appendf(nil, "%d %d", start, end), 0o600)
 		os.Exit(0)
@@ -115,7 +121,7 @@ func testResolve(argv []string) ([]string, bool) {
 		return []string{"cf", argv[1]}, true
 	}
 	switch name {
-	case "help", "completion", "__complete", "status", "ls", "cat", "up", "delete", "session", "agent", "envshim", "version", "login", "join":
+	case "help", "completion", "__complete", "status", "ls", "cat", "up", "delete", "session", "agent", "envshim", "version", "login", "join", "backup":
 		return []string{name}, true
 	}
 	return nil, false
@@ -393,3 +399,44 @@ func TestLoadClient(t *testing.T) {
 	assert.Contains(t, err.Error(), "CLUSTER_SECRET")
 }
 
+
+// A backup or restore stopped midway leaves a service scaled to zero or a
+// volume half-replaced: when its client drops it runs to completion, its
+// output goes to the agent log, and it holds the lock until it exits.
+func TestRemote_DetachedCommandSurvivesDisconnect(t *testing.T) {
+	detachLog := &syncBuf{}
+	e := newTestServer(t, func(c *ServerConfig) { c.DetachLog = detachLog })
+	c := e.client(testSecret, "1.4.2")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = c.Run(ctx, RunOptions{Argv: []string{"backup", "bk", "1500"}, Stdin: strings.NewReader(""),
+			Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}})
+	}()
+	pidFile := filepath.Join(e.stateDir, "bk.pid")
+	require.Eventually(t, func() bool { _, err := os.Stat(pidFile); return err == nil }, 10*time.Second, 20*time.Millisecond)
+	cancel() // the client goes away
+	<-done
+
+	// A mutating command queued now waits for the detached one to finish.
+	code, _, _, err := run(t, c, RunOptions{Argv: []string{"up", "next", "10"}})
+	require.NoError(t, err)
+	assert.Equal(t, 0, code)
+
+	bs, be := span(t, e.stateDir, "bk")
+	ns, _ := span(t, e.stateDir, "next")
+	assert.GreaterOrEqual(t, be-bs, int64(1500*time.Millisecond), "the backup ran its full course")
+	assert.GreaterOrEqual(t, ns, be, "the lock was held until the detached command exited")
+	assert.Eventually(t, func() bool { return strings.Contains(detachLog.String(), "backup done") },
+		5*time.Second, 20*time.Millisecond, "output after the disconnect reaches the agent log")
+	assert.Eventually(t, func() bool { return strings.Contains(e.logs.String(), `"backup" ran to completion (exit 0)`) },
+		5*time.Second, 20*time.Millisecond)
+}
+
+func (s *syncBuf) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}

@@ -25,18 +25,28 @@ backups volume (/var/lib/homelab-backups on the leader).
 
 Restore REPLACES current data: each volume is emptied before the archived copy is
 unpacked, and each database is restored with --clean, dropping existing objects.
-Running services are scaled down first and deployed again afterwards.
+Running services are scaled down first and wait for their containers to stop.
 
 The database and its role must already exist — run 'homelab setup <service>'
 first on a fresh machine. That also re-syncs the role password with the keyring,
-which is why secrets are not carried in the backup.`,
+which is why secrets are not carried in the backup.
+
+A volume of the service missing on this node is refused, so that data is never
+restored into a volume the service does not use; pass --create-volumes when
+restoring onto a fresh cluster. The backup must hold exactly the volumes and
+databases the service declares (its archived config with --config).
+
+A failed restore leaves the service stopped rather than start it on
+half-replaced data; a running service is otherwise scaled back to its replica
+counts afterwards, with nothing re-pulled or re-deployed.`,
 	Args: cobra.RangeArgs(1, 2),
 	RunE: runRestore,
 }
 
 var restoreFlags struct {
-	config bool
-	yes    bool
+	config        bool
+	createVolumes bool
+	yes           bool
 }
 
 func init() {
@@ -44,6 +54,8 @@ func init() {
 		"Also restore config.yaml / docker-compose.yml / caddy confs")
 	restoreCmd.Flags().BoolVarP(&restoreFlags.yes, "yes", "y", false,
 		"Skip the confirmation prompt")
+	restoreCmd.Flags().BoolVar(&restoreFlags.createVolumes, "create-volumes", false,
+		"Create a volume missing on this node (restoring onto a fresh cluster) instead of refusing")
 	rootCmd.AddCommand(restoreCmd)
 }
 
@@ -105,10 +117,14 @@ func runRestore(_ *cobra.Command, args []string) error {
 		}
 	}
 
-	// Deploying again afterwards needs the secrets: refused up front, before
-	// anything is scaled down.
-	return withDeployer(root, true, func(ctx context.Context, d *swarm.Deployer) error {
-		engine := newBackupEngine(root, d)
+	// Scaling back needs no secrets (replica counts only); readying the
+	// shared databases opens them itself.
+	return withDeployer(root, false, func(ctx context.Context, d *swarm.Deployer) error {
+		engine, err := newBackupEngine(root, d)
+		if err != nil {
+			return err
+		}
+		engine.CreateVolumes = restoreFlags.createVolumes
 		engine.PrepareDB = func(ctx context.Context, svc string) error {
 			return ensureDBDependencies(ctx, root, svc)
 		}

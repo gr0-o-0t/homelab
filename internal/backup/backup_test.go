@@ -33,6 +33,8 @@ type fakeExec struct {
 	err      error
 	// missing volumes fail `docker volume inspect`.
 	missing map[string]bool
+	// waitCode is what `docker wait` prints for a helper (default 0).
+	waitCode string
 }
 
 func (f *fakeExec) Run(name string, args ...string) error {
@@ -60,8 +62,24 @@ func (f *fakeExec) RunFrom(r io.Reader, name string, args ...string) error {
 
 func (f *fakeExec) Output(name string, args ...string) ([]byte, error) {
 	f.calls = append(f.calls, call{Name: name, Args: args})
-	if len(args) > 0 && f.missing[args[len(args)-1]] {
-		return nil, errors.New("Error: No such volume: " + args[len(args)-1])
+	switch {
+	case len(args) > 1 && args[0] == "volume" && args[1] == "inspect":
+		if f.missing[args[len(args)-1]] {
+			return nil, errors.New("Error: No such volume: " + args[len(args)-1])
+		}
+		return []byte(args[len(args)-1] + "\n"), nil
+	case len(args) > 0 && args[0] == "run":
+		if f.err != nil {
+			return nil, f.err
+		}
+		return []byte("cid1\n"), nil
+	case len(args) > 0 && args[0] == "wait":
+		if f.waitCode != "" {
+			return []byte(f.waitCode + "\n"), nil
+		}
+		return []byte("0\n"), nil
+	case len(args) > 0 && args[0] == "logs":
+		return []byte("tar: short read\n"), nil
 	}
 	return nil, f.err
 }
@@ -172,7 +190,7 @@ func TestBackup_WritesEverything(t *testing.T) {
 	for _, vol := range []string{"app_data", "app_cache"} {
 		c, ok := fx.find(vol + ":/from:ro")
 		require.True(t, ok, "volume %s should be archived", vol)
-		assert.Contains(t, c.line(), "tar czf /backups/b/volumes/"+vol+".tar.gz")
+		assert.Contains(t, c.line(), "--entrypoint tar sha256:agentimage czf /backups/b/volumes/"+vol+".tar.gz")
 	}
 
 	assert.Equal(t, "app", rec.Name)

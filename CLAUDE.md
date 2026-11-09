@@ -85,6 +85,7 @@ homelab backup --fetch <name> <local-dir>          # copy a backup to this PC (<
 
 homelab restore <backup-dir> [service]             # replace volumes + databases
 homelab restore <backup-dir> --config              # also overwrite config.yaml / compose
+homelab restore <backup-dir> --create-volumes      # create volumes missing on the leader (fresh cluster)
 
 homelab prune [service...]                         # down + remove containers, images, volumes
 homelab prune [service] --keep-volumes             # reclaim images only, no data loss
@@ -93,21 +94,32 @@ homelab prune --dangling                           # unreferenced images + build
 
 `backup` writes a timestamped directory with a `manifest.json` listing every
 volume, dump and config file, so a backup is inspectable and restorable per
-service. Each running service is scaled down (`Deployer.Down`, waiting for its
-tasks to stop) for the duration of its own snapshot unless `--live` is given —
-tarring a volume under a running process can capture a torn file — and deployed
-again afterwards even when the snapshot failed. Shared DB providers are never
-stopped for a consumer; dumps are online.
+service. Unless `--live`, each service's replica counts are recorded, it is
+scaled to zero (`Deployer.Scale`) and `WaitStopped` waits for its containers to
+stop — always, even when it was already down, since a just-issued `down` leaves
+containers in their stop grace period — then the snapshot runs and the exact
+counts are restored, even when the snapshot failed. Scale changes counts only:
+no pull, no registry query, no re-translated config. Shared DB providers are
+never stopped for a consumer; dumps are online.
+
+`restore` checks first that the manifest's volumes and databases are the ones
+the service declares (its archived config with `--config`) and that every volume
+exists on the leader (else refused unless `--create-volumes`), then stops the
+service the same way. It scales back only on full success: a failed restore
+leaves the service stopped and says so (rerun, or `homelab up <svc>`).
 
 Backups run on the leader and live in the `homelab-backups` volume, mounted only
 in the leader agent at `/var/lib/homelab-backups` (never inside the state volume).
 `--out` and restore's `<backup-dir>` must resolve under it (relative = relative to
-it); volumes are tarred by a one-shot `docker run` helper that mounts the data
-volume read-only and the backups volume, refusing a volume that is not on this
-node. `backup --fetch` runs on the PC (not forwarded): it streams the hidden,
-lock-free `backup-export <name>` tar from the leader and unpacks it — regular
-files and directories only, confined by `os.Root` — into a temp dir renamed into
-place once complete.
+it). Volume helpers run the agent's own image (by image ID, entrypoint
+overridden) detached — `docker run -d`, `docker wait`, `docker rm -f` — mounting
+the data volume and the backups volume; a backup refuses a volume not on this
+node. `backup` and `restore` are `remote.Detached`: when the client disconnects
+(or Ctrl-C on the PC, which prints where it went on) the agent lets them run to
+completion, logging their output and holding the lock. `backup --fetch` runs on
+the PC (not forwarded): it streams the hidden, lock-free `backup-export <name>`
+tar from the leader and unpacks it — regular files and directories only,
+confined by `os.Root` — into a temp dir renamed into place once complete.
 
 Secrets are deliberately **not** in backups; they stay in the system keyring.
 After restoring onto a new machine run `homelab setup <service>`, which re-enters

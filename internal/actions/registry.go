@@ -30,6 +30,8 @@ var (
 	inBackupDir  = Input{Key: "backup", Label: "Backup", Kind: Choice, Source: SourceBackups, Required: true}
 	inRestoreCfg = Input{Key: "config", Label: "Also restore config files", Kind: Bool,
 		Help: "Overwrites config.yaml, docker-compose.yml and Caddy routes"}
+	inCreateVols = Input{Key: "create-volumes", Label: "Create missing volumes", Kind: Bool,
+		Help: "Restoring onto a fresh cluster: create a volume not on the leader instead of refusing"}
 	inKeepVolumes = Input{Key: "keep-volumes", Label: "Keep volumes (no data loss)", Kind: Bool}
 	inKeepImages  = Input{Key: "keep-images", Label: "Keep images", Kind: Bool}
 	inQuiet       = Input{Key: "quiet", Label: "IDs only", Kind: Bool}
@@ -149,7 +151,7 @@ func restoreArgs(t Target, in Inputs) []string {
 	if t.Name != "" {
 		args = append(args, t.Name)
 	}
-	return append(withBools(args, in, "config"), "--yes")
+	return append(withBools(args, in, "config", "create-volumes"), "--yes")
 }
 
 // ── availability ──────────────────────────────────────────────────────────────
@@ -314,8 +316,8 @@ func build() []Action {
 			Commands: []string{"backup", "backup --out", "backup --live"}},
 		Action{ID: "service.restore", Label: "Restore", Group: GroupMaintenance, Icon: "restore", Scope: Service,
 			Danger: Confirm, Help: "Replace the service's volumes and databases with a backup",
-			Inputs: []Input{inBackupDir, inRestoreCfg}, Args: restoreArgs,
-			Commands: []string{"restore", "restore --config", "restore --yes"}},
+			Inputs: []Input{inBackupDir, inRestoreCfg, inCreateVols}, Args: restoreArgs,
+			Commands: []string{"restore", "restore --config", "restore --create-volumes", "restore --yes"}},
 		Action{ID: "service.setup", Label: "Configure", Group: GroupConfigure, Icon: "gear", Scope: Service,
 			Interactive: true, Help: "Set variables and secrets (front ends can also use setup --json/--set/--secrets-stdin)",
 			Args: named("setup"), Commands: []string{"setup", "setup --set", "setup --secrets-stdin"}},
@@ -418,7 +420,7 @@ func build() []Action {
 			Commands: []string{"backup --list"}},
 		Action{ID: "global.restore", Label: "Restore backup", Group: GroupMaintenance, Icon: "restore", Scope: Global,
 			Danger: Confirm, Help: "Replace the volumes and databases of every service in the backup",
-			Inputs: []Input{inBackupDir, inRestoreCfg}, Args: restoreArgs, Commands: []string{"restore"}},
+			Inputs: []Input{inBackupDir, inRestoreCfg, inCreateVols}, Args: restoreArgs, Commands: []string{"restore"}},
 		Action{ID: "global.prune.dangling", Label: "Reclaim space", Group: GroupMaintenance, Icon: "broom", Scope: Global,
 			Help: "Remove unreferenced images and build cache; touches no service", Args: named("prune", "--dangling"),
 			Commands: []string{"prune --dangling"}},
