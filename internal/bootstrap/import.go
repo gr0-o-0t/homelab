@@ -1,11 +1,12 @@
 package bootstrap
 
 import (
-	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -54,11 +55,20 @@ func (b *builtImport) install(ctx context.Context, api swarm.API) error {
 	if err != nil {
 		return err
 	}
-	var buf bytes.Buffer
-	if err := importer.Tar(&buf, b.dir, staging); err != nil {
-		return fmt.Errorf("packing the imported state: %w", err)
+	// Streamed: a service may bind-mount a large directory.
+	pr, pw := io.Pipe()
+	tarDone := make(chan error, 1)
+	go func() {
+		err := importer.Tar(pw, b.dir, staging)
+		_ = pw.CloseWithError(err)
+		tarDone <- err
+	}()
+	err = api.CopyToContainer(ctx, AgentContainer, agentstate.Root, pr, container.CopyToContainerOptions{})
+	_ = pr.CloseWithError(io.ErrClosedPipe) // unblocks the writer if the copy stopped reading
+	if terr := <-tarDone; terr != nil && !errors.Is(terr, io.ErrClosedPipe) {
+		return fmt.Errorf("packing the imported state: %w", terr)
 	}
-	if err := api.CopyToContainer(ctx, AgentContainer, agentstate.Root, &buf, container.CopyToContainerOptions{}); err != nil {
+	if err != nil {
 		return fmt.Errorf("copying the imported state into %s: %w", AgentContainer, err)
 	}
 	cmd := []string{"homelab", "agent-seed", "--root", agentstate.Root, "--import", staging}
@@ -66,6 +76,76 @@ func (b *builtImport) install(ctx context.Context, api swarm.API) error {
 		return fmt.Errorf("importing the state and secrets: %w", err)
 	}
 	return nil
+}
+
+// composeWorkingDirLabel is the label compose puts on every container of a
+// project: the project's directory.
+const composeWorkingDirLabel = "com.docker.compose.project.working_dir"
+
+// composeContainers refuses any container, running or stopped, of a Compose
+// project under oldDir (the core, a service): the import replaces that
+// stack, and a stopped one would come back on the next `docker start` or
+// boot beside its Swarm twin. Other projects' containers are not ours.
+func composeContainers(ctx context.Context, api swarm.API, oldDir string) error {
+	root, err := filepath.Abs(oldDir)
+	if err != nil {
+		return err
+	}
+	// Compose recorded whichever spelling it was run with: a symlinked
+	// ~/.config matches either way.
+	real, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		real = root
+	}
+	list, err := api.ContainerList(ctx, container.ListOptions{All: true,
+		Filters: filters.NewArgs(filters.Arg("label", composeWorkingDirLabel))})
+	if err != nil {
+		return fmt.Errorf("listing containers: %w", err)
+	}
+	var names []string
+	for i := range list {
+		c := &list[i]
+		wd := c.Labels[composeWorkingDirLabel]
+		if wd == "" || (!within(root, wd) && !within(real, wd)) {
+			continue
+		}
+		name := c.ID
+		if len(c.Names) > 0 {
+			name = strings.TrimPrefix(c.Names[0], "/")
+		}
+		names = append(names, name)
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	slices.Sort(names)
+	return fmt.Errorf("the Compose-era stack under %s still has containers (%s) — run `homelab down -a` "+
+		"and stop the core first (`docker compose -f %s down`), then retry",
+		root, strings.Join(names, ", "), filepath.Join(root, "core", "docker-compose.yml"))
+}
+
+// within reports whether path is dir or lies under it.
+func within(dir, path string) bool {
+	rel, err := filepath.Rel(dir, filepath.Clean(path))
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
+}
+
+// removeAgentAndState undoes a failed import: the agent container and its
+// own state volume (StateVolume) go, so a retry starts clean. No other
+// volume is ever removed — the services' data volumes stay as they are.
+func removeAgentAndState(ctx context.Context, api swarm.API, out io.Writer) {
+	cerr := api.ContainerRemove(ctx, AgentContainer, container.RemoveOptions{Force: true})
+	verr := error(nil)
+	if cerr == nil {
+		verr = api.VolumeRemove(ctx, StateVolume, true)
+	}
+	if cerr != nil || verr != nil {
+		_, _ = fmt.Fprintf(out, "warning: could not undo the import (%v) — run `docker rm -f %s && docker volume rm %s` "+
+			"before retrying; data volumes are untouched\n", errors.Join(cerr, verr), AgentContainer, StateVolume)
+		return
+	}
+	_, _ = fmt.Fprintf(out, "Import failed: removed the agent and its state volume (%s) so a retry starts clean; "+
+		"data volumes are untouched.\n", StateVolume)
 }
 
 // composeBridge returns the ID of the Compose-era home-services network (a

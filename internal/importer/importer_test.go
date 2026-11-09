@@ -377,6 +377,8 @@ func TestImport_MovesSecretsToVault(t *testing.T) {
 	staging = stage(t, dst, root)
 	_, err = ApplySeed(root, staging, bytes.NewReader(payload))
 	require.ErrorContains(t, err, "already has services")
+	assert.ErrorContains(t, err, "docker rm -f homelab-agent && docker volume rm homelab-agent")
+	assert.ErrorContains(t, err, "data volumes are untouched")
 	assert.NoDirExists(t, filepath.Join(root, staging))
 }
 
@@ -486,6 +488,55 @@ func TestTar_ModesAndPrefix(t *testing.T) {
 	}
 	assert.Equal(t, int64(0o600), seen["import-00/services/gitea/config.yaml"])
 	assert.Equal(t, int64(0o700), seen["import-00/services/gitea/"])
+}
+
+// A database password the keyring lacks is minted again on up and set on the
+// live role: an app that kept the old one in its own data breaks, so it is
+// said, per service.
+func TestImport_WarnsAboutRemintedDBCredentials(t *testing.T) {
+	_, rep, _ := build(t)
+	for _, c := range rep.Changed {
+		assert.NotContains(t, c, "not found in the keyring", "every DB password is in the keyring")
+	}
+
+	old := oldDir(t)
+	put(t, filepath.Join(old, "services/files/config.yaml"),
+		"databases:\n  - s3:\n      env:\n        access_key: S3_KEY\n        secret_key: S3_SECRET\n")
+	kr := minisKeyring(t)
+	require.NoError(t, kr.Delete("", config.DBPasswordKey("gitea")))
+	rep, _, err := Build(old, t.TempDir(), kr)
+	require.NoError(t, err)
+	assert.Contains(t, rep.Changed, "gitea: database password not found in the keyring — a new one will be set "+
+		"on the existing role; apps that store it in their own config (e.g. nextcloud) must be updated")
+	assert.Contains(t, rep.Changed, "files: Garage access key not found in the keyring — a new key will be created "+
+		"for the existing bucket; apps that store it in their own config (e.g. nextcloud) must be updated")
+	n := 0
+	for _, c := range rep.Changed {
+		if strings.HasPrefix(c, "files: Garage") {
+			n++
+		}
+	}
+	assert.Equal(t, 1, n, "one warning per service, not per key")
+	assert.NotContains(t, strings.Join(rep.Changed, "\n"), "immich: database password", "immich's is there")
+	assert.NotContains(t, rep.MissingSecrets, secrets.RootKey(config.DBPasswordKey("gitea")))
+}
+
+// A writable bind under the service dir is copied (its data is kept) but
+// reported: Translate refuses it, so the agent could not deploy the service.
+func TestImport_ReportsWritableBinds(t *testing.T) {
+	old := oldDir(t)
+	put(t, filepath.Join(old, "services/kiosk/docker-compose.yml"),
+		"services:\n  kiosk:\n    image: x\n    volumes:\n      - ./data:/data\n      - ./conf.yml:/conf.yml:ro\n")
+	put(t, filepath.Join(old, "services/kiosk/data/state.db"), "rows\n")
+	put(t, filepath.Join(old, "services/kiosk/conf.yml"), "a: 1\n")
+	dst := t.TempDir()
+	rep, _, err := Build(old, dst, minisKeyring(t))
+	require.NoError(t, err)
+	assert.Contains(t, rep.Changed,
+		"kiosk: ./data is a writable bind; cluster mode cannot deploy it — move the data to a named volume")
+	assert.NotContains(t, strings.Join(rep.Changed, "\n"), "conf.yml is a writable bind")
+	assert.FileExists(t, filepath.Join(dst, "services/kiosk/data/state.db"))
+	assert.FileExists(t, filepath.Join(dst, "services/kiosk/conf.yml"))
 }
 
 // Every catalog service as installed by `homelab add` imports: its compose

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -64,7 +65,7 @@ func newImportInit(t *testing.T) (*Init, *initHarness) {
 	return in, h
 }
 
-// tarNames lists a tar stream's entries and fails on any carrying a secret.
+// tarContent maps each entry of a tar stream to its content.
 func tarContent(t *testing.T, b []byte) map[string]string {
 	t.Helper()
 	out := map[string]string{}
@@ -196,4 +197,81 @@ func TestImport_TempDirRemovedOnError(t *testing.T) {
 	left, err = os.ReadDir(in.TempDir)
 	require.NoError(t, err)
 	assert.Empty(t, left)
+}
+
+func TestImport_StreamsTar(t *testing.T) {
+	in, h := newImportInit(t)
+	require.NoError(t, in.Do(context.Background()))
+	copies := h.fake.Copies()
+	require.Len(t, copies, 1)
+	assert.Equal(t, "*io.PipeReader", copies[0].Reader, "the tar is streamed, not built in memory")
+}
+
+const composeWorkingDir = "com.docker.compose.project.working_dir"
+
+// R42: any container of the Compose-era stack, stopped ones included, is
+// refused before anything changes; other projects' containers are not ours.
+func TestImport_RefusesComposeContainers(t *testing.T) {
+	in, h := newImportInit(t)
+	h.fake.SetContainers([]container.Summary{
+		{ID: "pg", Names: []string{"/homelab-postgres"}, State: "exited",
+			Labels: map[string]string{composeWorkingDir: filepath.Join(in.Import, "services", "postgres")}},
+		{ID: "ts", Names: []string{"/tailscale"}, State: "exited",
+			Labels: map[string]string{composeWorkingDir: filepath.Join(in.Import, "core")}},
+		{ID: "tv", Names: []string{"/tv-kiosk"}, State: "running",
+			Labels: map[string]string{composeWorkingDir: "/home/groot/tv-kiosk"}},
+	})
+	err := in.Do(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "homelab-postgres")
+	assert.Contains(t, err.Error(), "tailscale")
+	assert.NotContains(t, err.Error(), "tv-kiosk")
+	assert.Contains(t, err.Error(), "homelab down -a")
+	assert.Contains(t, err.Error(), "docker compose -f "+filepath.Join(in.Import, "core", "docker-compose.yml")+" down")
+	assert.Empty(t, h.fake.Inits(), "refused before the swarm is created")
+}
+
+func TestImport_IgnoresOtherProjectsContainers(t *testing.T) {
+	in, h := newImportInit(t)
+	h.fake.SetContainers([]container.Summary{
+		{ID: "tv", Names: []string{"/tv-kiosk"}, State: "running",
+			Labels: map[string]string{composeWorkingDir: "/home/groot/tv-kiosk"}},
+		// A sibling dir whose name merely starts with the import dir's.
+		{ID: "sib", Names: []string{"/sibling"}, State: "exited",
+			Labels: map[string]string{composeWorkingDir: in.Import + "-old/core"}},
+		{ID: "plain", Names: []string{"/plain"}, State: "running"},
+	})
+	require.NoError(t, in.Do(context.Background()))
+}
+
+// A failure after the tree went in but before the agent restarted takes the
+// agent container and its state volume away (never another volume), so a
+// retry is not refused for "already has services".
+func TestImport_LateFailureRemovesImportedState(t *testing.T) {
+	in, h := newImportInit(t)
+	h.fake.FailRestart(errors.New("restart failed"))
+	err := in.Do(context.Background())
+	require.ErrorContains(t, err, "restart failed")
+	log := h.fake.CallLog()
+	assert.Contains(t, log, "ContainerRemove "+AgentContainer)
+	assert.Contains(t, log, "VolumeRemove "+StateVolume)
+	for _, c := range log {
+		if strings.HasPrefix(c, "VolumeRemove ") {
+			assert.Equal(t, "VolumeRemove "+StateVolume, c, "only the agent's own state volume")
+		}
+	}
+	assert.Equal(t, 1, h.fake.Leaves(), "and the swarm is left")
+	assert.Contains(t, h.out.String(), "removed the agent and its state volume")
+}
+
+// Once the agent has restarted on the imported state it is kept: a later
+// failure (saving the client config) does not delete anything.
+func TestImport_FailureAfterRestartKeepsState(t *testing.T) {
+	in, h := newImportInit(t)
+	in.SaveClient = func(string) error { return errors.New("disk full") }
+	require.ErrorContains(t, in.Do(context.Background()), "disk full")
+	for _, c := range h.fake.CallLog() {
+		assert.NotContains(t, c, "VolumeRemove")
+		assert.NotContains(t, c, "ContainerRemove")
+	}
 }

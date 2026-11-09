@@ -62,6 +62,10 @@ type API interface {
 	// CopyToContainer extracts a tar stream at dstPath in a container
 	// (init --import's state tree; never secrets).
 	CopyToContainer(ctx context.Context, containerID, dstPath string, content io.Reader, options container.CopyToContainerOptions) error
+	// ContainerRemove and VolumeRemove undo a failed init --import: the
+	// agent container and its own state volume, never another volume.
+	ContainerRemove(ctx context.Context, containerID string, options container.RemoveOptions) error
+	VolumeRemove(ctx context.Context, volumeID string, force bool) error
 	// Info reports this engine's swarm membership (node ID, manager or not).
 	Info(ctx context.Context) (system.Info, error)
 }

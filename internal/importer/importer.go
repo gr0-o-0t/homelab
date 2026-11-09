@@ -71,6 +71,9 @@ type Names struct {
 	Services map[string]map[string]bool
 	// generated are the names homelab mints when they are missing.
 	generated map[string]bool // secrets.RootKey / ServiceKey form
+	// dbCreds are the shared-database credentials among them, by name, with
+	// the service they belong to and what they are.
+	dbCreds map[string]dbCred
 }
 
 // Per-service files that travel besides the bind-mounted ones.
@@ -160,11 +163,12 @@ func Build(oldDir, dst string, keyring *secrets.Manager) (Report, Secrets, error
 		}
 	}
 
-	sec, missing, err := readSecrets(keyring, names)
+	sec, missing, warnings, err := readSecrets(keyring, names)
 	if err != nil {
 		return rep, Secrets{}, err
 	}
 	rep.MissingSecrets = missing
+	rep.Changed = append(rep.Changed, warnings...)
 	sort.Strings(rep.Changed)
 	return rep, sec, nil
 }
@@ -198,7 +202,8 @@ func listServices(dir string) ([]string, error) {
 //   - per service: its config.yaml's secrets (generated ones included), the
 //     Garage key pair for one with an s3 database, REDIS_PASSWORD for redis.
 func AllowedNames(root string) (Names, error) {
-	n := Names{Root: map[string]bool{}, Services: map[string]map[string]bool{}, generated: map[string]bool{}}
+	n := Names{Root: map[string]bool{}, Services: map[string]map[string]bool{}, generated: map[string]bool{},
+		dbCreds: map[string]dbCred{}}
 	rc, err := config.Load(filepath.Join(root, "config.yaml"))
 	if err != nil {
 		return n, err
@@ -245,10 +250,14 @@ func AllowedNames(root string) (Names, error) {
 				k := config.DBPasswordKey(svc)
 				n.Root[k] = true
 				n.generated[secrets.RootKey(k)] = true // the provisioner mints and syncs it
+				n.dbCreds[secrets.RootKey(k)] = dbCred{svc, "database password",
+					"a new one will be set on the existing role"}
 			case config.DBS3:
 				for _, k := range []string{config.GarageAccessKeyIDKey, config.GarageSecretKeyKey} {
 					m[k] = true
 					n.generated[secrets.ServiceKey(svc, k)] = true // provisioned on up
+					n.dbCreds[secrets.ServiceKey(svc, k)] = dbCred{svc, "Garage access key",
+						"a new key will be created for the existing bucket"}
 				}
 			}
 		}
@@ -256,26 +265,42 @@ func AllowedNames(root string) (Names, error) {
 	return n, nil
 }
 
+// dbCred is a shared-database credential the provisioner creates when it is
+// missing: whose, what it is, and what happens then.
+type dbCred struct{ svc, what, then string }
+
 // readSecrets reads every allowed name from the keyring. A keyring failure is
 // an error (it is not "missing"); a missing declared, non-generated secret is
-// reported.
-func readSecrets(kr *secrets.Manager, names Names) (Secrets, []string, error) {
-	sec := Secrets{Root: map[string]string{}, Services: map[string]map[string]string{}}
-	var missing []string
+// reported in missing. A missing database password or Garage key is not
+// missing — the provisioner sets a new one — but it is warned about: the
+// running database role keeps its old password until then, and an app that
+// stored the old one in its own data breaks.
+func readSecrets(kr *secrets.Manager, names Names) (sec Secrets, missing, warnings []string, err error) {
+	sec = Secrets{Root: map[string]string{}, Services: map[string]map[string]string{}}
+	warned := map[string]bool{}
 	get := func(ns, k, label string) (string, error) {
 		v, err := kr.Get(ns, k)
 		if err != nil {
 			return "", fmt.Errorf("reading %s from the keyring: %w", label, err)
 		}
-		if v == "" && !names.generated[label] {
+		if v != "" {
+			return v, nil
+		}
+		if c, ok := names.dbCreds[label]; ok {
+			if w := c.svc + "/" + c.what; !warned[w] {
+				warned[w] = true
+				warnings = append(warnings, fmt.Sprintf("%s: %s not found in the keyring — %s; "+
+					"apps that store it in their own config (e.g. nextcloud) must be updated", c.svc, c.what, c.then))
+			}
+		} else if !names.generated[label] {
 			missing = append(missing, label)
 		}
-		return v, nil
+		return "", nil
 	}
 	for _, k := range slices.Sorted(maps.Keys(names.Root)) {
 		v, err := get("", k, secrets.RootKey(k))
 		if err != nil {
-			return Secrets{}, nil, err
+			return Secrets{}, nil, nil, err
 		}
 		if v != "" {
 			sec.Root[k] = v
@@ -285,7 +310,7 @@ func readSecrets(kr *secrets.Manager, names Names) (Secrets, []string, error) {
 		for _, k := range slices.Sorted(maps.Keys(names.Services[svc])) {
 			v, err := get(svc, k, secrets.ServiceKey(svc, k))
 			if err != nil {
-				return Secrets{}, nil, err
+				return Secrets{}, nil, nil, err
 			}
 			if v == "" {
 				continue
@@ -297,7 +322,7 @@ func readSecrets(kr *secrets.Manager, names Names) (Secrets, []string, error) {
 		}
 	}
 	sort.Strings(missing)
-	return sec, missing, nil
+	return sec, missing, warnings, nil
 }
 
 // migrateLegacy infers exposure.yaml for services still routed by the old
@@ -340,12 +365,22 @@ func copyBinds(oldDir, dst, svc string, names Names) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	rels, err := swarm.BindSources(src, env)
+	binds, err := swarm.BindSources(src, env)
 	if err != nil {
 		return nil, fmt.Errorf("%s: reading its bind mounts: %w", svc, err)
 	}
 	var changed []string
-	for _, rel := range rels {
+	for _, b := range binds {
+		rel := b.Rel
+		if !b.ReadOnly {
+			// Translate refuses it: the deploy would fail in the agent's log
+			// only. The data is still copied, so nothing is lost.
+			changed = append(changed, fmt.Sprintf("%s: ./%s is a writable bind; cluster mode cannot deploy it — "+
+				"move the data to a named volume", svc, rel))
+		}
+		if rel == "." {
+			continue // the service dir itself: its files are copied above
+		}
 		from := filepath.Join(src, filepath.FromSlash(rel))
 		fi, err := os.Lstat(from)
 		switch {
@@ -667,7 +702,8 @@ func ApplySeed(root, staging string, in io.Reader) ([]string, error) {
 		return nil, err
 	} else if has {
 		return nil, errors.New("agent-seed --import: the agent's state dir already has services — " +
-			"an import only goes into a new cluster")
+			"an import only goes into a new cluster. To start over, remove the agent and its state: " +
+			"`docker rm -f homelab-agent && docker volume rm homelab-agent` — data volumes are untouched")
 	}
 	if fi, err := os.Lstat(dir); err != nil || !fi.IsDir() {
 		return nil, fmt.Errorf("agent-seed --import: no staged tree at %s", dir)

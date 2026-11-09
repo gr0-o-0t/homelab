@@ -1,6 +1,7 @@
 package swarm
 
 import (
+	"maps"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -62,11 +63,17 @@ func translateMounts(stack, dir, specName string, proj *types.Project, svc types
 	return mounts, cfgs, vols, nil
 }
 
+// Bind is a bind mount of a path inside the service directory.
+type Bind struct {
+	Rel      string // slash-separated, relative to the service dir; "." is the dir itself
+	ReadOnly bool   // false when any container mounts it writable
+}
+
 // BindSources lists what svcDir's docker-compose.yml bind-mounts from inside
-// svcDir — the files and directories Translate turns into Swarm configs —
-// slash-separated, relative to svcDir, sorted and without duplicates. env
-// interpolates the compose file as Translate's would.
-func BindSources(svcDir string, env map[string]string) ([]string, error) {
+// svcDir — the files and directories Translate turns into Swarm configs, or
+// refuses when writable — sorted by path, one entry per path (writable when
+// any mount of it is). env interpolates the compose file as Translate's would.
+func BindSources(svcDir string, env map[string]string) ([]Bind, error) {
 	abs, err := filepath.Abs(svcDir)
 	if err != nil {
 		return nil, err
@@ -75,19 +82,28 @@ func BindSources(svcDir string, env map[string]string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	var out []string
+	ro := map[string]bool{}
 	for key := range proj.Services {
 		svc := proj.Services[key]
 		for _, v := range svc.Volumes {
 			if v.Type != types.VolumeTypeBind {
 				continue
 			}
-			if rel, ok := under(abs, v.Source); ok && rel != "." && !slices.Contains(out, rel) {
-				out = append(out, rel)
+			rel, ok := under(abs, v.Source)
+			if !ok {
+				continue
+			}
+			if prev, seen := ro[rel]; seen {
+				ro[rel] = prev && v.ReadOnly
+			} else {
+				ro[rel] = v.ReadOnly
 			}
 		}
 	}
-	slices.Sort(out)
+	out := make([]Bind, 0, len(ro))
+	for _, rel := range slices.Sorted(maps.Keys(ro)) {
+		out = append(out, Bind{Rel: rel, ReadOnly: ro[rel]})
+	}
 	return out, nil
 }
 

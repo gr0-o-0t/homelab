@@ -62,6 +62,7 @@ type Fake struct {
 	pulls      map[string]string // ref → ImagePull's JSON stream
 	leaves     int
 	copies     []Copy
+	restartErr error
 }
 
 // New returns an empty Fake.
@@ -848,6 +849,9 @@ func (f *Fake) ContainerRestart(_ context.Context, name string, _ container.Stop
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.rec("ContainerRestart", name)
+	if f.restartErr != nil {
+		return f.restartErr
+	}
 	c, err := f.createdByName(name)
 	if err != nil {
 		return err
@@ -861,6 +865,8 @@ type Copy struct {
 	Container string
 	Path      string
 	Tar       []byte
+	// Reader is the content's Go type (*io.PipeReader when streamed).
+	Reader string
 }
 
 // CopyToContainer records the tar stream; the container must exist.
@@ -875,8 +881,43 @@ func (f *Fake) CopyToContainer(_ context.Context, name, dst string, content io.R
 	if _, err := f.createdByName(name); err != nil {
 		return err
 	}
-	f.copies = append(f.copies, Copy{Container: name, Path: dst, Tar: b})
+	f.copies = append(f.copies, Copy{Container: name, Path: dst, Tar: b, Reader: fmt.Sprintf("%T", content)})
 	return nil
+}
+
+// ContainerRemove forgets a created container.
+func (f *Fake) ContainerRemove(_ context.Context, name string, _ container.RemoveOptions) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rec("ContainerRemove", name)
+	for i, c := range f.created {
+		if c.Name == name {
+			f.created = append(f.created[:i], f.created[i+1:]...)
+			return nil
+		}
+	}
+	return fmt.Errorf("swarmtest: container %q not found: %w", name, errdefs.ErrNotFound)
+}
+
+// VolumeRemove records the removal and forgets the volume if listed.
+func (f *Fake) VolumeRemove(_ context.Context, name string, _ bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rec("VolumeRemove", name)
+	for i, v := range f.volumes {
+		if v.Name == name {
+			f.volumes = append(f.volumes[:i], f.volumes[i+1:]...)
+			break
+		}
+	}
+	return nil
+}
+
+// FailRestart makes every ContainerRestart fail with err (nil: succeed).
+func (f *Fake) FailRestart(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.restartErr = err
 }
 
 // Copies returns the recorded CopyToContainer calls.

@@ -504,6 +504,9 @@ func (in *Init) Do(ctx context.Context) (err error) {
 	// Compose-era network must be idle, the old dir importable.
 	var imp *builtImport
 	if in.Import != "" {
+		if err := composeContainers(ctx, in.API, in.Import); err != nil {
+			return err
+		}
 		if _, err := composeBridge(ctx, in.API); err != nil {
 			return err
 		}
@@ -545,6 +548,17 @@ func (in *Init) Do(ctx context.Context) (err error) {
 	if err := StartAgent(ctx, in.API, in.Image, true); err != nil {
 		return err
 	}
+	// Until the agent has restarted on the imported state, a failure takes
+	// the agent and its state volume away again: otherwise every retry is
+	// refused because the volume already has services.
+	restarted := false
+	if imp != nil {
+		defer func() {
+			if err != nil && !restarted {
+				removeAgentAndState(context.WithoutCancel(ctx), in.API, in.Out)
+			}
+		}()
+	}
 	secret, err := NewClusterSecret(in.Rand)
 	if err != nil {
 		return err
@@ -563,6 +577,7 @@ func (in *Init) Do(ctx context.Context) (err error) {
 		if err == nil {
 			err = restartAgent(ctx, in.API)
 		}
+		restarted = err == nil
 	}
 	if err != nil {
 		return err
