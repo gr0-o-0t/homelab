@@ -27,14 +27,14 @@ import (
 var errNoCLI = errors.New("no homelab binary configured")
 
 func (m Model) refreshCmd() tea.Cmd {
-	root, dc, catalog, enabled := m.opt.Root, m.opt.Docker, m.opt.Catalog, m.opt.Enabled
+	root, src, catalog, enabled := m.opt.Root, m.opt.State, m.opt.Catalog, m.opt.Enabled
 	return func() tea.Msg {
 		var (
 			svcs []service.Service
 			err  error
 		)
-		if dc != nil {
-			svcs, err = service.DiscoverAllWithDocker(root, dc, catalog)
+		if src != nil {
+			svcs, err = service.DiscoverAllWith(root, src, catalog)
 		} else {
 			svcs, err = service.DiscoverWithCatalog(root, catalog)
 		}
@@ -89,7 +89,7 @@ func inspectTickCmd() tea.Cmd {
 // fetchLogsCmd tails the selected service's logs for the detail pane.
 func (m Model) fetchLogsCmd() tea.Cmd {
 	svc := m.selectedService()
-	if m.view != viewServices || svc == nil || !svc.Installed || isCore(svc) || m.opt.Docker == nil || len(m.opt.CLI) == 0 {
+	if m.view != viewServices || svc == nil || !svc.Installed || isCore(svc) || len(m.opt.CLI) == 0 {
 		return nil
 	}
 	name := svc.Name
@@ -113,18 +113,17 @@ func (m Model) fetchLogsCmd() tea.Cmd {
 
 func (m Model) fetchInspectCmd() tea.Cmd {
 	svc := m.selectedService()
-	if m.view != viewServices || svc == nil || !svc.Installed || isCore(svc) || m.opt.Docker == nil {
+	if m.view != viewServices || svc == nil || !svc.Installed || isCore(svc) || m.opt.State == nil {
 		return nil
 	}
-	dc, name := m.opt.Docker, svc.Name
+	src, name := m.opt.State, svc.Name
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		summaries, err := dc.ServiceContainers(ctx, name)
-		if err != nil || len(summaries) == 0 {
+		details, err := src.ServiceContainers(ctx, name)
+		if err != nil || len(details) == 0 {
 			return containerDetailMsg{svcName: name}
 		}
-		details, _ := dc.InspectContainers(ctx, summaries)
 		return containerDetailMsg{svcName: name, details: details}
 	}
 }

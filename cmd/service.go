@@ -11,7 +11,6 @@ import (
 
 	"github.com/groot/homelab/internal/config"
 	"github.com/groot/homelab/internal/desired"
-	"github.com/groot/homelab/internal/docker"
 	"github.com/groot/homelab/internal/scaffold"
 	"github.com/groot/homelab/internal/service"
 	"github.com/groot/homelab/internal/swarm"
@@ -112,7 +111,7 @@ func init() {
 
 func runServiceUp(_ *cobra.Command, args []string) error {
 	root := configDir()
-	names, err := resolveTargets(root, upFlags.all, upFlags.group, args)
+	names, err := resolveTargets(root, "up", upFlags.all, upFlags.group, args)
 	if err != nil {
 		return err
 	}
@@ -147,7 +146,7 @@ func upOne(root, name string) error {
 // While the service is down its routes answer 502. `disable` removes them.
 func runServiceDown(_ *cobra.Command, args []string) error {
 	root := configDir()
-	names, err := resolveTargets(root, downFlags.all, downFlags.group, args)
+	names, err := resolveTargets(root, "down", downFlags.all, downFlags.group, args)
 	if err != nil {
 		return err
 	}
@@ -160,7 +159,7 @@ func runServiceDown(_ *cobra.Command, args []string) error {
 
 func runServiceRestart(_ *cobra.Command, args []string) error {
 	root := configDir()
-	names, err := resolveTargets(root, restartFlags.all, restartFlags.group, args)
+	names, err := resolveTargets(root, "restart", restartFlags.all, restartFlags.group, args)
 	if err != nil {
 		return err
 	}
@@ -192,7 +191,7 @@ func runServiceLogs(c *cobra.Command, args []string) error {
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 // resolveTargets returns the service names to operate on based on --all, --group, or positional args.
-func resolveTargets(root string, all bool, group string, args []string) ([]string, error) {
+func resolveTargets(root, verb string, all bool, group string, args []string) ([]string, error) {
 	if all && group != "" {
 		return nil, fmt.Errorf("--all and --group are mutually exclusive")
 	}
@@ -203,7 +202,7 @@ func resolveTargets(root string, all bool, group string, args []string) ([]strin
 		return args, nil
 	}
 	if !all && group == "" {
-		return nil, fmt.Errorf("name a service, or use -a/--all (or --group <name>)\n\n  Examples:\n    homelab up jellyfin\n    homelab up --all\n    homelab up --group media")
+		return nil, fmt.Errorf("name a service, or use -a/--all (or --group <name>)\n\n  Examples:\n    homelab %[1]s jellyfin\n    homelab %[1]s --all\n    homelab %[1]s --group media", verb)
 	}
 
 	svcs, err := service.Discover(root)
@@ -243,15 +242,15 @@ func resolveTargets(root string, all bool, group string, args []string) ([]strin
 
 // ── output helpers ────────────────────────────────────────────────────────────
 
-// discoverServices tries the Docker SDK first for live container data, then
-// falls back to plain filesystem discovery if the daemon is unavailable.
+// discoverServices lists the installed services with their Swarm tasks
+// (cluster-wide), or from the filesystem alone when Docker is unavailable.
 func discoverServices(root string) ([]service.Service, error) {
-	dc, err := docker.New()
-	if err != nil {
+	src, closeFn := stateSource(root)
+	defer closeFn()
+	if src == nil {
 		return service.Discover(root)
 	}
-	defer func() { _ = dc.Close() }()
-	return service.DiscoverWithDocker(root, dc)
+	return service.DiscoverWith(root, src)
 }
 
 func validName(name string) error { return config.ValidServiceName(name) }

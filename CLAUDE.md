@@ -59,7 +59,7 @@ homelab restart <service...>                       # force-update every Swarm se
 homelab pull <service...>                          # pull images only (-a, --group)
 homelab update <service...>                        # pull + redeploy, tags resolved to digests (-a, --group)
 homelab reload [service]                           # load the routes into the agent's Caddy, or re-render one service's
-homelab edit <service> <path>                      # edit a bind-mounted config file in $EDITOR; saved on the leader, service redeployed
+homelab edit <service> <path>                      # edit docker-compose.yml, config.yaml or a bind-mounted file in $EDITOR; validated, saved on the leader, service redeployed
 homelab delete <service>... (alias: rm)            # Swarm services + exposure + config; type the name or -y
 ```
 
@@ -76,11 +76,11 @@ service is down) and `up` brings it back exactly as it was. Only `disable` and
 homelab                                            # interactive TUI (service browser)
 homelab --gui                                      # desktop GUI (giu; absent from -tags nogui builds)
 homelab ls [-q]                                    # list installed services (table, --json, -q names)
-homelab status [service]   (alias: ps)             # edge + services overview, or per-service detail
+homelab status [service]   (alias: ps)             # edge + services overview, or per-service detail (each task and its node)
 homelab logs [service]                             # a service's logs from every node, key-prefixed (-f, -n, -t, --since, -c, --tui); no service: the leader agent's
 homelab caddy status                               # whether the agent's Caddy answers on its admin socket
 homelab caddy logs                                 # follow the leader agent's logs (Caddy logs there)
-homelab doctor [service] [--fix] [--all]           # health checks; --fix creates the overlay network, sites dir
+homelab doctor [service] [--fix] [--all]           # health checks (a service: its tasks running, newest task's image and health); --fix creates the overlay network, sites dir
 homelab validate                                   # assemble and adapt the Caddy config without loading it
 homelab config <service>                           # the compose file as resolved to deploy (contains secrets)
 homelab images <service> [-q]                      # images the stack deploys
@@ -486,8 +486,8 @@ homelab down --group media            # stop all media services
 | `internal/db` | Shared database provisioning (postgres, mariadb, redis, garage) |
 | `internal/config` | Config dir resolution, YAML schema types, `BuildEnv()` |
 | `internal/secrets` | Secrets manager over the system keyring (CLI host) or the vault (agent) |
-| `internal/service` | `Discover()` filesystem scan; `DiscoverWithDocker()` enriches with SDK data |
-| `internal/docker` | Docker SDK client — read-only (ContainerList, ContainerInspect) |
+| `internal/service` | `Discover()` filesystem scan; `DiscoverWith(StateSource)` adds each service's Swarm tasks, cluster-wide (`swarm.Deployer.ServiceContainers`) |
+| `internal/docker` | Docker SDK client — read-only (container state, ping, networks) |
 | `internal/run` | `Commander` — docker CLI shell-outs for DB dumps/restores, volume helpers, network checks |
 | `internal/exposure` | `services/<svc>/exposure.yaml` — the stored exposure state |
 | `internal/configgen` | Renders site blocks per layer and the per-service `caddy/sites/<svc>.conf` |

@@ -26,7 +26,7 @@ var updateFlags = batchFlags{}
 
 func runServiceUpdate(_ *cobra.Command, args []string) error {
 	root := configDir()
-	names, err := resolveTargets(root, updateFlags.all, updateFlags.group, args)
+	names, err := resolveTargets(root, "update", updateFlags.all, updateFlags.group, args)
 	if err != nil {
 		return err
 	}

@@ -312,8 +312,8 @@ func build() []Action {
 				return append([]string{"exec", t.Name}, fields(in["shell"])...)
 			},
 			Available: isRunning, Commands: []string{"exec"}},
-		Action{ID: "service.edit", Label: "Edit config file", Group: GroupConfigure, Icon: "wrench", Scope: Service,
-			Interactive: true, Help: "Edit a file the service bind-mounts in your editor; a changed file is saved on the leader and the service redeployed",
+		Action{ID: "service.edit", Label: "Edit a file", Group: GroupConfigure, Icon: "wrench", Scope: Service,
+			Interactive: true, Help: "Edit docker-compose.yml, config.yaml or a file the service bind-mounts in your editor; a changed file is validated, saved on the leader and the service redeployed",
 			Inputs: []Input{{Key: "path", Label: "File (relative to the service directory)", Kind: Text, Required: true}},
 			Args: func(t Target, in Inputs) []string {
 				return []string{"edit", t.Name, in["path"]}

@@ -27,7 +27,7 @@ var stopFlags = batchFlags{}
 
 func runServiceStop(_ *cobra.Command, args []string) error {
 	root := configDir()
-	names, err := resolveTargets(root, stopFlags.all, stopFlags.group, args)
+	names, err := resolveTargets(root, "stop", stopFlags.all, stopFlags.group, args)
 	if err != nil {
 		return err
 	}

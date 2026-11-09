@@ -18,12 +18,13 @@ state dir (`/var/lib/homelab/state` in the `homelab-agent` volume on minis).
 Edit the generated files, then follow the steps below to test and optionally
 contribute to the catalog.
 
-> **Editing on the leader**: `homelab edit <service> <path>` edits the files a
-> service bind-mounts from any PC. `docker-compose.yml` and `config.yaml` are
-> not editable through the CLI: change them on minis inside the agent volume
-> (`docker volume inspect homelab-agent` shows its mountpoint), or write the
-> service in `assets/services/` of this repository and install it with
-> `homelab add` from an agent built with it.
+> **Editing on the leader**: edit the files from any PC with `homelab edit
+> <service> <path>`: `docker-compose.yml`, `config.yaml`, or a file the
+> service bind-mounts. The file opens in your `$EDITOR`; when you save a change
+> it goes back to the leader and the service is redeployed. The compose file and
+> config.yaml are checked first (they must parse and translate to Swarm
+> services, with no secret in a spec); an invalid one is refused and the
+> previous content kept. `exposure.yaml` is owned by `homelab enable`/`disable`.
 
 > **Port config format**: The scaffolded `config.yaml` uses the new list-of-strings format. For a single HTTP port, use a bare port number (e.g. `- 8000`). For services with multiple ports, use named entries (e.g. `- ssh:22`) or mapped entries (e.g. `- 22:22`). See below for examples.
 
@@ -47,7 +48,7 @@ services/paperless/          # in the leader's state dir
 └── config.yaml         # vars, secrets and the ports Caddy routes to
 ```
 
-### 2. Edit `docker-compose.yml`
+### 2. Edit `docker-compose.yml` (`homelab edit paperless docker-compose.yml`)
 
 Two rules:
 - Attach the main (UI-facing) container to the `home-services` external network
@@ -136,7 +137,7 @@ header rewrites, path fan-out): put the *body* of a site block in
 `caddy.routes.conf` — directives only, no site address. `homelab enable`
 wraps it for every layer.
 
-### 5. Edit `config.yaml`
+### 5. Edit `config.yaml` (`homelab edit paperless config.yaml`)
 
 Define configuration schema with sensible defaults:
 
@@ -217,8 +218,11 @@ Once your service is tested and working, contribute it to the embedded catalog:
 1. **Copy to assets directory**:
 
 ```bash
-# from minis, out of the leader's state dir
-sudo cp -r "$(docker volume inspect -f '{{.Mountpoint}}' homelab-agent)/state/services/paperless" assets/services/paperless
+# from any PC: `files get` prints a file from the leader (repeat for any file it bind-mounts)
+mkdir -p assets/services/paperless
+for f in docker-compose.yml config.yaml; do
+  homelab files get paperless "$f" > "assets/services/paperless/$f"
+done
 ```
 
 2. **Verify the service catalog**:

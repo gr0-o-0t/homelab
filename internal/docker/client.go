@@ -4,7 +4,6 @@ package docker
 
 import (
 	"context"
-	"strings"
 	"time"
 
 	"github.com/docker/docker/api/types"
@@ -61,10 +60,11 @@ func ParseTime(s string) time.Time {
 type ContainerSummary struct {
 	ID      string // first 12 chars
 	Name    string // stripped of leading /
-	Service string // com.docker.compose.service label
+	Service string // compose key of the container in its stack
 	State   string // "running" | "exited" | "created" | "restarting" | ...
 	Status  string // Docker-formatted: "Up 3 hours", "Exited (0) 2 days ago"
 	Image   string
+	Node    string // Swarm node (hostname) running it; "" when not a Swarm task
 }
 
 // ContainerDetail holds the full data from ContainerInspect.
@@ -76,91 +76,6 @@ type ContainerDetail struct {
 	FinishedAt   time.Time // zero if still running
 	RestartCount int
 	Ports        []string // "8080→8080/tcp"
-}
-
-// ServiceContainers returns all containers (running or stopped) that belong
-// to a Docker Compose project. The project name is the directory name of the
-// service's docker-compose.yml, which Compose uses as the default project name.
-func (c *Client) ServiceContainers(ctx context.Context, projectName string) ([]ContainerSummary, error) {
-	f := filters.NewArgs(
-		filters.Arg("label", "com.docker.compose.project="+projectName),
-	)
-	list, err := c.c.ContainerList(ctx, container.ListOptions{
-		All:     true,
-		Filters: f,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	out := make([]ContainerSummary, len(list))
-	for i := range list {
-		name := ""
-		if len(list[i].Names) > 0 {
-			name = strings.TrimPrefix(list[i].Names[0], "/")
-		}
-		out[i] = ContainerSummary{
-			ID:      ShortID(list[i].ID),
-			Name:    name,
-			Service: list[i].Labels["com.docker.compose.service"],
-			State:   list[i].State,
-			Status:  list[i].Status,
-			Image:   list[i].Image,
-		}
-	}
-	return out, nil
-}
-
-// InspectContainers enriches a list of summaries with health, start time,
-// restart count, and port bindings by calling ContainerInspect for each one.
-func (c *Client) InspectContainers(ctx context.Context, summaries []ContainerSummary) ([]ContainerDetail, error) {
-	out := make([]ContainerDetail, len(summaries))
-	for i, s := range summaries {
-		info, err := c.c.ContainerInspect(ctx, s.ID)
-		if err != nil {
-			// Keep the summary data even if inspect fails.
-			out[i] = ContainerDetail{ContainerSummary: s}
-			continue
-		}
-
-		health := ""
-		if info.State.Health != nil {
-			health = info.State.Health.Status
-		}
-
-		startedAt := ParseTime(info.State.StartedAt)
-		finishedAt := ParseTime(info.State.FinishedAt)
-
-		var ports []string
-		// Use NetworkSettings.Ports — covers both published and exposed ports,
-		// which is more reliable than HostConfig.PortBindings for Docker Compose.
-		if info.NetworkSettings != nil {
-			for containerPort, bindings := range info.NetworkSettings.Ports {
-				if len(bindings) > 0 && bindings[0].HostPort != "" {
-					ports = append(ports, bindings[0].HostPort+"→"+string(containerPort))
-				} else {
-					ports = append(ports, string(containerPort))
-				}
-			}
-		}
-
-		out[i] = ContainerDetail{
-			ContainerSummary: ContainerSummary{
-				ID:      ShortID(info.ID),
-				Name:    strings.TrimPrefix(info.Name, "/"),
-				Service: info.Config.Labels["com.docker.compose.service"],
-				State:   info.State.Status,
-				Status:  s.Status, // keep the pre-formatted Status from the list
-				Image:   info.Config.Image,
-			},
-			Health:       health,
-			StartedAt:    startedAt,
-			FinishedAt:   finishedAt,
-			RestartCount: info.RestartCount,
-			Ports:        ports,
-		}
-	}
-	return out, nil
 }
 
 // ContainerState returns the state ("running", "exited", etc.) of the named

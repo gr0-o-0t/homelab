@@ -28,15 +28,15 @@ type Service struct {
 	Installed bool // true = exists on disk; false = catalog-only (not yet added)
 
 	// Host port mappings from Docker inspect (e.g. "8080→8096/tcp").
-	// Populated by DiscoverWithDocker; empty when Docker is unavailable.
+	// Populated by DiscoverWith; empty when Docker is unavailable.
 	HostPorts []string
 
-	// Populated by DiscoverWithDocker; zero-value when Docker is unavailable.
+	// Populated by DiscoverWith; zero-value when Docker is unavailable.
 	// ContainerDetail (not just ContainerSummary) so per-container Health is
 	// available without a second Docker round trip — see AggregateHealth.
 	Containers []docker.ContainerDetail
-	Running    int // count of containers in "running" state
-	Total      int // total container count
+	Running    int // containers (on Swarm: desired-running tasks) in state "running"
+	Total      int // containers (on Swarm: tasks Swarm wants running)
 }
 
 // AggregateHealth reduces a multi-container service's per-container health
@@ -71,15 +71,21 @@ func AggregateHealth(containers []docker.ContainerDetail) string {
 }
 
 // Discover scans the services/ directory and returns basic state without
-// contacting the Docker daemon. Use DiscoverWithDocker for live container data.
+// contacting the Docker daemon. Use DiscoverWith for live container data.
 func Discover(repoRoot string) ([]Service, error) {
 	return discover(repoRoot)
 }
 
-// DiscoverWithDocker scans services and enriches each with live container
-// data from the Docker daemon. Falls back gracefully if a service has no
-// containers yet (not started) — it simply has Running=0, Total=0.
-func DiscoverWithDocker(repoRoot string, dc *docker.Client) ([]Service, error) {
+// StateSource reports the containers of an installed service: on Swarm, one
+// row per task the service wants running, cluster-wide (swarm.Deployer).
+type StateSource interface {
+	ServiceContainers(ctx context.Context, name string) ([]docker.ContainerDetail, error)
+}
+
+// DiscoverWith scans services and enriches each with live container data
+// from src. A service with no containers (not started, or src unreachable)
+// simply has Running=0, Total=0.
+func DiscoverWith(repoRoot string, src StateSource) ([]Service, error) {
 	svcs, err := discover(repoRoot)
 	if err != nil {
 		return nil, err
@@ -88,7 +94,7 @@ func DiscoverWithDocker(repoRoot string, dc *docker.Client) ([]Service, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	enrichWithDocker(ctx, dc, svcs, false)
+	enrich(ctx, src, svcs, false)
 	return svcs, nil
 }
 
@@ -125,9 +131,10 @@ func DiscoverWithCatalog(repoRoot string, catalogNames []string) ([]Service, err
 	return installed, nil
 }
 
-// DiscoverAllWithDocker is like DiscoverWithCatalog but enriches installed
-// services with live Docker container data. Catalog-only entries are skipped.
-func DiscoverAllWithDocker(repoRoot string, dc *docker.Client, catalogNames []string) ([]Service, error) {
+// DiscoverAllWith is like DiscoverWithCatalog but enriches installed
+// services with live container data from src. Catalog-only entries are
+// skipped.
+func DiscoverAllWith(repoRoot string, src StateSource, catalogNames []string) ([]Service, error) {
 	svcs, err := DiscoverWithCatalog(repoRoot, catalogNames)
 	if err != nil {
 		return nil, err
@@ -136,46 +143,29 @@ func DiscoverAllWithDocker(repoRoot string, dc *docker.Client, catalogNames []st
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	enrichWithDocker(ctx, dc, svcs, true)
+	enrich(ctx, src, svcs, true)
 	return svcs, nil
 }
 
-// enrichWithDocker populates Containers/Running/Total/HostPorts for each
-// service from live Docker data, in place. Shared by DiscoverWithDocker and
-// DiscoverAllWithDocker, which previously duplicated this loop verbatim.
-// onlyInstalled skips catalog-only stub entries (DiscoverAllWithDocker's
-// case); DiscoverWithDocker's services are always installed, so it passes
-// false.
-func enrichWithDocker(ctx context.Context, dc *docker.Client, svcs []Service, onlyInstalled bool) {
+// enrich populates Containers/Running/Total/HostPorts for each service from
+// src, in place. onlyInstalled skips catalog-only stub entries.
+func enrich(ctx context.Context, src StateSource, svcs []Service, onlyInstalled bool) {
 	for i := range svcs {
 		svc := &svcs[i]
 		if onlyInstalled && !svc.Installed {
 			continue
 		}
-		containers, err := dc.ServiceContainers(ctx, svc.Name)
+		containers, err := src.ServiceContainers(ctx, svc.Name)
 		if err != nil {
-			// Docker unavailable or project not started — leave counts at zero.
-			continue
+			continue // unreachable or not deployed: counts stay zero
 		}
-		svcs[i].Total = len(containers)
-		for _, c := range containers {
-			if c.State == "running" {
-				svcs[i].Running++
+		svc.Containers = containers
+		svc.Total = len(containers)
+		for ci := range containers {
+			if containers[ci].State == "running" {
+				svc.Running++
 			}
-		}
-
-		details, err := dc.InspectContainers(ctx, containers)
-		if err != nil {
-			// Fall back to bare summaries so Total/Running/State still
-			// reflect reality even without Health/Ports.
-			details = make([]docker.ContainerDetail, len(containers))
-			for j, c := range containers {
-				details[j] = docker.ContainerDetail{ContainerSummary: c}
-			}
-		}
-		svcs[i].Containers = details
-		for di := range details {
-			svcs[i].HostPorts = append(svcs[i].HostPorts, details[di].Ports...)
+			svc.HostPorts = append(svc.HostPorts, containers[ci].Ports...)
 		}
 	}
 }

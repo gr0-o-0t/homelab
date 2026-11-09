@@ -49,14 +49,22 @@ func editorCommand() []string {
 
 var editCmd = &cobra.Command{
 	Use:   "edit <service> <path>",
-	Short: "Edit a service's bind-mounted config file and roll it out",
-	Long: `Edit a config file the service bind-mounts (glance's config/glance.yml,
-grafana's provisioning files, ...) from any PC: the file is fetched from the
-leader, opened in $VISUAL / $EDITOR (default vi), and if you changed it, sent
-back and the service redeployed so the new content reaches the task. <path> is
-relative to the service's directory.
+	Short: "Edit a service's compose file, config.yaml or a bind-mounted config file and roll it out",
+	Long: `Edit a service's docker-compose.yml, its config.yaml, or a config file it
+bind-mounts (glance's config/glance.yml, grafana's provisioning files, ...) from
+any PC: the file is fetched from the leader, opened in $VISUAL / $EDITOR
+(default vi), and if you changed it, sent back and the service redeployed so
+the new content reaches its tasks. <path> is relative to the service's
+directory.
 
-  homelab edit glance config/glance.yml`,
+docker-compose.yml and config.yaml are checked before they are saved: they
+must parse (placement roles valid, cache_volumes naming compose volumes) and
+translate to Swarm services with the current environment, no secret ending up
+in a spec. Otherwise the leader refuses them and keeps the previous content.
+exposure.yaml is not editable: homelab enable / disable own it.
+
+  homelab edit glance config/glance.yml
+  homelab edit immich docker-compose.yml`,
 	Args:              cobra.ExactArgs(2),
 	ValidArgsFunction: completeServiceNames,
 	RunE: func(c *cobra.Command, args []string) error {

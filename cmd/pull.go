@@ -23,7 +23,7 @@ Does NOT redeploy — use 'homelab up' after pulling, or 'homelab update'.
 	ValidArgsFunction: completeServiceNames,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		root := configDir()
-		names, err := resolveTargets(root, pullFlags.all, pullFlags.group, args)
+		names, err := resolveTargets(root, "pull", pullFlags.all, pullFlags.group, args)
 		if err != nil {
 			return err
 		}

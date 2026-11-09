@@ -8,6 +8,7 @@ import (
 
 	"github.com/docker/docker/client"
 
+	"github.com/groot/homelab/internal/service"
 	"github.com/groot/homelab/internal/swarm"
 )
 
@@ -56,4 +57,19 @@ func deployRunning(root, name string, verb func(*swarm.Deployer, context.Context
 	return withDeployer(root, true, func(ctx context.Context, d *swarm.Deployer) error {
 		return verb(d, ctx, name)
 	})
+}
+
+// stateSource is the Swarm view of the services' containers for discovery
+// and status: their tasks cluster-wide, as the manager reports them. It is
+// nil when Docker cannot be reached; call the func when done.
+func stateSource(root string) (service.StateSource, func()) {
+	api, err := newSwarmAPI()
+	if err != nil {
+		return nil, func() {}
+	}
+	return &swarm.Deployer{API: api, Root: root}, func() {
+		if c, ok := api.(io.Closer); ok {
+			_ = c.Close()
+		}
+	}
 }

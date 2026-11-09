@@ -1,13 +1,11 @@
 package cmd
 
 import (
-	"context"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/groot/homelab/internal/configgen"
-	"github.com/groot/homelab/internal/docker"
 	"github.com/groot/homelab/internal/service"
 	"github.com/groot/homelab/internal/tui/styles"
 )
@@ -103,59 +101,44 @@ func runServiceStatus(dir, name string, env map[string]string) error {
 	}
 	fmt.Println()
 
-	// Container-level detail table
-	dc, dcErr := docker.New()
-	if dcErr == nil {
-		defer func() { _ = dc.Close() }()
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-
-		summaries, err := dc.ServiceContainers(ctx, name)
-		if err == nil && len(summaries) > 0 {
-			details, _ := dc.InspectContainers(ctx, summaries)
-			fmt.Printf("\n  %s\n", styles.PaneTitle.Render("Containers"))
-			const (
-				wCName   = 22
-				wCState  = 12
-				wCHealth = 12
-				wCPorts  = 22
-				wCUp     = 14
-				wCImg    = 30
-			)
-			fmt.Printf("  %s  %s  %s  %s  %s\n",
-				styles.Width(wCName).Render(""),
-				styles.TableHeader.Render(styles.Width(wCState).Render("STATE")),
-				styles.TableHeader.Render(styles.Width(wCPorts).Render("PORTS")),
-				styles.TableHeader.Render(styles.Width(wCUp).Render("UPTIME")),
-				styles.TableHeader.Render("IMAGE"),
-			)
-			for i, s := range summaries {
-				nameCol := styles.Width(wCName).Render(truncate(s.Name, wCName-1))
-				var stateCol, portsCol, uptimeCol, imageCol string
-				if details != nil && i < len(details) {
-					d := details[i]
-					stateCol = styles.Width(wCState).Render(mergedCoreState(s.State, d.Health))
-					if len(d.Ports) > 0 {
-						portsCol = styles.Width(wCPorts).Render(truncate(strings.Join(d.Ports, ", "), wCPorts-1))
-					} else {
-						portsCol = styles.Width(wCPorts).Render(styles.Muted.Render("–"))
-					}
-					if d.State == containerStateRunning && !d.StartedAt.IsZero() {
-						uptimeCol = styles.Width(wCUp).Render(styles.Success.Render("↑ " + formatUptime(time.Since(d.StartedAt))))
-					} else if !d.FinishedAt.IsZero() && d.FinishedAt.Year() > 1 {
-						uptimeCol = styles.Width(wCUp).Render(styles.Muted.Render("↓ " + formatUptime(time.Since(d.FinishedAt))))
-					} else {
-						uptimeCol = styles.Width(wCUp).Render(styles.Muted.Render("–"))
-					}
-					imageCol = styles.Muted.Render(truncate(d.Image, 30))
-				} else {
-					stateCol = styles.Width(wCState).Render(styles.StateTag(s.State))
-					portsCol = styles.Width(wCPorts).Render(styles.Muted.Render("–"))
-					uptimeCol = styles.Width(wCUp).Render(styles.Muted.Render(s.Status))
-					imageCol = styles.Muted.Render(truncate(s.Image, 30))
-				}
-				fmt.Printf("  %s  %s  %s  %s  %s\n", nameCol, stateCol, portsCol, uptimeCol, imageCol)
+	// Container-level detail table: one row per task Swarm wants running,
+	// with the node it runs on.
+	if len(svc.Containers) > 0 {
+		fmt.Printf("\n  %s\n", styles.PaneTitle.Render("Containers"))
+		const (
+			wCName  = 22
+			wCState = 12
+			wCNode  = 14
+			wCPorts = 22
+			wCUp    = 14
+		)
+		fmt.Printf("  %s  %s  %s  %s  %s  %s\n",
+			styles.Width(wCName).Render(""),
+			styles.TableHeader.Render(styles.Width(wCState).Render("STATE")),
+			styles.TableHeader.Render(styles.Width(wCNode).Render("NODE")),
+			styles.TableHeader.Render(styles.Width(wCPorts).Render("PORTS")),
+			styles.TableHeader.Render(styles.Width(wCUp).Render("UPTIME")),
+			styles.TableHeader.Render("IMAGE"),
+		)
+		for i := range svc.Containers {
+			d := &svc.Containers[i]
+			nameCol := styles.Width(wCName).Render(truncate(d.Name, wCName-1))
+			stateCol := styles.Width(wCState).Render(mergedCoreState(d.State, d.Health))
+			node := d.Node
+			if node == "" {
+				node = "–"
 			}
+			nodeCol := styles.Width(wCNode).Render(truncate(node, wCNode-1))
+			portsCol := styles.Width(wCPorts).Render(styles.Muted.Render("–"))
+			if len(d.Ports) > 0 {
+				portsCol = styles.Width(wCPorts).Render(truncate(strings.Join(d.Ports, ", "), wCPorts-1))
+			}
+			uptimeCol := styles.Width(wCUp).Render(styles.Muted.Render("–"))
+			if d.State == containerStateRunning && !d.StartedAt.IsZero() {
+				uptimeCol = styles.Width(wCUp).Render(styles.Success.Render("↑ " + formatUptime(time.Since(d.StartedAt))))
+			}
+			imageCol := styles.Muted.Render(truncate(d.Image, 30))
+			fmt.Printf("  %s  %s  %s  %s  %s  %s\n", nameCol, stateCol, nodeCol, portsCol, uptimeCol, imageCol)
 		}
 	}
 

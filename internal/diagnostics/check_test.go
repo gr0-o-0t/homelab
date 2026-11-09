@@ -65,7 +65,7 @@ func TestRunServiceConfigChecks_NonExistentService(t *testing.T) {
 
 func TestRunServiceContainerChecks_NilClient(t *testing.T) {
 	g := diagnostics.RunServiceContainerChecks("test", nil)
-	assert.Equal(t, "Service Containers", g.Title)
+	assert.Equal(t, "Service Tasks", g.Title)
 	assert.NotEmpty(t, g.Results)
 	assert.Equal(t, diagnostics.StatusWarn, g.Results[0].Status)
 }

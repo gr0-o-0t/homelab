@@ -8,11 +8,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/99designs/keyring"
 	"github.com/docker/docker/api/types/filters"
 	dswarm "github.com/docker/docker/api/types/swarm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/groot/homelab/internal/secrets"
 	"github.com/groot/homelab/internal/swarm"
 	"github.com/groot/homelab/internal/swarm/swarmtest"
 )
@@ -129,18 +131,74 @@ func TestFilesPut_RejectsTraversal(t *testing.T) {
 
 func TestFilesPut_RejectsNonConfigFiles(t *testing.T) {
 	d, _, dir := glanceService(t)
-	for _, p := range []string{"config.yaml", "docker-compose.yml", "exposure.yaml", "other.conf"} {
-		if p == "exposure.yaml" || p == "other.conf" {
-			require.NoError(t, os.WriteFile(filepath.Join(dir, p), []byte("orig"), 0o644))
-		}
+	for _, p := range []string{"exposure.yaml", "other.conf"} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, p), []byte("orig"), 0o644))
 		err := d.WriteConfigFile(context.Background(), "glance", p, []byte("evil"))
 		require.Error(t, err, p)
 		assert.Contains(t, err.Error(), "not a bind-mounted config", p)
 		_, err = d.ReadConfigFile("glance", p)
 		assert.Error(t, err, p)
+		b, _ := os.ReadFile(filepath.Join(dir, p))
+		assert.Equal(t, "orig", string(b), p)
 	}
+}
+
+// R49: the service's compose file and config.yaml are editable too; a valid
+// write is saved and the service redeployed.
+func TestFilesPut_SpecFileSavedAndRedeployed(t *testing.T) {
+	ctx := context.Background()
+	d, f, dir := glanceService(t)
+	require.NoError(t, d.Up(ctx, "glance"))
+
+	got, err := d.ReadConfigFile("glance", "docker-compose.yml")
+	require.NoError(t, err)
+	assert.Contains(t, string(got), "image: nginx:1")
+
+	edited := strings.Replace(glanceCompose, "image: nginx:1", "image: nginx:1\n    hostname: edited", 1)
+	require.NoError(t, d.WriteConfigFile(ctx, "glance", "docker-compose.yml", []byte(edited)))
 	b, _ := os.ReadFile(filepath.Join(dir, "docker-compose.yml"))
-	assert.Contains(t, string(b), "image: nginx:1")
+	assert.Equal(t, edited, string(b))
+	assert.Equal(t, "edited", services(t, f, "glance")[0].Spec.TaskTemplate.ContainerSpec.Hostname, "redeployed")
+
+	require.NoError(t, d.WriteConfigFile(ctx, "glance", "config.yaml", []byte("vars:\n  X:\n    value: \"1\"\n")))
+	assert.FileExists(t, filepath.Join(dir, "config.yaml"))
+}
+
+// An invalid spec file is refused with its error and nothing is written:
+// YAML that does not parse, a secret interpolated into the spec, an unknown
+// placement role.
+func TestFilesPut_SpecFileRefusedNothingWritten(t *testing.T) {
+	ctx := context.Background()
+	d, f, dir := glanceService(t)
+	sm := secrets.NewForTest(keyring.NewArrayKeyring(nil))
+	require.NoError(t, sm.Set("glance", "TOKEN", "s3cr3t-token"))
+	d.SM = sm
+	cfg := "secrets:\n  TOKEN:\n    required: true\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(cfg), 0o644))
+	compose, _ := os.ReadFile(filepath.Join(dir, "docker-compose.yml"))
+
+	for _, tc := range []struct{ file, content, want string }{
+		{"docker-compose.yml", "services: [nope\n", "docker-compose.yml"},
+		{"docker-compose.yml", strings.Replace(glanceCompose, "image: nginx:1",
+			"image: nginx:1\n    command: [\"serve\", \"--token\", \"${TOKEN}\"]", 1), "secret"},
+		{"config.yaml", "secrets: [nope\n", "config.yaml"},
+		{"config.yaml", cfg + "placement:\n  glance: somewhere\n", "unknown role"},
+		{"config.yaml", cfg + "cache_volumes: [nosuch]\n", "not a volume"},
+	} {
+		err := d.WriteConfigFile(ctx, "glance", tc.file, []byte(tc.content))
+		require.Error(t, err, tc.content)
+		assert.Contains(t, err.Error(), tc.want, tc.content)
+		assert.Contains(t, err.Error(), "nothing changed", tc.content)
+		assert.NotContains(t, err.Error(), "s3cr3t-token")
+		b, _ := os.ReadFile(filepath.Join(dir, "docker-compose.yml"))
+		assert.Equal(t, string(compose), string(b), "compose untouched")
+		b, _ = os.ReadFile(filepath.Join(dir, "config.yaml"))
+		assert.Equal(t, cfg, string(b), "config.yaml untouched")
+	}
+	assert.Empty(t, services(t, f, "glance"), "nothing deployed")
+
+	_, err := d.ReadConfigFile("glance", "exposure.yaml")
+	assert.Error(t, err)
 }
 
 func TestFilesPut_RejectsSymlinkEscape(t *testing.T) {

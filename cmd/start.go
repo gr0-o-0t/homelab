@@ -23,7 +23,7 @@ var startFlags = batchFlags{}
 
 func runServiceStart(_ *cobra.Command, args []string) error {
 	root := configDir()
-	names, err := resolveTargets(root, startFlags.all, startFlags.group, args)
+	names, err := resolveTargets(root, "start", startFlags.all, startFlags.group, args)
 	if err != nil {
 		return err
 	}

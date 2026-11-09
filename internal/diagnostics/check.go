@@ -259,43 +259,65 @@ func RunServiceConfigChecks(dir, name string) CheckGroup {
 	return CheckGroup{Title: "Service Configuration", Results: results}
 }
 
-// RunServiceContainerChecks checks container state for a service.
-func RunServiceContainerChecks(name string, dc *docker.Client) CheckGroup {
-	var results []CheckResult
-
-	if dc == nil {
-		results = append(results, CheckResult{
-			Name: "containers", Status: StatusWarn, Message: "Docker unavailable",
-		})
-		return CheckGroup{Title: "Service Containers", Results: results}
+// RunServiceContainerChecks checks a service's Swarm tasks, cluster-wide: all
+// the tasks Swarm wants running are running, and the newest running one's
+// image and health (health only for a container on this node). src nil means
+// Docker is unreachable.
+func RunServiceContainerChecks(name string, src service.StateSource) CheckGroup {
+	const title = "Service Tasks"
+	if src == nil {
+		return CheckGroup{Title: title, Results: []CheckResult{{
+			Name: "tasks", Status: StatusWarn, Message: "Docker unavailable",
+		}}}
 	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	summaries, err := dc.ServiceContainers(ctx, name)
-	if err != nil || len(summaries) == 0 {
-		results = append(results, CheckResult{
-			Name: name, Status: StatusFail, Message: "no containers found",
-		})
-		return CheckGroup{Title: "Service Containers", Results: results}
+	cs, err := src.ServiceContainers(ctx, name)
+	if err != nil {
+		return CheckGroup{Title: title, Results: []CheckResult{{
+			Name: "tasks", Status: StatusFail, Message: fmt.Sprintf("listing tasks: %v", err),
+		}}}
 	}
-
-	for _, s := range summaries {
-		if s.State == "running" {
-			results = append(results, CheckResult{
-				Name: s.Name, Status: StatusPass,
-				Message: fmt.Sprintf("%s running", s.Name),
-			})
-		} else {
-			results = append(results, CheckResult{
-				Name: s.Name, Status: StatusFail,
-				Message: fmt.Sprintf("%s %s", s.Name, s.State),
-			})
+	running := 0
+	var newest *docker.ContainerDetail
+	for i := range cs {
+		if cs[i].State != "running" {
+			continue
+		}
+		running++
+		if newest == nil || cs[i].StartedAt.After(newest.StartedAt) {
+			newest = &cs[i]
 		}
 	}
-
-	return CheckGroup{Title: "Service Containers", Results: results}
+	r := CheckResult{Name: "tasks", Status: StatusPass,
+		Message: fmt.Sprintf("%d/%d tasks running", running, len(cs))}
+	switch {
+	case len(cs) == 0:
+		r.Status, r.Message = StatusFail, "no tasks scheduled — run homelab up "+name
+	case running < len(cs):
+		r.Status = StatusFail
+		for i := range cs {
+			if cs[i].State != "running" {
+				r.Message += fmt.Sprintf("; %s %s", cs[i].Name, cs[i].Status)
+			}
+		}
+	}
+	results := []CheckResult{r}
+	if newest != nil {
+		h := CheckResult{Name: newest.Name, Status: StatusPass,
+			Message: fmt.Sprintf("%s on %s: %s", newest.Name, newest.Node, newest.Image)}
+		switch newest.Health {
+		case "unhealthy":
+			h.Status, h.Message = StatusFail, h.Message+" (unhealthy)"
+		case "starting":
+			h.Status, h.Message = StatusWarn, h.Message+" (health: starting)"
+		case "healthy":
+			h.Message += " (healthy)"
+		}
+		results = append(results, h)
+	}
+	return CheckGroup{Title: title, Results: results}
 }
 
 // RunServiceRoutingChecks checks whether a service has active Caddy routes.

@@ -384,39 +384,15 @@ func (d *Deployer) Remove(ctx context.Context, svc string) error {
 	return d.removeStackNetworks(ctx, svc)
 }
 
-// Status lists the current tasks of svc, by service name.
+// Status lists the desired-running tasks of svc, by service name.
 func (d *Deployer) Status(ctx context.Context, svc string) ([]TaskStatus, error) {
-	if err := config.ValidServiceName(svc); err != nil {
-		return nil, err
-	}
-	list, err := d.services(ctx, svc)
+	tasks, err := d.Tasks(ctx, svc)
 	if err != nil {
 		return nil, err
 	}
-	nodes, err := d.API.NodeList(ctx, swarm.NodeListOptions{})
-	if err != nil {
-		return nil, err
-	}
-	host := map[string]string{}
-	for i := range nodes {
-		host[nodes[i].ID] = nodes[i].Description.Hostname
-	}
-	var out []TaskStatus
-	for i := range list {
-		s := &list[i]
-		tasks, err := d.API.TaskList(ctx, swarm.TaskListOptions{Filters: filters.NewArgs(
-			filters.Arg("service", s.ID), filters.Arg("desired-state", string(swarm.TaskStateRunning)))})
-		if err != nil {
-			return nil, err
-		}
-		for j := range tasks {
-			t := &tasks[j]
-			node := host[t.NodeID]
-			if node == "" {
-				node = t.NodeID
-			}
-			out = append(out, TaskStatus{Service: s.Spec.Name, Node: node, State: string(t.Status.State)})
-		}
+	out := make([]TaskStatus, 0, len(tasks))
+	for i := range tasks {
+		out = append(out, TaskStatus{Service: tasks[i].Service, Node: tasks[i].Node, State: tasks[i].State})
 	}
 	return out, nil
 }

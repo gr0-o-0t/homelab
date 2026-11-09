@@ -131,6 +131,9 @@ type Options struct {
 	// the private layer.
 	Enabled  func() map[string]bool
 	BuildEnv EnvBuilderFn
+	// State reports a service's containers (its Swarm tasks, cluster-wide);
+	// nil leaves the counts and the detail pane empty.
+	State service.StateSource
 	// CLI is the argv prefix every action runs through: this binary plus its
 	// global flags.
 	CLI []string

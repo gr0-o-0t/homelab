@@ -11,11 +11,11 @@ import (
 )
 
 // filesCmd is the leader-side half of `homelab edit`: it reads and writes a
-// service's bind-mounted config files in the state dir. Hidden plumbing,
-// forwarded to the agent like any command.
+// service's compose file, config.yaml and bind-mounted config files in the
+// state dir. Hidden plumbing, forwarded to the agent like any command.
 var filesCmd = &cobra.Command{
 	Use:    "files",
-	Short:  "Read and write a service's bind-mounted config files (used by edit)",
+	Short:  "Read and write a service's editable files (used by edit)",
 	Hidden: true,
 }
 
@@ -41,7 +41,7 @@ var filesGetCmd = &cobra.Command{
 
 var filesPutCmd = &cobra.Command{
 	Use:    "put <service> <path>",
-	Short:  "Replace a config file of the service from stdin and redeploy it",
+	Short:  "Replace an editable file of the service from stdin (validated) and redeploy it",
 	Hidden: true,
 	Args:   cobra.ExactArgs(2),
 	RunE: func(c *cobra.Command, args []string) error {

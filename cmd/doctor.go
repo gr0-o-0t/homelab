@@ -97,10 +97,23 @@ func runDoctor(_ *cobra.Command, args []string) error {
 	}
 
 	renderCheckGroup(diagnostics.RunConfigChecks(cfgFile), &pass)
-	renderCheckGroup(diagnostics.RunInfraChecks(dc), &pass)
+	configPass := pass
+	infra := diagnostics.RunInfraChecks(dc)
+	renderCheckGroup(infra, &pass)
 
-	// --fix: create the overlay network if missing, as `up` would.
-	if !pass && doctorFixFlag && dc != nil {
+	// --fix: create the overlay network if that check failed, as `up` would.
+	// Only that failure is repaired: any other keeps the run failing.
+	netMissing, otherFail := false, false
+	for _, r := range infra.Results {
+		switch {
+		case r.Status != diagnostics.StatusFail:
+		case r.Name == "home-services network":
+			netMissing = true
+		default:
+			otherFail = true
+		}
+	}
+	if netMissing && doctorFixFlag && dc != nil {
 		if err := spinner.Run("Creating overlay network 'home-services'…", func() error {
 			return withDeployer(dir, false, func(ctx context.Context, d *swarm.Deployer) error {
 				return d.EnsureNetwork(ctx)
@@ -109,7 +122,10 @@ func runDoctor(_ *cobra.Command, args []string) error {
 			fmt.Printf("  %s  Could not create network: %v\n", styles.Warning.Render("!"), err)
 		} else {
 			fmt.Printf("  %s  Network 'home-services' created\n", styles.Success.Render("✓"))
-			pass = true
+			// The config checks above already ran; pass is only restored
+			// when the network was the infrastructure's one failure and
+			// the config checks passed.
+			pass = !otherFail && configPass
 		}
 	}
 
@@ -271,16 +287,11 @@ func runServiceDoctorFor(dir, name string, fix bool) bool {
 
 	pass := true
 
-	dc, dcErr := docker.New()
-	if dcErr != nil {
-		fmt.Printf("  %s  Docker SDK unavailable: %v\n", styles.Warning.Render("!"), dcErr)
-	}
-	if dc != nil {
-		defer func() { _ = dc.Close() }()
-	}
+	src, closeSrc := stateSource(dir)
+	defer closeSrc()
 
 	renderCheckGroup(diagnostics.RunServiceConfigChecks(dir, name), &pass)
-	renderCheckGroup(diagnostics.RunServiceContainerChecks(name, dc), &pass)
+	renderCheckGroup(diagnostics.RunServiceContainerChecks(name, src), &pass)
 	renderCheckGroup(diagnostics.RunServiceRoutingChecks(dir, name), &pass)
 
 	fmt.Println()

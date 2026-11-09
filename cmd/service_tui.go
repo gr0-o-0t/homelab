@@ -33,14 +33,17 @@ func runDashboardTUI(root string) error {
 	if dc != nil {
 		defer func() { _ = dc.Close() }()
 	}
+	src, closeSrc := stateSource(root)
+	defer closeSrc()
 	catalog := catalogNames()
-	svcs, err := discoverAll(root, dc, catalog)
+	svcs, err := discoverAll(root, src, catalog)
 	if err != nil {
 		return err
 	}
 	model := tuiDashboard.New(tuiDashboard.Options{
 		Root:     root,
 		Docker:   dc,
+		State:    src,
 		Services: svcs,
 		Catalog:  catalog,
 		Layers:   extRegistry().All(),
@@ -159,11 +162,11 @@ func selfCLI(root string) []string {
 	return cli
 }
 
-// discoverAll lists installed services (with live container state when Docker
+// discoverAll lists installed services (with their Swarm tasks when Docker
 // is reachable) followed by catalog entries not yet installed.
-func discoverAll(root string, dc *docker.Client, catalog []string) ([]service.Service, error) {
-	if dc != nil {
-		return service.DiscoverAllWithDocker(root, dc, catalog)
+func discoverAll(root string, src service.StateSource, catalog []string) ([]service.Service, error) {
+	if src != nil {
+		return service.DiscoverAllWith(root, src, catalog)
 	}
 	return service.DiscoverWithCatalog(root, catalog)
 }

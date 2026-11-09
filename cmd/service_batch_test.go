@@ -45,42 +45,44 @@ func makeBatchFixture(t *testing.T) string {
 
 func TestResolveTargets_SingleArg(t *testing.T) {
 	root := t.TempDir()
-	names, err := resolveTargets(root, false, "", []string{"jellyfin"})
+	names, err := resolveTargets(root, "up", false, "", []string{"jellyfin"})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"jellyfin"}, names)
 }
 
 func TestResolveTargets_NoArgNoFlags_Errors(t *testing.T) {
 	root := t.TempDir()
-	_, err := resolveTargets(root, false, "", nil)
+	_, err := resolveTargets(root, "up", false, "", nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "name a service, or use -a/--all")
+	_, err = resolveTargets(root, "stop", false, "", nil)
+	assert.Contains(t, err.Error(), "homelab stop jellyfin", "the example names the verb")
 }
 
 func TestResolveTargets_AllAndGroupMutuallyExclusive(t *testing.T) {
 	root := t.TempDir()
-	_, err := resolveTargets(root, true, "media", nil)
+	_, err := resolveTargets(root, "up", true, "media", nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "mutually exclusive")
 }
 
 func TestResolveTargets_PositionalArgWithAll_Errors(t *testing.T) {
 	root := t.TempDir()
-	_, err := resolveTargets(root, true, "", []string{"jellyfin"})
+	_, err := resolveTargets(root, "up", true, "", []string{"jellyfin"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cannot combine")
 }
 
 func TestResolveTargets_PositionalArgWithGroup_Errors(t *testing.T) {
 	root := t.TempDir()
-	_, err := resolveTargets(root, false, "media", []string{"jellyfin"})
+	_, err := resolveTargets(root, "up", false, "media", []string{"jellyfin"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cannot combine")
 }
 
 func TestResolveTargets_All_ReturnsAllServices(t *testing.T) {
 	root := makeBatchFixture(t)
-	names, err := resolveTargets(root, true, "", nil)
+	names, err := resolveTargets(root, "up", true, "", nil)
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []string{"alpha", "beta"}, names)
 }
@@ -88,14 +90,14 @@ func TestResolveTargets_All_ReturnsAllServices(t *testing.T) {
 func TestResolveTargets_All_EmptyServicesDir(t *testing.T) {
 	root := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "services"), 0o755))
-	names, err := resolveTargets(root, true, "", nil)
+	names, err := resolveTargets(root, "up", true, "", nil)
 	require.NoError(t, err)
 	assert.Empty(t, names)
 }
 
 func TestResolveTargets_All_MissingServicesDir(t *testing.T) {
 	root := t.TempDir() // no services/ subdirectory
-	names, err := resolveTargets(root, true, "", nil)
+	names, err := resolveTargets(root, "up", true, "", nil)
 	require.NoError(t, err)
 	assert.Empty(t, names)
 }
@@ -110,7 +112,7 @@ func TestResolveTargets_Group_ValidGroup(t *testing.T) {
 	}
 	require.NoError(t, config.Save(filepath.Join(root, "config.yaml"), cfg))
 
-	names, err := resolveTargets(root, false, "media", nil)
+	names, err := resolveTargets(root, "up", false, "media", nil)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"alpha", "beta"}, names)
 }
@@ -124,7 +126,7 @@ func TestResolveTargets_Group_UnknownGroup(t *testing.T) {
 	}
 	require.NoError(t, config.Save(filepath.Join(root, "config.yaml"), cfg))
 
-	_, err := resolveTargets(root, false, "nonexistent", nil)
+	_, err := resolveTargets(root, "up", false, "nonexistent", nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not found")
 	assert.Contains(t, err.Error(), "media") // error lists known groups
@@ -139,7 +141,7 @@ func TestResolveTargets_Group_NoGroupsDefined(t *testing.T) {
 	}
 	require.NoError(t, config.Save(filepath.Join(root, "config.yaml"), cfg))
 
-	_, err := resolveTargets(root, false, "media", nil)
+	_, err := resolveTargets(root, "up", false, "media", nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no groups")
 }
@@ -148,7 +150,7 @@ func TestResolveTargets_Group_NoConfigFile(t *testing.T) {
 	root := makeBatchFixture(t)
 	setConfigDir(t, root) // no config.yaml written
 
-	_, err := resolveTargets(root, false, "media", nil)
+	_, err := resolveTargets(root, "up", false, "media", nil)
 	require.Error(t, err)
 	// Missing config.yaml is treated as "no groups defined"
 	assert.Contains(t, err.Error(), "no groups")

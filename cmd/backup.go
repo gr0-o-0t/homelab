@@ -113,7 +113,7 @@ func runBackup(c *cobra.Command, args []string) error {
 		return listBackups(destRoot)
 	}
 
-	names, err := resolveTargets(root, backupFlags.all, backupFlags.group, args)
+	names, err := resolveTargets(root, "backup", backupFlags.all, backupFlags.group, args)
 	if err != nil {
 		return err
 	}

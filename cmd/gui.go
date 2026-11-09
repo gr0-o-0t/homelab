@@ -17,11 +17,13 @@ func runGUI(root string) error {
 	if dc != nil {
 		defer func() { _ = dc.Close() }()
 	}
+	src, closeSrc := stateSource(root)
+	defer closeSrc()
 	catalog := catalogNames()
 	all := extRegistry().All()
 	return gui.Run(gui.Options{
 		Root:      root,
-		Discover:  func() ([]service.Service, error) { return discoverAll(root, dc, catalog) },
+		Discover:  func() ([]service.Service, error) { return discoverAll(root, src, catalog) },
 		Layers:    func() []network.NetworkLayer { return uiLayers(root) },
 		AllLayers: all,
 		Env:       func(name string) map[string]string { return buildEnv(root, name) },

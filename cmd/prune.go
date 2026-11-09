@@ -73,12 +73,13 @@ func runPrune(_ *cobra.Command, args []string) error {
 		return pruneDangling()
 	}
 
-	names, err := resolveTargets(root, pruneFlags.all, pruneFlags.group, args)
+	names, err := resolveTargets(root, "prune", pruneFlags.all, pruneFlags.group, args)
 	if err != nil {
 		return err
 	}
 	if len(names) == 0 {
-		return fmt.Errorf("name a service, or pass --all / --group / --dangling")
+		fmt.Println("Nothing to prune: no installed service matches.")
+		return nil
 	}
 
 	// Show exactly what is about to be destroyed before asking. A prune that
@@ -231,8 +232,13 @@ func pruneOne(root, name string, plan prunePlan) error {
 	var errs []error
 	if !pruneFlags.keepVolumes {
 		for _, v := range plan.volumes {
-			if err := removeVolume(r, v); err != nil {
+			switch err := removeVolume(r, v); {
+			case errors.Is(err, errVolumeAbsent):
+				fmt.Printf("    %s volume %s not found on this node\n", styles.Muted.Render("·"), v)
+			case err != nil:
 				errs = append(errs, fmt.Errorf("volume %s: %w", v, err))
+			default:
+				fmt.Printf("    %s volume %s removed\n", styles.Success.Render("✓"), v)
 			}
 		}
 	}
@@ -248,12 +254,16 @@ func pruneOne(root, name string, plan prunePlan) error {
 	return errors.Join(errs...)
 }
 
+// errVolumeAbsent: the volume is not on this node (never created, or already
+// gone).
+var errVolumeAbsent = errors.New("volume not found on this node")
+
 // removeVolume removes a volume, retrying while the removed tasks' containers
-// are still being cleaned up and hold it. A volume that does not exist is
-// already gone.
+// are still being cleaned up and hold it. A volume this node does not have
+// is errVolumeAbsent: nothing was removed.
 func removeVolume(r *run.Commander, v string) error {
 	if _, err := r.Output("docker", "volume", "inspect", v); err != nil {
-		return nil
+		return errVolumeAbsent
 	}
 	var err error
 	for range 15 {
