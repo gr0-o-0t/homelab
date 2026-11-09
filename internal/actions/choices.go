@@ -24,7 +24,7 @@ func Choices(root string, in Input) ([]string, error) {
 		sort.Strings(out)
 		return out, nil
 	case SourceBackups:
-		list, err := backup.List(backup.DefaultDir(root))
+		list, err := backup.List(backup.DefaultDir())
 		if err != nil {
 			return nil, err
 		}

@@ -24,7 +24,7 @@ var (
 	inGroup = Input{Key: "group", Label: "Group", Kind: Choice, Source: SourceGroups,
 		Help: "Leave empty for every installed service"}
 	inOut = Input{Key: "out", Label: "Destination directory", Kind: Path,
-		Help: "Default: <config-dir>/backups"}
+		Help: "Inside the leader's backups volume (default: its top level)"}
 	inLive = Input{Key: "live", Label: "Live (don't stop the service)", Kind: Bool,
 		Help: "Faster, but may capture torn files"}
 	inBackupDir  = Input{Key: "backup", Label: "Backup", Kind: Choice, Source: SourceBackups, Required: true}

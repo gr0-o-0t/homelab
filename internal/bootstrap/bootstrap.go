@@ -165,8 +165,9 @@ func printFirewallHints(w io.Writer, readFile func(string) ([]byte, error), mana
 }
 
 // AgentSpec is the agent container: the docker socket, its state and shim
-// volumes, XDG dirs inside the state volume. The leader's also joins
-// home-services as homelab-edge. No secret appears anywhere in it.
+// volumes, XDG dirs inside the state volume. The leader's also mounts the
+// backups volume and joins home-services as homelab-edge. No secret appears
+// anywhere in it.
 func AgentSpec(img string, leader bool) (*container.Config, *container.HostConfig, *network.NetworkingConfig) {
 	cfg := &container.Config{
 		Image: img,
@@ -186,6 +187,9 @@ func AgentSpec(img string, leader bool) (*container.Config, *container.HostConfi
 	}
 	nc := &network.NetworkingConfig{}
 	if leader {
+		// Backups run on the leader (where the data volumes are pinned) and
+		// land in their own volume, which `backup --fetch` streams from.
+		hc.Binds = append(hc.Binds, agentstate.BackupsVolume+":"+agentstate.BackupsRoot)
 		nc.EndpointsConfig = map[string]*network.EndpointSettings{
 			swarm.SharedNetwork: {Aliases: []string{EdgeAlias}},
 		}

@@ -189,7 +189,7 @@ func (a *app) refresh() {
 			Enabled: slices.Contains(layerNames, l.Name()), Running: states[l.ContainerName()] == "running",
 		})
 	}
-	bl, berr := backup.List(backup.DefaultDir(a.opt.Root))
+	bl, berr := backup.List(backup.DefaultDir())
 
 	a.mu.Lock()
 	a.core, a.layers, a.layerObjs, a.exts = core, layerNames, layerObjs, exts

@@ -1,9 +1,12 @@
 package backup
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"time"
@@ -58,6 +61,49 @@ type Engine struct {
 	Exec      Executor
 	// Now supplies the manifest timestamp; injectable for deterministic tests.
 	Now func() time.Time
+
+	// BackupsRoot is where the backups volume is mounted in this (the leader
+	// agent's) container; every backup and restore directory lies under it.
+	// BackupsVolume is that volume's name: a helper container cannot bind a
+	// path of this container, so it mounts the volume itself.
+	BackupsRoot   string
+	BackupsVolume string
+	// ContainerFor names the shared database's task container to `docker
+	// exec` into (db.Provisioner.Container).
+	ContainerFor func(config.DBType) (string, error)
+	// Life stops and starts a service around its snapshot or restore.
+	Life Lifecycle
+	// PrepareDB readies a service's shared databases before their dumps are
+	// restored into them (optional).
+	PrepareDB func(ctx context.Context, svc string) error
+}
+
+// helperMount is where helper containers mount the backups volume.
+const helperMount = "/backups"
+
+// helperPath is dir as a helper container sees it: dir must lie inside the
+// backups volume, since that volume is all the helper can reach.
+func (e *Engine) helperPath(dir string) (string, error) {
+	if e.BackupsRoot == "" || e.BackupsVolume == "" {
+		return "", errors.New("no backups volume configured")
+	}
+	rel, ok := under(e.BackupsRoot, dir)
+	if !ok {
+		return "", fmt.Errorf("%s is not inside the backups volume (%s)", dir, e.BackupsRoot)
+	}
+	return path.Join(helperMount, rel), nil
+}
+
+// container resolves the shared instance's task container for dbType.
+func (e *Engine) container(dbType config.DBType) (string, error) {
+	if e.ContainerFor == nil {
+		return "", fmt.Errorf("no way to find the %s container", dbType)
+	}
+	c, err := e.ContainerFor(dbType)
+	if err != nil {
+		return "", fmt.Errorf("finding the %s container: %w", dbType, err)
+	}
+	return c, nil
 }
 
 func (e *Engine) now() time.Time {
@@ -70,13 +116,17 @@ func (e *Engine) now() time.Time {
 // Backup writes a service's volumes, database dumps and config files into
 // destDir, returning the record to add to the manifest.
 //
-// destDir must already exist and be absolute — it is bind-mounted into the
-// helper container, and Docker rejects relative bind sources.
+// destDir must be absolute and inside the backups volume: the helper
+// container that tars volumes writes there through its own mount of it.
 func (e *Engine) Backup(p Plan, destDir string, live bool) (ServiceRecord, error) {
 	rec := ServiceRecord{Name: p.Service, SkippedRedis: p.SkippedRedis, Live: live}
 
 	if !filepath.IsAbs(destDir) {
 		return rec, fmt.Errorf("backup destination must be an absolute path, got %q", destDir)
+	}
+	helperVols, err := e.helperPath(filepath.Join(destDir, "volumes"))
+	if err != nil {
+		return rec, err
 	}
 
 	svcOut := filepath.Join(destDir, "services", p.Service)
@@ -112,7 +162,7 @@ func (e *Engine) Backup(p Plan, destDir string, live bool) (ServiceRecord, error
 
 	for _, vol := range p.Volumes {
 		file := vol + ".tar.gz"
-		if err := e.archiveVolume(vol, filepath.Join(destDir, "volumes"), file); err != nil {
+		if err := e.archiveVolume(vol, helperVols, file); err != nil {
 			return rec, err
 		}
 		rec.Volumes = append(rec.Volumes, VolumeRecord{Volume: vol, File: file})
@@ -129,14 +179,18 @@ func (e *Engine) dumpDatabase(d DatabaseTarget, path string) error {
 	}
 	defer func() { _ = f.Close() }()
 
+	container, err := e.container(d.Type)
+	if err != nil {
+		return err
+	}
 	var args []string
 	switch d.Type {
 	case config.DBPostgres:
 		// Custom format: compressed, and pg_restore can then be selective and
 		// use --clean --if-exists on the way back in.
-		args = []string{"exec", d.Container, "pg_dump", "-U", "postgres", "-Fc", d.Database}
+		args = []string{"exec", container, "pg_dump", "-U", "postgres", "-Fc", d.Database}
 	case config.DBMariaDB:
-		args = []string{"exec", d.Container, "mysqldump", "-u", "root",
+		args = []string{"exec", container, "mysqldump", "-u", "root",
 			"--single-transaction", "--routines", "--triggers", d.Database}
 	default:
 		return fmt.Errorf("cannot dump database type %q", d.Type)
@@ -148,13 +202,22 @@ func (e *Engine) dumpDatabase(d DatabaseTarget, path string) error {
 	return f.Close()
 }
 
-// archiveVolume tars a named volume into destDir/file via a helper container.
-func (e *Engine) archiveVolume(vol, destDir, file string) error {
+// archiveVolume tars a named volume into helperDir/file (a path inside the
+// helper's mount of the backups volume) via a one-shot container on this
+// node — the leader, where every data volume is pinned.
+//
+// The volume must already exist here: `docker run -v` would otherwise create
+// an empty one and back that up as if it were the service's data.
+func (e *Engine) archiveVolume(vol, helperDir, file string) error {
+	if _, err := e.Exec.Output("docker", "volume", "inspect", "--format", "{{.Name}}", vol); err != nil {
+		return fmt.Errorf("volume %q is not on this node: backups run on the leader, where data volumes live "+
+			"— has the service run here yet? (%w)", vol, err)
+	}
 	err := e.Exec.Run("docker", "run", "--rm",
 		"-v", vol+":/from:ro",
-		"-v", destDir+":/to",
+		"-v", e.BackupsVolume+":"+helperMount,
 		helperImage,
-		"tar", "czf", "/to/"+file, "-C", "/from", ".",
+		"tar", "czf", path.Join(helperDir, file), "-C", "/from", ".",
 	)
 	if err != nil {
 		return fmt.Errorf("archiving volume %q: %w", vol, err)
@@ -170,6 +233,10 @@ func (e *Engine) archiveVolume(vol, destDir, file string) error {
 func (e *Engine) Restore(rec ServiceRecord, srcDir string, restoreConfig bool) error {
 	if !filepath.IsAbs(srcDir) {
 		return fmt.Errorf("backup source must be an absolute path, got %q", srcDir)
+	}
+	helperVols, err := e.helperPath(filepath.Join(srcDir, "volumes"))
+	if err != nil {
+		return err
 	}
 
 	if restoreConfig {
@@ -189,7 +256,7 @@ func (e *Engine) Restore(rec ServiceRecord, srcDir string, restoreConfig bool) e
 	}
 
 	for _, v := range rec.Volumes {
-		if err := e.restoreVolume(v, filepath.Join(srcDir, "volumes")); err != nil {
+		if err := e.restoreVolume(v, helperVols); err != nil {
 			return err
 		}
 	}
@@ -208,12 +275,16 @@ func (e *Engine) Restore(rec ServiceRecord, srcDir string, restoreConfig bool) e
 // the two, which silently leaves files that the backup did not contain — the
 // opposite of a restore. The archive is read end to end before anything is
 // cleared, so a missing or truncated archive fails with the volume untouched.
-func (e *Engine) restoreVolume(v VolumeRecord, srcDir string) error {
+//
+// helperDir is the archive directory inside the helper's read-only mount of
+// the backups volume. A volume missing on this node is created by the run,
+// as Swarm itself would when the service's task first starts here.
+func (e *Engine) restoreVolume(v VolumeRecord, helperDir string) error {
 	err := e.Exec.Run("docker", "run", "--rm",
 		"-v", v.Volume+":/to",
-		"-v", srcDir+":/from:ro",
+		"-v", e.BackupsVolume+":"+helperMount+":ro",
 		helperImage,
-		"sh", "-c", restoreVolumeScript, "sh", "/from/"+v.File,
+		"sh", "-c", restoreVolumeScript, "sh", path.Join(helperDir, v.File),
 	)
 	if err != nil {
 		return fmt.Errorf("restoring volume %q: %w", v.Volume, err)
@@ -238,7 +309,10 @@ func (e *Engine) restoreDatabase(d DatabaseRecord, path string) error {
 	}
 	defer func() { _ = f.Close() }()
 
-	container := config.SharedDBContainer(d.Type)
+	container, err := e.container(d.Type)
+	if err != nil {
+		return err
+	}
 	switch d.Type {
 	case config.DBPostgres:
 		// --clean --if-exists drops existing objects first so a restore over a

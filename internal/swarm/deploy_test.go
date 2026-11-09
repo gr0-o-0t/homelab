@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/99designs/keyring"
 	"github.com/docker/docker/api/types/filters"
@@ -506,4 +507,25 @@ func TestDeploy_Status(t *testing.T) {
 	st, err := d.Status(ctx, "web")
 	require.NoError(t, err)
 	assert.Equal(t, []swarm.TaskStatus{{Service: "web_web", Node: "mini1", State: "running"}}, st)
+}
+
+// Down only changes the spec; a backup must not tar a volume while the old
+// task's container is still shutting down.
+func TestDeploy_WaitStoppedWaitsForTasksToStop(t *testing.T) {
+	ctx := context.Background()
+	d, f, root := newDeployer(t)
+	writeService(t, root, "gitea", giteaCompose)
+	require.NoError(t, d.Up(ctx, "gitea"))
+	svc := services(t, f, "gitea")[0]
+	task := func(state dswarm.TaskState) dswarm.Task {
+		return dswarm.Task{ID: "t1", ServiceID: svc.ID, DesiredState: dswarm.TaskStateShutdown,
+			Status: dswarm.TaskStatus{State: state}}
+	}
+
+	f.SetTasks([]dswarm.Task{task(dswarm.TaskStateRunning)})
+	err := d.WaitStopped(ctx, "gitea", 50*time.Millisecond)
+	assert.ErrorContains(t, err, "still running")
+
+	f.SetTasks([]dswarm.Task{task(dswarm.TaskStateShutdown), {ID: "t0", ServiceID: svc.ID, Status: dswarm.TaskStatus{State: dswarm.TaskStateFailed}}})
+	assert.NoError(t, d.WaitStopped(ctx, "gitea", time.Second))
 }

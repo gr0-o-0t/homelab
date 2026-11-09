@@ -103,6 +103,7 @@ func TestInit_SwarmInitOnTailnetIP(t *testing.T) {
 		"/var/run/docker.sock:/var/run/docker.sock",
 		"homelab-agent:/var/lib/homelab",
 		"homelab-shim:/hl",
+		"homelab-backups:/var/lib/homelab-backups",
 	}, c.HostConfig.Binds)
 	ep := c.Networking.EndpointsConfig["home-services"]
 	require.NotNil(t, ep, "the leader agent joins home-services")
@@ -540,5 +541,21 @@ func TestInit_PreflightBeforeAnyPrompt(t *testing.T) {
 		set(h.fake)
 		require.Error(t, in.Do(context.Background()), name)
 		assert.Empty(t, h.prompts, "%s: prompted before refusing", name)
+	}
+}
+
+// Backups live in their own volume on the leader, never inside the agent's
+// state volume; workers have no backups to hold.
+func TestAgentSpec_LeaderMountsBackupsVolume(t *testing.T) {
+	_, hc, _ := AgentSpec("img", true)
+	assert.Contains(t, hc.Binds, "homelab-backups:/var/lib/homelab-backups")
+	for _, b := range hc.Binds {
+		_, target, _ := strings.Cut(b, ":")
+		assert.False(t, strings.HasPrefix(target, agentstate.Root+"/"), "nothing mounted inside the state volume: %s", b)
+	}
+
+	_, hc, _ = AgentSpec("img", false)
+	for _, b := range hc.Binds {
+		assert.NotContains(t, b, "homelab-backups", "workers do not mount the backups volume")
 	}
 }

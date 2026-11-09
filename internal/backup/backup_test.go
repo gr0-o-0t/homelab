@@ -2,6 +2,7 @@ package backup
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -30,6 +31,8 @@ type fakeExec struct {
 	// bytes a real pg_dump would emit.
 	dumpBody string
 	err      error
+	// missing volumes fail `docker volume inspect`.
+	missing map[string]bool
 }
 
 func (f *fakeExec) Run(name string, args ...string) error {
@@ -57,6 +60,9 @@ func (f *fakeExec) RunFrom(r io.Reader, name string, args ...string) error {
 
 func (f *fakeExec) Output(name string, args ...string) ([]byte, error) {
 	f.calls = append(f.calls, call{Name: name, Args: args})
+	if len(args) > 0 && f.missing[args[len(args)-1]] {
+		return nil, errors.New("Error: No such volume: " + args[len(args)-1])
+	}
 	return nil, f.err
 }
 
@@ -137,14 +143,11 @@ func TestPlanFor_SkipsUnnamedVolumes(t *testing.T) {
 }
 
 func TestBackup_WritesEverything(t *testing.T) {
-	root := t.TempDir()
-	writeService(t, root, "app", twoVolCompose, pgRedisCfg)
-	dest := t.TempDir()
-
 	fx := &fakeExec{dumpBody: "PGDMP-fake"}
-	e := &Engine{ConfigDir: root, Exec: fx, Now: func() time.Time { return time.Unix(0, 0).UTC() }}
+	e, backups := newSwarmEngine(t, fx)
+	dest := filepath.Join(backups, "b")
 
-	p, err := PlanFor(root, "app")
+	p, err := PlanFor(e.ConfigDir, "app")
 	require.NoError(t, err)
 
 	rec, err := e.Backup(p, dest, false)
@@ -169,7 +172,7 @@ func TestBackup_WritesEverything(t *testing.T) {
 	for _, vol := range []string{"app_data", "app_cache"} {
 		c, ok := fx.find(vol + ":/from:ro")
 		require.True(t, ok, "volume %s should be archived", vol)
-		assert.Contains(t, c.line(), "tar czf /to/"+vol+".tar.gz")
+		assert.Contains(t, c.line(), "tar czf /backups/b/volumes/"+vol+".tar.gz")
 	}
 
 	assert.Equal(t, "app", rec.Name)
@@ -182,11 +185,8 @@ func TestBackup_WritesEverything(t *testing.T) {
 // Docker rejects relative bind-mount sources, and the failure surfaces as an
 // opaque daemon error, so catch it before spawning anything.
 func TestBackup_RequiresAbsoluteDestination(t *testing.T) {
-	root := t.TempDir()
-	writeService(t, root, "app", twoVolCompose, pgRedisCfg)
-
-	e := &Engine{ConfigDir: root, Exec: &fakeExec{}}
-	p, err := PlanFor(root, "app")
+	e, _ := newSwarmEngine(t, &fakeExec{})
+	p, err := PlanFor(e.ConfigDir, "app")
 	require.NoError(t, err)
 
 	_, err = e.Backup(p, "relative/dir", false)
@@ -197,10 +197,9 @@ func TestBackup_RequiresAbsoluteDestination(t *testing.T) {
 // Untarring over live contents merges the two and leaves files the backup never
 // contained.
 func TestRestore_ClearsVolumeBeforeUnpacking(t *testing.T) {
-	root := t.TempDir()
-	src := t.TempDir()
 	fx := &fakeExec{}
-	e := &Engine{ConfigDir: root, Exec: fx}
+	e, backups := newSwarmEngine(t, fx)
+	src := filepath.Join(backups, "b")
 
 	rec := ServiceRecord{
 		Name:    "app",
@@ -213,25 +212,23 @@ func TestRestore_ClearsVolumeBeforeUnpacking(t *testing.T) {
 	line := c.line()
 	assert.Contains(t, line, "rm -rf", "existing contents must be removed first")
 	assert.Contains(t, line, `tar xzf "$1" -C /to`)
-	assert.True(t, strings.HasSuffix(line, " sh /from/app_data.tar.gz"),
+	assert.True(t, strings.HasSuffix(line, " sh /backups/b/volumes/app_data.tar.gz"),
 		"the archive is passed as $1, not spliced into the script")
 	assert.Less(t, strings.Index(line, "rm -rf"), strings.Index(line, "tar xzf"),
 		"the clear must precede the unpack")
 	assert.Less(t, strings.Index(line, "tar tzf"), strings.Index(line, "rm -rf"),
 		"the archive must be verified before anything is cleared")
-	assert.Contains(t, line, filepath.Join(src, "volumes")+":/from:ro",
-		"the archive directory is mounted read-only")
+	assert.Contains(t, line, "homelab-backups:/backups:ro",
+		"the backups volume is mounted read-only")
 }
 
 func TestRestore_PostgresUsesCleanRestore(t *testing.T) {
-	root := t.TempDir()
-	src := t.TempDir()
+	fx := &fakeExec{}
+	e, backups := newSwarmEngine(t, fx)
+	src := filepath.Join(backups, "b")
 	require.NoError(t, os.MkdirAll(filepath.Join(src, "databases"), 0o750))
 	require.NoError(t, os.WriteFile(filepath.Join(src, "databases", "app-appdb.dump"),
 		[]byte("PGDMP-fake"), 0o600))
-
-	fx := &fakeExec{}
-	e := &Engine{ConfigDir: root, Exec: fx}
 
 	rec := ServiceRecord{
 		Name: "app",
@@ -255,8 +252,9 @@ func TestRestore_PostgresUsesCleanRestore(t *testing.T) {
 // Config files are the one thing not restored by default: the installed copies
 // are usually newer than the archived ones.
 func TestRestore_ConfigOnlyOnRequest(t *testing.T) {
-	root := t.TempDir()
-	src := t.TempDir()
+	e, backups := newSwarmEngine(t, &fakeExec{})
+	root := e.ConfigDir
+	src := filepath.Join(backups, "b")
 	require.NoError(t, os.MkdirAll(filepath.Join(src, "services", "app"), 0o750))
 	require.NoError(t, os.WriteFile(filepath.Join(src, "services", "app", "config.yaml"),
 		[]byte("archived: true\n"), 0o600))
@@ -265,7 +263,6 @@ func TestRestore_ConfigOnlyOnRequest(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Dir(installed), 0o750))
 	require.NoError(t, os.WriteFile(installed, []byte("installed: true\n"), 0o600))
 
-	e := &Engine{ConfigDir: root, Exec: &fakeExec{}}
 	rec := ServiceRecord{Name: "app", ConfigFiles: []string{"config.yaml"}}
 
 	require.NoError(t, e.Restore(rec, src, false))

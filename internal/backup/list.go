@@ -7,10 +7,13 @@ import (
 	"path/filepath"
 	"sort"
 	"time"
+
+	"github.com/groot/homelab/internal/agentstate"
 )
 
-// DefaultDir is where `homelab backup` writes when --out is not given.
-func DefaultDir(configDir string) string { return filepath.Join(configDir, "backups") }
+// DefaultDir is where `homelab backup` writes when --out is not given: the
+// backups volume, as mounted in the leader agent.
+func DefaultDir() string { return agentstate.BackupsRoot }
 
 // Listing summarises one backup directory, enough to pick one to restore.
 type Listing struct {

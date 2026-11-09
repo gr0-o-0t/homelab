@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
@@ -169,6 +170,60 @@ func (d *Deployer) Down(ctx context.Context, svc string) error {
 		zero := uint64(0)
 		spec.Mode = swarm.ServiceMode{Replicated: &swarm.ReplicatedService{Replicas: &zero}}
 	})
+}
+
+// stopPoll is how often WaitStopped looks at the tasks.
+var stopPoll = 250 * time.Millisecond
+
+// WaitStopped waits until no task of svc may still have a running container:
+// Down only changes the spec, and Swarm stops the old tasks afterwards, each
+// within its stop grace period. A backup waits for this before reading the
+// service's volumes.
+func (d *Deployer) WaitStopped(ctx context.Context, svc string, timeout time.Duration) error {
+	if err := config.ValidServiceName(svc); err != nil {
+		return err
+	}
+	list, err := d.services(ctx, svc)
+	if err != nil {
+		return err
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		busy := ""
+		for i := range list {
+			tasks, err := d.API.TaskList(ctx, swarm.TaskListOptions{Filters: filters.NewArgs(filters.Arg("service", list[i].ID))})
+			if err != nil {
+				return err
+			}
+			for j := range tasks {
+				if !taskStopped(tasks[j].Status.State) {
+					busy = list[i].Spec.Name
+				}
+			}
+		}
+		if busy == "" {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("%s is still running %s after being scaled down", busy, timeout)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(stopPoll):
+		}
+	}
+}
+
+// taskStopped reports whether a task in state s no longer has a running
+// container.
+func taskStopped(s swarm.TaskState) bool {
+	switch s {
+	case swarm.TaskStateShutdown, swarm.TaskStateComplete, swarm.TaskStateFailed,
+		swarm.TaskStateRejected, swarm.TaskStateRemove, swarm.TaskStateOrphaned:
+		return true
+	}
+	return false
 }
 
 // Restart replaces every task of svc with a fresh one. A service that was

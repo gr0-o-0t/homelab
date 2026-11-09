@@ -64,7 +64,7 @@ func rootPreRun(c *cobra.Command, _ []string) error {
 
 // shouldForward reports whether c runs on the agent rather than here.
 func shouldForward(c *cobra.Command) bool {
-	if os.Getenv("HOMELAB_AGENT") == "1" || c == rootCmd {
+	if os.Getenv("HOMELAB_AGENT") == "1" || c == rootCmd || backupRunsLocally(c) {
 		return false
 	}
 	top := c

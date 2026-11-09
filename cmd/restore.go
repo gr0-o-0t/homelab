@@ -1,13 +1,13 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
-	"path/filepath"
 
 	"github.com/spf13/cobra"
 
 	"github.com/groot/homelab/internal/backup"
-	"github.com/groot/homelab/internal/run"
+	"github.com/groot/homelab/internal/swarm"
 	"github.com/groot/homelab/internal/tui/styles"
 )
 
@@ -16,13 +16,16 @@ var restoreCmd = &cobra.Command{
 	Short: "Restore service volumes and databases from a backup",
 	Long: `Restore from a directory produced by 'homelab backup'.
 
-  homelab restore ~/.config/homelab/backups/20260805-101500
+  homelab restore 20260805-101500          # a backup in the leader's backups volume
   homelab restore <dir> vaultwarden        # just one service from the backup
   homelab restore <dir> --config           # also overwrite config.yaml/compose
 
+<backup-dir> is a name listed by 'homelab backup --list', or a path inside the
+backups volume (/var/lib/homelab-backups on the leader).
+
 Restore REPLACES current data: each volume is emptied before the archived copy is
 unpacked, and each database is restored with --clean, dropping existing objects.
-Services are stopped first and started again afterwards.
+Running services are scaled down first and deployed again afterwards.
 
 The database and its role must already exist — run 'homelab setup <service>'
 first on a fresh machine. That also re-syncs the role password with the keyring,
@@ -47,9 +50,12 @@ func init() {
 func runRestore(_ *cobra.Command, args []string) error {
 	root := configDir()
 
-	src, err := filepath.Abs(args[0])
+	// The helper containers that unpack volumes only reach the backups
+	// volume, so the backup must be in it: a name from `backup --list` or a
+	// path under it.
+	src, err := backup.ResolveUnder(backupsRoot, args[0])
 	if err != nil {
-		return fmt.Errorf("resolving backup path: %w", err)
+		return err
 	}
 	manifest, err := backup.ReadManifest(src)
 	if err != nil {
@@ -92,47 +98,28 @@ func runRestore(_ *cobra.Command, args []string) error {
 	}
 	fmt.Println()
 
-	engine := &backup.Engine{ConfigDir: root, Exec: run.Default()}
-
 	for _, rec := range records {
 		if err := validateService(root, rec.Name); err != nil {
 			return fmt.Errorf("%w\n  Install it first: homelab add %s && homelab setup %s",
 				err, rec.Name, rec.Name)
 		}
-
-		wasRunning := serviceIsRunning(root, rec.Name)
-		if wasRunning {
-			fmt.Printf("  %s stopping %s…\n", styles.Muted.Render("·"), rec.Name)
-			if err := run.Default().DockerComposeEnv(
-				run.ServiceComposeFile(root, rec.Name), buildEnv(root, rec.Name), "stop",
-			); err != nil {
-				return fmt.Errorf("stopping %s: %w", rec.Name, err)
-			}
-		}
-
-		// Databases are restored into the shared instance, so it has to be up
-		// even though the service itself is stopped.
-		if len(rec.Databases) > 0 {
-			if err := ensureDBDependencies(cmdContext(), root, rec.Name); err != nil {
-				return err
-			}
-		}
-
-		err := engine.Restore(rec, src, restoreFlags.config)
-
-		if wasRunning {
-			if startErr := run.Default().DockerComposeEnv(
-				run.ServiceComposeFile(root, rec.Name), buildEnv(root, rec.Name), "up", "-d",
-			); startErr != nil && err == nil {
-				err = fmt.Errorf("restore of %s succeeded but restarting it failed: %w", rec.Name, startErr)
-			}
-		}
-		if err != nil {
-			return err
-		}
-		fmt.Printf("  %s %s restored\n", styles.Success.Render("✓"), styles.Bold.Render(rec.Name))
 	}
 
-	fmt.Println()
-	return nil
+	// Deploying again afterwards needs the secrets: refused up front, before
+	// anything is scaled down.
+	return withDeployer(root, true, func(ctx context.Context, d *swarm.Deployer) error {
+		engine := newBackupEngine(root, d)
+		engine.PrepareDB = func(ctx context.Context, svc string) error {
+			return ensureDBDependencies(ctx, root, svc)
+		}
+		for _, rec := range records {
+			fmt.Printf("  %s restoring %s (scaled down first if running)…\n", styles.Muted.Render("·"), rec.Name)
+			if err := engine.RestoreService(ctx, rec, src, restoreFlags.config); err != nil {
+				return err
+			}
+			fmt.Printf("  %s %s restored\n", styles.Success.Render("✓"), styles.Bold.Render(rec.Name))
+		}
+		fmt.Println()
+		return nil
+	})
 }

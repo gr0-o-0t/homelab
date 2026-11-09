@@ -17,6 +17,14 @@ import (
 // Root is the agent's state volume mount point.
 const Root = "/var/lib/homelab"
 
+// BackupsVolume holds `homelab backup` output, a volume of its own so that
+// backups never sit inside the state volume they partly describe. Only the
+// leader mounts it, at BackupsRoot.
+const (
+	BackupsVolume = "homelab-backups"
+	BackupsRoot   = "/var/lib/homelab-backups"
+)
+
 const clusterSecretVar = "CLUSTER_SECRET"
 
 // Paths are the agent's state locations.

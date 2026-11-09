@@ -69,9 +69,8 @@ func (m Model) coreRefreshCmd() tea.Cmd {
 
 // backupsCmd lists the backups in the default directory, newest first.
 func (m Model) backupsCmd() tea.Cmd {
-	root := m.opt.Root
 	return func() tea.Msg {
-		list, err := backup.List(backup.DefaultDir(root))
+		list, err := backup.List(backup.DefaultDir())
 		return backupsMsg{list: list, err: err}
 	}
 }

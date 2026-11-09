@@ -41,6 +41,7 @@ var parityExcludedFlags = map[string]string{
 	"join --secret-stdin":  "for scripts; the interactive action prompts for the secret",
 	"login --endpoint":     "the interactive action prompts for it, offering the tailnet default",
 	"login --secret-stdin": "for scripts; the interactive action prompts for the secret",
+	"backup --fetch":       "copies a backup to a directory on this PC named in a shell; front ends act on the leader's backups",
 }
 
 // cmdPath is a command's path without the leading "homelab".

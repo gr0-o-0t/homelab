@@ -78,9 +78,10 @@ homelab exec <service> <command> [args...]         # like docker compose exec; f
 
 ```bash
 homelab backup [service]                           # volumes + DB dumps + config (--all, --group)
-homelab backup [service] --out /mnt/nas            # destination (default <config-dir>/backups)
+homelab backup [service] --out weekly             # a dir inside the backups volume (default: its top)
 homelab backup [service] --live                    # don't stop the service (risks torn files)
 homelab backup --list [--json]                     # existing backups, newest first
+homelab backup --fetch <name> <local-dir>          # copy a backup to this PC (<local-dir>/<name>)
 
 homelab restore <backup-dir> [service]             # replace volumes + databases
 homelab restore <backup-dir> --config              # also overwrite config.yaml / compose
@@ -92,9 +93,21 @@ homelab prune --dangling                           # unreferenced images + build
 
 `backup` writes a timestamped directory with a `manifest.json` listing every
 volume, dump and config file, so a backup is inspectable and restorable per
-service. Each service is stopped for the duration of its own snapshot unless
-`--live` is given — tarring a volume under a running process can capture a torn
-file.
+service. Each running service is scaled down (`Deployer.Down`, waiting for its
+tasks to stop) for the duration of its own snapshot unless `--live` is given —
+tarring a volume under a running process can capture a torn file — and deployed
+again afterwards even when the snapshot failed. Shared DB providers are never
+stopped for a consumer; dumps are online.
+
+Backups run on the leader and live in the `homelab-backups` volume, mounted only
+in the leader agent at `/var/lib/homelab-backups` (never inside the state volume).
+`--out` and restore's `<backup-dir>` must resolve under it (relative = relative to
+it); volumes are tarred by a one-shot `docker run` helper that mounts the data
+volume read-only and the backups volume, refusing a volume that is not on this
+node. `backup --fetch` runs on the PC (not forwarded): it streams the hidden,
+lock-free `backup-export <name>` tar from the leader and unpacks it — regular
+files and directories only, confined by `os.Root` — into a temp dir renamed into
+place once complete.
 
 Secrets are deliberately **not** in backups; they stay in the system keyring.
 After restoring onto a new machine run `homelab setup <service>`, which re-enters
