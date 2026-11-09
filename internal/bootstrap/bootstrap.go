@@ -232,11 +232,32 @@ func (i SeedInfo) args() []string {
 // agent-seed` exec'd in its container, the values as JSON on stdin — then
 // restarts the agent so it reads them (it loads its secrets at start).
 func SeedAgent(ctx context.Context, api swarm.API, values map[string]string, info SeedInfo) error {
+	if err := seedExec(ctx, api, seedCmd(info), values); err != nil {
+		return err
+	}
+	return restartAgent(ctx, api)
+}
+
+// seedCmd is the plain agent-seed command line: no secret in it.
+func seedCmd(info SeedInfo) []string {
+	return append([]string{"homelab", "agent-seed", "--root", agentstate.Root}, info.args()...)
+}
+
+// restartAgent restarts the agent so it reads what was seeded.
+func restartAgent(ctx context.Context, api swarm.API) error {
+	if err := api.ContainerRestart(ctx, AgentContainer, container.StopOptions{}); err != nil {
+		return fmt.Errorf("restarting the agent after seeding its vault: %w", err)
+	}
+	return nil
+}
+
+// seedExec runs cmd in the agent container with values, as JSON, on its
+// stdin — the only way secrets travel into the container.
+func seedExec(ctx context.Context, api swarm.API, cmd []string, values any) error {
 	payload, err := json.Marshal(values)
 	if err != nil {
 		return err
 	}
-	cmd := append([]string{"homelab", "agent-seed", "--root", agentstate.Root}, info.args()...)
 	ex, err := api.ContainerExecCreate(ctx, AgentContainer, container.ExecOptions{
 		Cmd: cmd, AttachStdin: true, AttachStdout: true, AttachStderr: true,
 	})
@@ -264,9 +285,6 @@ func SeedAgent(ctx context.Context, api swarm.API, values map[string]string, inf
 	}
 	if res.ExitCode != 0 {
 		return fmt.Errorf("seeding the agent's vault failed (exit %d): %s", res.ExitCode, strings.TrimSpace(output.String()))
-	}
-	if err := api.ContainerRestart(ctx, AgentContainer, container.StopOptions{}); err != nil {
-		return fmt.Errorf("restarting the agent after seeding its vault: %w", err)
 	}
 	return nil
 }
@@ -458,16 +476,14 @@ type Init struct {
 	ReadFile   func(string) ([]byte, error)
 	SaveClient func(endpoint string) error
 	Image      string
-	Import     string // --import: Task 17
+	Import     string // --import: a Compose-era config dir to bring in
+	TempDir    string // where the import tree is built; "" = os.TempDir
 	Out        io.Writer
 	Rand       io.Reader
 }
 
 // Do creates the cluster on this PC.
 func (in *Init) Do(ctx context.Context) (err error) {
-	if in.Import != "" {
-		return errors.New("--import is not implemented yet")
-	}
 	if in.Image == "" {
 		return errors.New("no agent image")
 	}
@@ -483,6 +499,18 @@ func (in *Init) Do(ctx context.Context) (err error) {
 	// secret; the (slow) pull comes after the prompts.
 	if err := checkEngine(ctx, in.API); err != nil {
 		return err
+	}
+	// An import is built (and refused) before anything changes: the
+	// Compose-era network must be idle, the old dir importable.
+	var imp *builtImport
+	if in.Import != "" {
+		if _, err := composeBridge(ctx, in.API); err != nil {
+			return err
+		}
+		if imp, err = buildImport(in.Import, in.TempDir, in.Keyring); err != nil {
+			return err
+		}
+		defer imp.remove()
 	}
 	vals, err := in.secrets()
 	if err != nil {
@@ -506,6 +534,11 @@ func (in *Init) Do(ctx context.Context) (err error) {
 	if err := labelNode(ctx, in.API, nodeID, string(swarm.RoleCore)); err != nil {
 		return err
 	}
+	if imp != nil {
+		if err := removeComposeBridge(ctx, in.API); err != nil {
+			return err
+		}
+	}
 	if err := (&swarm.Deployer{API: in.API}).EnsureNetwork(ctx); err != nil {
 		return err
 	}
@@ -518,7 +551,20 @@ func (in *Init) Do(ctx context.Context) (err error) {
 	}
 	vals["CLUSTER_SECRET"] = secret
 	info := SeedInfo{Tailnet: suffix, LeaderAddr: net.JoinHostPort(ip.String(), ManagerPort)}
-	if err := SeedAgent(ctx, in.API, vals, info); err != nil {
+	if imp == nil {
+		err = SeedAgent(ctx, in.API, vals, info)
+	} else {
+		// Both seeds land before the one restart: the agent brings the
+		// imported services up from desired.yaml when it starts.
+		err = seedExec(ctx, in.API, seedCmd(info), vals)
+		if err == nil {
+			err = imp.install(ctx, in.API)
+		}
+		if err == nil {
+			err = restartAgent(ctx, in.API)
+		}
+	}
+	if err != nil {
 		return err
 	}
 	endpoint := LeaderEndpoint(suffix)
@@ -533,6 +579,9 @@ func (in *Init) Do(ctx context.Context) (err error) {
 	_, _ = fmt.Fprintf(in.Out, "To add a PC, run on it:\n\n  homelab join --endpoint %s\n\n", endpoint)
 	_, _ = fmt.Fprintf(in.Out, "and enter the cluster secret (also in this machine's keyring as %s):\n\n  %s\n",
 		secrets.RootKey("CLUSTER_SECRET"), secret)
+	if imp != nil {
+		printImportReport(in.Out, imp.report)
+	}
 	return nil
 }
 

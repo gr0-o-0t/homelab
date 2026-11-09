@@ -1,0 +1,199 @@
+package bootstrap
+
+import (
+	"archive/tar"
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/docker/docker/api/types/network"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/groot/homelab/internal/agentstate"
+	"github.com/groot/homelab/internal/config"
+	"github.com/groot/homelab/internal/importer"
+)
+
+const (
+	sentGiteaDB = "giteadb-SENTINEL-pw"
+	sentRedis   = "redis-SENTINEL-pw"
+	sentGrafana = "grafana-SENTINEL-pw"
+)
+
+func writeOld(t *testing.T, root string, files map[string]string) {
+	t.Helper()
+	for p, c := range files {
+		full := filepath.Join(root, filepath.FromSlash(p))
+		require.NoError(t, os.MkdirAll(filepath.Dir(full), 0o755))
+		require.NoError(t, os.WriteFile(full, []byte(c), 0o644))
+	}
+}
+
+// newImportInit is an init --import of a small Compose-era dir whose secrets
+// are all in the keyring.
+func newImportInit(t *testing.T) (*Init, *initHarness) {
+	t.Helper()
+	in, h := newInit(t, testIP)
+	old := t.TempDir()
+	writeOld(t, old, map[string]string{
+		"config.yaml": "vars:\n  DOMAIN:\n    value: example.com\n  HOME_SUBDOMAIN:\n    value: home\n" +
+			"secrets:\n  TS_AUTHKEY:\n    required: true\n",
+		"state/desired.yaml":                "services:\n  gitea: running\n",
+		"services/gitea/config.yaml":        "databases:\n  - postgres:\n      database: gitea\n      env:\n        password: GI_DB_PASS\nports:\n  - 3000\n  - 2222:2222\n",
+		"services/gitea/docker-compose.yml": "services:\n  gitea:\n    image: gitea/gitea\n    environment:\n      P: ${GI_DB_PASS}\n",
+		"services/gitea/exposure.yaml":      "layers: [ts]\n",
+		"services/redis/config.yaml":        "secrets:\n  REDIS_PASSWORD:\n    required: true\n    generate: password\n",
+		"services/redis/docker-compose.yml": "services:\n  redis:\n    image: redis\n    environment:\n      P: ${REDIS_PASSWORD:?unset}\n",
+		"services/grafana/config.yaml":      "secrets:\n  GRAFANA_ADMIN_PASSWORD:\n    required: true\n  GF_OTHER:\n    required: true\n",
+		"services/grafana/docker-compose.yml": "services:\n  grafana:\n    image: grafana/grafana\n" +
+			"    volumes:\n      - ./provisioning:/etc/grafana/provisioning:ro\n",
+		"services/grafana/provisioning/ds.yaml": "apiVersion: 1\n",
+	})
+	require.NoError(t, h.kr.Set("", config.DBPasswordKey("gitea"), sentGiteaDB))
+	require.NoError(t, h.kr.Set("redis", "REDIS_PASSWORD", sentRedis))
+	require.NoError(t, h.kr.Set("grafana", "GRAFANA_ADMIN_PASSWORD", sentGrafana))
+	in.Import = old
+	in.TempDir = t.TempDir()
+	return in, h
+}
+
+// tarNames lists a tar stream's entries and fails on any carrying a secret.
+func tarContent(t *testing.T, b []byte) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	tr := tar.NewReader(bytes.NewReader(b))
+	for {
+		h, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			return out
+		}
+		require.NoError(t, err)
+		c, err := io.ReadAll(tr)
+		require.NoError(t, err)
+		out[h.Name] = string(c)
+	}
+}
+
+func TestInit_Import(t *testing.T) {
+	in, h := newImportInit(t)
+	require.NoError(t, in.Do(context.Background()))
+
+	copies := h.fake.Copies()
+	require.Len(t, copies, 1)
+	assert.Equal(t, AgentContainer, copies[0].Container)
+	assert.Equal(t, agentstate.Root, copies[0].Path)
+	files := tarContent(t, copies[0].Tar)
+	var staging string
+	for name := range files {
+		staging, _, _ = strings.Cut(name, "/")
+		break
+	}
+	assert.Regexp(t, `^import-[0-9a-f]{16}$`, staging)
+	assert.Contains(t, files, staging+"/services/gitea/config.yaml")
+	assert.Contains(t, files, staging+"/services/grafana/provisioning/ds.yaml")
+	assert.Contains(t, files, staging+"/caddy/sites/gitea.conf")
+	assert.Contains(t, files, staging+"/state/desired.yaml")
+
+	execs := h.fake.Execs()
+	require.Len(t, execs, 2, "the plain seed, then the import seed")
+	assert.Equal(t, []string{"homelab", "agent-seed", "--root", agentstate.Root, "--import", staging},
+		[]string(execs[1].Options.Cmd))
+	var sec importer.Secrets
+	require.NoError(t, json.Unmarshal(execs[1].Stdin, &sec))
+	assert.Equal(t, sentGiteaDB, sec.Root[config.DBPasswordKey("gitea")])
+	assert.Equal(t, sentRedis, sec.Services["redis"]["REDIS_PASSWORD"])
+	assert.Equal(t, testTSKey, sec.Root["TS_AUTHKEY"])
+
+	// Order: copy after the agent started, then the import seed, then one restart.
+	log := strings.Join(h.fake.CallLog(), "\n")
+	assert.Less(t, strings.Index(log, "ContainerStart"), strings.Index(log, "CopyToContainer"))
+	assert.Less(t, strings.Index(log, "CopyToContainer"), strings.LastIndex(log, "ContainerExecCreate"))
+	assert.Less(t, strings.LastIndex(log, "ContainerExecCreate"), strings.Index(log, "ContainerRestart"))
+	assert.Equal(t, 1, h.fake.Created()[0].Restarts, "one restart reads both seeds")
+
+	out := h.out.String()
+	assert.Contains(t, out, "gitea: port 2222:2222 is tcp only now")
+	assert.Contains(t, out, "svc:grafana:GF_OTHER")
+	assert.Contains(t, out, "homelab setup grafana")
+}
+
+func TestImport_SecretsNeverInTarOrArgv(t *testing.T) {
+	in, h := newImportInit(t)
+	require.NoError(t, in.Do(context.Background()))
+	sentinels := []string{sentGiteaDB, sentRedis, sentGrafana, testTSKey}
+
+	for _, c := range h.fake.Copies() {
+		for _, s := range sentinels {
+			assert.NotContains(t, string(c.Tar), s, "a secret is in the tar stream")
+		}
+	}
+	for _, e := range h.fake.Execs() {
+		argv, err := json.Marshal(e.Options)
+		require.NoError(t, err)
+		for _, s := range sentinels {
+			assert.NotContains(t, string(argv), s, "a secret is in an exec's argv/env")
+		}
+	}
+	spec, err := json.Marshal(h.fake.Created())
+	require.NoError(t, err)
+	for _, s := range sentinels {
+		assert.NotContains(t, string(spec), s)
+		assert.NotContains(t, h.out.String(), s, "a secret is printed")
+	}
+	// The import exec's stdin is where they travel.
+	execs := h.fake.Execs()
+	assert.Contains(t, string(execs[len(execs)-1].Stdin), sentGrafana)
+}
+
+func TestImport_RefusesBridgeWithAttachedContainers(t *testing.T) {
+	in, h := newImportInit(t)
+	h.fake.AddNetwork(network.Summary{Name: "home-services", Driver: "bridge", Scope: "local",
+		Containers: map[string]network.EndpointResource{"c1": {Name: "gitea"}}})
+	err := in.Do(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "homelab down -a")
+	assert.Contains(t, err.Error(), "gitea")
+	assert.Empty(t, h.fake.Inits(), "refused before the swarm is created")
+	assert.Empty(t, h.fake.Copies())
+}
+
+func TestImport_RemovesIdleComposeBridge(t *testing.T) {
+	in, h := newImportInit(t)
+	h.fake.AddNetwork(network.Summary{ID: "bridge1", Name: "home-services", Driver: "bridge", Scope: "local"})
+	require.NoError(t, in.Do(context.Background()))
+	log := strings.Join(h.fake.CallLog(), "\n")
+	require.Contains(t, log, "NetworkRemove bridge1")
+	assert.Less(t, strings.Index(log, "NetworkRemove bridge1"), strings.Index(log, "NetworkCreate home-services"))
+}
+
+func TestImport_TempDirRemovedOnError(t *testing.T) {
+	// A seed fails in the container.
+	in, h := newImportInit(t)
+	h.fake.SetExecExitCode(1)
+	require.Error(t, in.Do(context.Background()))
+	left, err := os.ReadDir(in.TempDir)
+	require.NoError(t, err)
+	assert.Empty(t, left, "the temp tree is removed")
+
+	// The old dir cannot be imported.
+	in, _ = newImportInit(t)
+	writeOld(t, in.Import, map[string]string{"services/Bad Name/config.yaml": "{}\n"})
+	require.ErrorContains(t, in.Do(context.Background()), "Bad Name")
+	left, err = os.ReadDir(in.TempDir)
+	require.NoError(t, err)
+	assert.Empty(t, left)
+
+	// And on success.
+	in, _ = newImportInit(t)
+	require.NoError(t, in.Do(context.Background()))
+	left, err = os.ReadDir(in.TempDir)
+	require.NoError(t, err)
+	assert.Empty(t, left)
+}

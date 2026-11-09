@@ -61,6 +61,7 @@ type Fake struct {
 	created    []*CreatedContainer
 	pulls      map[string]string // ref → ImagePull's JSON stream
 	leaves     int
+	copies     []Copy
 }
 
 // New returns an empty Fake.
@@ -408,6 +409,31 @@ func (f *Fake) NetworkRemove(_ context.Context, id string) error {
 		}
 	}
 	return fmt.Errorf("swarmtest: network %q not found: %w", id, errdefs.ErrNotFound)
+}
+
+// AddNetwork adds a network as it is (any driver, attached containers
+// included), e.g. the Compose-era home-services bridge.
+func (f *Fake) AddNetwork(n network.Summary) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if n.ID == "" {
+		n.ID = f.nextID("net")
+	}
+	f.networks = append(f.networks, n)
+}
+
+// NetworkInspect returns a network by ID or name, attached containers
+// included.
+func (f *Fake) NetworkInspect(_ context.Context, id string, _ network.InspectOptions) (network.Inspect, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rec("NetworkInspect", id)
+	for i := range f.networks {
+		if f.networks[i].ID == id || f.networks[i].Name == id {
+			return f.networks[i], nil
+		}
+	}
+	return network.Inspect{}, fmt.Errorf("swarmtest: network %q not found: %w", id, errdefs.ErrNotFound)
 }
 
 func (f *Fake) SecretList(_ context.Context, o swarm.SecretListOptions) ([]swarm.Secret, error) {
@@ -828,6 +854,36 @@ func (f *Fake) ContainerRestart(_ context.Context, name string, _ container.Stop
 	}
 	c.Restarts++
 	return nil
+}
+
+// Copy is one recorded CopyToContainer: the tar stream as sent.
+type Copy struct {
+	Container string
+	Path      string
+	Tar       []byte
+}
+
+// CopyToContainer records the tar stream; the container must exist.
+func (f *Fake) CopyToContainer(_ context.Context, name, dst string, content io.Reader, _ container.CopyToContainerOptions) error {
+	b, err := io.ReadAll(content)
+	if err != nil {
+		return err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rec("CopyToContainer", name, dst)
+	if _, err := f.createdByName(name); err != nil {
+		return err
+	}
+	f.copies = append(f.copies, Copy{Container: name, Path: dst, Tar: b})
+	return nil
+}
+
+// Copies returns the recorded CopyToContainer calls.
+func (f *Fake) Copies() []Copy {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]Copy(nil), f.copies...)
 }
 
 // FailServiceUpdateOnce makes the next ServiceUpdate of service id fail

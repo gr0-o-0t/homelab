@@ -205,15 +205,6 @@ func TestInit_WarnsAboutUFW(t *testing.T) {
 	assert.Contains(t, hints, "4789")
 }
 
-func TestInit_ImportNotImplemented(t *testing.T) {
-	in, h := newInit(t, testIP)
-	in.Import = "/old/config"
-	err := in.Do(context.Background())
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not implemented yet")
-	assert.Empty(t, h.fake.Inits())
-}
-
 type joinHarness struct {
 	fake  *swarmtest.Fake
 	kr    *secrets.Manager

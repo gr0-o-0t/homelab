@@ -30,6 +30,9 @@ type API interface {
 	NetworkList(ctx context.Context, options network.ListOptions) ([]network.Summary, error)
 	NetworkCreate(ctx context.Context, name string, options network.CreateOptions) (network.CreateResponse, error)
 	NetworkRemove(ctx context.Context, networkID string) error
+	// NetworkInspect lists a network's attached containers, which
+	// NetworkList leaves out (init --import checks the Compose-era bridge).
+	NetworkInspect(ctx context.Context, networkID string, options network.InspectOptions) (network.Inspect, error)
 	SecretList(ctx context.Context, options swarm.SecretListOptions) ([]swarm.Secret, error)
 	SecretCreate(ctx context.Context, secret swarm.SecretSpec) (swarm.SecretCreateResponse, error)
 	SecretRemove(ctx context.Context, id string) error
@@ -56,6 +59,9 @@ type API interface {
 		networkingConfig *network.NetworkingConfig, platform *ocispec.Platform, containerName string) (container.CreateResponse, error)
 	ContainerStart(ctx context.Context, container string, options container.StartOptions) error
 	ContainerRestart(ctx context.Context, container string, options container.StopOptions) error
+	// CopyToContainer extracts a tar stream at dstPath in a container
+	// (init --import's state tree; never secrets).
+	CopyToContainer(ctx context.Context, containerID, dstPath string, content io.Reader, options container.CopyToContainerOptions) error
 	// Info reports this engine's swarm membership (node ID, manager or not).
 	Info(ctx context.Context) (system.Info, error)
 }

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/groot/homelab/internal/agentstate"
 	"github.com/groot/homelab/internal/bootstrap"
+	"github.com/groot/homelab/internal/importer"
 	"github.com/groot/homelab/internal/swarm"
 )
 
@@ -57,6 +59,7 @@ var clusterLabelCmd = &cobra.Command{
 // agentSeedFlags are agent-seed's non-secret cluster.yaml settings.
 var agentSeedFlags struct {
 	root, tailnet, leaderAddr string
+	importDir                 string // --import: staging dir name under root
 }
 
 // agentSeedCmd stores root secrets, read as JSON from stdin, in the agent's
@@ -69,6 +72,17 @@ var agentSeedCmd = &cobra.Command{
 	Hidden: true,
 	Args:   cobra.NoArgs,
 	RunE: func(c *cobra.Command, _ []string) error {
+		if agentSeedFlags.importDir != "" {
+			if agentSeedFlags.tailnet != "" || agentSeedFlags.leaderAddr != "" {
+				return errors.New("agent-seed: --import takes no cluster settings")
+			}
+			names, err := importer.ApplySeed(agentSeedFlags.root, agentSeedFlags.importDir, os.Stdin)
+			if err != nil {
+				return err
+			}
+			_, _ = fmt.Fprintf(c.ErrOrStderr(), "imported the state; stored %s\n", strings.Join(names, ", "))
+			return nil
+		}
 		names, err := bootstrap.ApplySeed(agentSeedFlags.root, os.Stdin,
 			bootstrap.SeedInfo{Tailnet: agentSeedFlags.tailnet, LeaderAddr: agentSeedFlags.leaderAddr})
 		if err != nil {
@@ -87,6 +101,8 @@ func init() {
 	f.StringVar(&agentSeedFlags.root, "root", agentstate.Root, "agent state volume")
 	f.StringVar(&agentSeedFlags.tailnet, "tailnet", "", "tailnet MagicDNS suffix for cluster.yaml")
 	f.StringVar(&agentSeedFlags.leaderAddr, "leader-addr", "", "Swarm manager address for cluster.yaml")
+	f.StringVar(&agentSeedFlags.importDir, "import", "",
+		"staging dir (under --root) of an init --import tree: stdin is {\"root\":{…},\"services\":{…}}")
 	rootCmd.AddCommand(agentSeedCmd)
 }
 

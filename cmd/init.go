@@ -39,12 +39,16 @@ the leader agent (Caddy, Tailscale, the remote CLI).
 Needs Docker Engine and Tailscale up on the host: Swarm advertises the host's
 tailnet address only. TS_AUTHKEY (a reusable key) and the Cloudflare tokens are
 taken from this machine's keyring (homelab setup stored them) or prompted for.
-It prints the command that adds the other PCs.`,
+It prints the command that adds the other PCs.
+
+With --import <dir> (a Compose-era config dir, usually ~/.config/homelab) it
+also brings every installed service along: its config files, the files it
+bind-mounts, its exposure and routing, the desired state, and every declared
+secret from this machine's keyring. Run it in the logged-in session, after
+` + "`homelab down -a`" + ` and stopping the core. Docker volumes stay where they are and
+are reused by name.`,
 	Args: cobra.NoArgs,
 	RunE: func(c *cobra.Command, _ []string) error {
-		if initFlags.importDir != "" {
-			return errors.New("--import is not implemented yet")
-		}
 		img, err := bootstrap.ResolveImage(initFlags.image, Version)
 		if err != nil {
 			return err
@@ -62,6 +66,7 @@ It prints the command that adds the other PCs.`,
 				ReadFile:   os.ReadFile,
 				SaveClient: saveClient,
 				Image:      img,
+				Import:     initFlags.importDir,
 				Out:        c.OutOrStdout(),
 			}
 			return in.Do(cmdContext())
@@ -122,7 +127,7 @@ Needs Docker Engine and Tailscale up on the host.`,
 
 func init() {
 	initCmd.Flags().StringVar(&initFlags.image, "image", "", "agent image (default "+bootstrap.ImageRepo+":<version>; required on a development build)")
-	initCmd.Flags().StringVar(&initFlags.importDir, "import", "", "import an existing single-host config dir")
+	initCmd.Flags().StringVar(&initFlags.importDir, "import", "", "import a Compose-era config dir (e.g. ~/.config/homelab) into the new cluster")
 	joinCmd.Flags().StringVar(&joinFlags.image, "image", "", "agent image (default "+bootstrap.ImageRepo+":<version>; required on a development build)")
 	joinCmd.Flags().StringVar(&joinFlags.endpoint, "endpoint", "", "the leader's remote CLI URL (default https://homelab.<tailnet>:7443)")
 	joinCmd.Flags().BoolVar(&joinFlags.secretStdin, "secret-stdin", false, "read the cluster secret from stdin")

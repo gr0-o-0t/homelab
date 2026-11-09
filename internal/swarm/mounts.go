@@ -2,6 +2,7 @@ package swarm
 
 import (
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/compose-spec/compose-go/v2/types"
@@ -59,6 +60,35 @@ func translateMounts(stack, dir, specName string, proj *types.Project, svc types
 		mounts = append(mounts, mount.Mount{Type: mount.TypeTmpfs, Target: target})
 	}
 	return mounts, cfgs, vols, nil
+}
+
+// BindSources lists what svcDir's docker-compose.yml bind-mounts from inside
+// svcDir — the files and directories Translate turns into Swarm configs —
+// slash-separated, relative to svcDir, sorted and without duplicates. env
+// interpolates the compose file as Translate's would.
+func BindSources(svcDir string, env map[string]string) ([]string, error) {
+	abs, err := filepath.Abs(svcDir)
+	if err != nil {
+		return nil, err
+	}
+	proj, err := loadCompose(abs, filepath.Base(abs), env)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for key := range proj.Services {
+		svc := proj.Services[key]
+		for _, v := range svc.Volumes {
+			if v.Type != types.VolumeTypeBind {
+				continue
+			}
+			if rel, ok := under(abs, v.Source); ok && rel != "." && !slices.Contains(out, rel) {
+				out = append(out, rel)
+			}
+		}
+	}
+	slices.Sort(out)
+	return out, nil
 }
 
 // volumeName is the volume's compose name: when set (keeps gitea_data etc.),
