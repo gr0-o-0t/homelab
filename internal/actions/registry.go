@@ -35,19 +35,39 @@ var (
 	inQuiet       = Input{Key: "quiet", Label: "IDs only", Kind: Bool}
 )
 
-// logsInputs are the docker compose logs flags `homelab logs` takes.
-func logsInputs() []Input {
-	return []Input{
+// inContainer picks one container of a multi-container stack (exec, logs).
+var inContainer = Input{Key: "container", Label: "Container", Kind: Text,
+	Help: "A compose key or container_name of the stack; empty: exec its main one, logs all"}
+
+// logsInputs are the logs flags `homelab logs` takes. A service's logs come
+// from `docker service logs`, which has no --until; they take -c instead.
+func logsInputs(sc Scope) []Input {
+	in := []Input{
 		{Key: "follow", Label: "Follow", Kind: Bool, Default: "true"},
 		{Key: "tail", Label: "Lines from the end", Kind: Text, Default: "200", Help: `A number or "all"`},
 		{Key: "since", Label: "Since", Kind: Text, Help: `Timestamp or duration, e.g. "30m"`},
-		{Key: "until", Label: "Until", Kind: Text, Help: "Timestamp or duration"},
-		{Key: "timestamps", Label: "Timestamps", Kind: Bool},
 	}
+	if sc == Service {
+		in = append(in, inContainer)
+	} else {
+		in = append(in, Input{Key: "until", Label: "Until", Kind: Text, Help: "Timestamp or duration"})
+	}
+	return append(in, Input{Key: "timestamps", Label: "Timestamps", Kind: Bool})
+}
+
+func logsCommands(sc Scope) []string {
+	c := []string{"logs", "logs --follow", "logs --tail", "logs --since", "logs --timestamps"}
+	if sc == Service {
+		return append(c, "logs --container")
+	}
+	return append(c, "logs --until")
 }
 
 func logsArgs(t Target, in Inputs) []string {
 	args := []string{"logs"}
+	if in["container"] != "" {
+		args = append(args, "--container", in["container"])
+	}
 	if in.Bool("follow") {
 		args = append(args, "--follow")
 	}
@@ -68,8 +88,6 @@ func logsArgs(t Target, in Inputs) []string {
 	}
 	return args
 }
-
-var logsCommands = []string{"logs", "logs --follow", "logs --tail", "logs --since", "logs --until", "logs --timestamps"}
 
 // ── Args helpers ──────────────────────────────────────────────────────────────
 
@@ -175,8 +193,8 @@ func build() []Action {
 				Help: "Pull the latest images and recreate the containers", Args: named("update"),
 				Commands: []string{"update"}},
 			Action{ID: p + "logs", Label: "Logs", Group: GroupInspect, Icon: iconLogs, Scope: sc,
-				Help: "Container logs", Inputs: logsInputs(), Args: logsArgs, Stream: true,
-				Commands: logsCommands},
+				Help: "Container logs", Inputs: logsInputs(sc), Args: logsArgs, Stream: true,
+				Commands: logsCommands(sc)},
 			Action{ID: p + "config", Label: "Compose config", Group: GroupInspect, Icon: "eye", Scope: sc,
 				Help: "Resolved docker compose configuration — contains secrets in plain text",
 				Args: named("config"), Commands: []string{"config"}},
@@ -315,6 +333,7 @@ func build() []Action {
 				{Key: "user", Label: "User", Kind: Text},
 				{Key: "workdir", Label: "Working directory", Kind: Text},
 				{Key: "env", Label: "Environment", Kind: Text, Help: "Space-separated KEY=VALUE pairs"},
+				inContainer,
 			},
 			Args: func(t Target, in Inputs) []string {
 				args := []string{"exec", "--no-tty"}
@@ -324,13 +343,16 @@ func build() []Action {
 				if in["workdir"] != "" {
 					args = append(args, "--workdir", in["workdir"])
 				}
+				if in["container"] != "" {
+					args = append(args, "--container", in["container"])
+				}
 				for _, e := range fields(in["env"]) {
 					args = append(args, "--env", e)
 				}
 				return append(append(args, t.Name), fields(in["command"])...)
 			},
 			Available: isRunning,
-			Commands:  []string{"exec --no-tty", "exec --user", "exec --workdir", "exec --env"}},
+			Commands:  []string{"exec --no-tty", "exec --user", "exec --workdir", "exec --env", "exec --container"}},
 		Action{ID: "service.prune", Multi: true, Label: "Prune", Group: GroupDanger, Icon: "broom", Scope: Service,
 			Danger: TypeName, Help: "Take the service down and delete its images and VOLUMES — destroys data unless volumes are kept",
 			Inputs: []Input{inKeepVolumes, inKeepImages},

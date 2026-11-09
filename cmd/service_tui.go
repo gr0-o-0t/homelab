@@ -89,13 +89,18 @@ func enabledExtensions(root string) map[string]bool {
 // signals is immediate process termination with no cleanup at all. Register
 // our own handler so the child process is still killed and reaped, then let
 // the Program shut down cleanly (restoring the terminal) before exiting.
-func runLogTUI(root, serviceName string) error {
+func runLogTUI(root, serviceName, container string) error {
 	// The viewer streams `homelab logs -f`, so it shows exactly what the CLI
-	// would. An empty service name means the core stack.
+	// would: every container of the stack, key-prefixed, or -c's only. An
+	// empty service name means the core stack.
 	title, args := serviceName, []string{"logs", "-f", "-n", "500"}
-	if serviceName == "" {
+	switch {
+	case serviceName == "":
 		title = "core"
-	} else {
+	case container != "":
+		title = serviceName + " / " + container
+		args = append(args, "-c", container, serviceName)
+	default:
 		args = append(args, serviceName)
 	}
 	model := tuiLogs.New(title, append(selfCLI(root), args...))

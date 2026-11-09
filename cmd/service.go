@@ -56,6 +56,7 @@ func init() {
 var logsFlags struct {
 	follow, timestamps, tui bool
 	tail, since, until      string
+	container               string
 }
 
 // ── new ───────────────────────────────────────────────────────────────────────
@@ -187,24 +188,22 @@ func runServiceRestart(_ *cobra.Command, args []string) error {
 	})
 }
 
-func runServiceLogs(_ *cobra.Command, args []string) error {
+func runServiceLogs(c *cobra.Command, args []string) error {
 	name := args[0]
 	root := configDir()
 	if logsFlags.tui {
-		// The viewer streams `homelab logs -f <svc>`, which finds the node.
+		// The viewer streams `homelab logs -f [-c x] <svc>` (runStackLogs).
 		if err := validateService(root, name); err != nil {
 			return err
 		}
-		return runLogTUI(root, name)
+		return runLogTUI(root, name, logsFlags.container)
 	}
-	return onTaskContainer(root, name, func(id string) error {
-		return dockerCLI(append(logsArgs(), id))
-	})
+	return runStackLogs(root, name, logsFlags.container, c.OutOrStdout(), c.ErrOrStderr())
 }
 
-// logsArgs translates homelab's logs flags into `docker logs` (and, for the
-// core stack, `docker compose logs`) flags; they are the same flags, so this
-// is a straight pass-through.
+// logsArgs translates homelab's logs flags into the core stack's
+// `docker compose logs` flags; they are the same flags, so this is a
+// straight pass-through.
 func logsArgs() []string {
 	a := []string{"logs"}
 	if logsFlags.follow {

@@ -88,10 +88,14 @@ func TestTranslate_GiteaAliasesAndVolume(t *testing.T) {
 		"com.docker.stack.namespace": "gitea",
 		"homelab.service":            "gitea",
 		"homelab.role":               "core",
+		"homelab.container_name":     "gitea",
 	}, s.Labels)
 	assert.Empty(t, s.TaskTemplate.Placement, "Task 8 applies constraints")
 
 	cs := s.TaskTemplate.ContainerSpec
+	// exec/logs find task containers by exact label, not by name prefix.
+	assert.Equal(t, "gitea", cs.Labels["com.docker.stack.namespace"])
+	assert.Equal(t, "gitea", cs.Labels["homelab.container_name"])
 	assert.Equal(t, "gitea/gitea:latest-rootless", cs.Image)
 	assert.Equal(t, "1000:1000", cs.User)
 	assert.Nil(t, cs.Env, "env goes through a secret (Task 7), never the spec")
@@ -387,4 +391,21 @@ func TestTranslate_EveryCatalogServiceTranslates(t *testing.T) {
 		})
 	}
 	assert.Greater(t, n, 50)
+}
+
+// Every task container carries its stack and compose container_name as
+// labels, so exec/logs select a stack's containers exactly.
+func TestTranslate_ContainerLabelsNameStackAndContainer(t *testing.T) {
+	st := translate(t, "immich")
+	ml := specByName(t, st, "immich_immich-machine-learning")
+	assert.Equal(t, "immich", ml.TaskTemplate.ContainerSpec.Labels["com.docker.stack.namespace"])
+	assert.Equal(t, "immich-machine-learning", ml.TaskTemplate.ContainerSpec.Labels["homelab.container_name"])
+	srv := specByName(t, st, "immich_immich-server")
+	assert.Equal(t, "immich", srv.Labels["homelab.container_name"], "on the service too, for -c on the leader")
+
+	for _, s := range translate(t, "multinet").Services {
+		assert.Equal(t, "multinet", s.TaskTemplate.ContainerSpec.Labels["com.docker.stack.namespace"])
+		_, has := s.TaskTemplate.ContainerSpec.Labels["homelab.container_name"]
+		assert.False(t, has, "%s has no container_name", s.Name)
+	}
 }

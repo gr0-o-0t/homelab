@@ -1,10 +1,13 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/docker/docker/api/types/container"
@@ -33,9 +36,9 @@ func TestCluster_RefusedOffManager(t *testing.T) {
 	assert.True(t, remote.Mutating["cluster"], "cluster takes the server-wide lock")
 }
 
-// On the leader, exec/logs of a service whose task runs on another node go
-// to that node's agent, with the argv the leader got (minus its own
-// --config-dir).
+// On the leader, exec of a service whose task runs on another node goes to
+// that node's agent, with the argv the leader got (minus its own
+// --config-dir), -c included.
 func TestExec_ForwardsToTaskNode(t *testing.T) {
 	root := makeBatchFixture(t)
 	f := fakeSwarm(t)
@@ -61,11 +64,11 @@ func TestExec_ForwardsToTaskNode(t *testing.T) {
 	assert.Equal(t, "s3cret", gotSecret)
 
 	resetFlags()
-	code = executeArgs([]string{"--config-dir=" + root, "logs", "-n", "5", "alpha"})
+	code = executeArgs([]string{"--config-dir=" + root, "exec", "-c", "web", "alpha", "sh"})
 	assert.Equal(t, 7, code)
 	require.Len(t, gotArgv, 2)
 	assert.Equal(t, []string{"exec", "-u", "root", "alpha", "ls", "-la"}, gotArgv[0])
-	assert.Equal(t, []string{"logs", "-n", "5", "alpha"}, gotArgv[1])
+	assert.Equal(t, []string{"exec", "-c", "web", "alpha", "sh"}, gotArgv[1])
 }
 
 // stubDocker records the docker CLI invocations instead of running them, and
@@ -80,9 +83,14 @@ func stubDocker(t *testing.T) *[][]string {
 	return &got
 }
 
-func runningTask(id, svcName string, created int64) container.Summary {
-	return container.Summary{ID: id, State: "running", Created: created,
-		Labels: map[string]string{"com.docker.swarm.service.name": svcName}}
+// runningTask is a running Swarm task container of stack, labelled as
+// translate labels it.
+func runningTask(id, stack, key, containerName string, created int64) container.Summary {
+	l := map[string]string{"com.docker.swarm.service.name": stack + "_" + key, "com.docker.stack.namespace": stack}
+	if containerName != "" {
+		l["homelab.container_name"] = containerName
+	}
+	return container.Summary{ID: id, State: "running", Created: created, Labels: l}
 }
 
 // A task on the leader itself runs here, by container ID, with today's flags.
@@ -90,16 +98,13 @@ func TestExec_LocalTaskNotForwarded(t *testing.T) {
 	root := makeBatchFixture(t)
 	f := fakeSwarm(t)
 	taskOn(t, f, "alpha", "mini1")
-	f.SetContainers([]container.Summary{runningTask("c-old", "alpha_web", 1), runningTask("c-new", "alpha_web", 2)})
+	f.SetContainers([]container.Summary{runningTask("c-old", "alpha", "web", "", 1), runningTask("c-new", "alpha", "web", "", 2)})
 	got := stubDocker(t)
 
 	resetFlags()
 	require.Zero(t, executeArgs([]string{"--config-dir", root, "exec", "-u", "root", "-w", "/srv", "-e", "A=1", "alpha", "ls", "-la"}))
-	resetFlags()
-	require.Zero(t, executeArgs([]string{"--config-dir", root, "logs", "-f", "-n", "5", "--since", "1h", "alpha"}))
-	require.Len(t, *got, 2)
+	require.Len(t, *got, 1)
 	assert.Equal(t, []string{"exec", "-i", "--user", "root", "--workdir", "/srv", "--env", "A=1", "c-new", "ls", "-la"}, (*got)[0])
-	assert.Equal(t, []string{"logs", "-f", "--tail", "5", "--since", "1h", "c-new"}, (*got)[1])
 }
 
 // A worker agent has no service files: it finds the container from its
@@ -108,16 +113,14 @@ func TestExec_WorkerRunsWithoutStateDir(t *testing.T) {
 	empty := t.TempDir()
 	f := fakeSwarm(t)
 	f.SetInfo(system.Info{Swarm: dswarm.Info{LocalNodeState: dswarm.LocalNodeStateActive, NodeID: "n2"}})
-	f.SetContainers([]container.Summary{runningTask("c1", "alpha_alpha", 1), runningTask("c2", "alpha_db", 1)})
+	f.SetContainers([]container.Summary{runningTask("c1", "alpha", "alpha", "", 1), runningTask("c2", "alpha", "db", "", 1)})
 	got := stubDocker(t)
 
 	resetFlags()
 	require.Zero(t, executeArgs([]string{"--config-dir", empty, "exec", "-T", "alpha", "sh"}))
 	resetFlags()
-	require.Zero(t, executeArgs([]string{"--config-dir", empty, "logs", "-t", "alpha"}))
-	require.Len(t, *got, 2)
-	assert.Equal(t, []string{"exec", "-i", "c1", "sh"}, (*got)[0])
-	assert.Equal(t, []string{"logs", "-t", "c1"}, (*got)[1])
+	require.Zero(t, executeArgs([]string{"--config-dir", empty, "exec", "-c", "db", "alpha", "psql"}))
+	require.Equal(t, [][]string{{"exec", "-i", "c1", "sh"}, {"exec", "-i", "c2", "psql"}}, *got)
 	assert.NotContains(t, f.CallLog(), "TaskList", "a worker cannot list tasks")
 
 	resetFlags()
@@ -132,6 +135,155 @@ func TestExec_LeaderValidatesService(t *testing.T) {
 	got := stubDocker(t)
 	resetFlags()
 	assert.NotZero(t, executeArgs([]string{"--config-dir", root, "exec", "nosuch", "sh"}))
+	assert.Empty(t, *got)
+}
+
+// immichStack installs immich in root and deploys its two services, both
+// running on the leader: no immich_immich; the server's container_name is
+// the stack's name.
+func immichStack(t *testing.T, root string, f *swarmtest.Fake) {
+	t.Helper()
+	dir := filepath.Join(root, "services", "immich")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte("services: {}\n"), 0o644))
+	f.SetInfo(system.Info{Swarm: dswarm.Info{LocalNodeState: dswarm.LocalNodeStateActive, NodeID: "m1", ControlAvailable: true}})
+	f.SetNodes([]dswarm.Node{{ID: "m1", Description: dswarm.NodeDescription{Hostname: "mini1"}}})
+	for _, s := range []struct{ key, cname string }{{"immich-server", "immich"}, {"immich-machine-learning", "immich-machine-learning"}} {
+		resp, err := f.ServiceCreate(context.Background(), dswarm.ServiceSpec{Annotations: dswarm.Annotations{
+			Name: "immich_" + s.key, Labels: map[string]string{"homelab.service": "immich", "homelab.container_name": s.cname}}},
+			dswarm.ServiceCreateOptions{})
+		require.NoError(t, err)
+		f.AddTask(dswarm.Task{ID: "t-" + s.key, ServiceID: resp.ID, NodeID: "m1", DesiredState: dswarm.TaskStateRunning,
+			Status: dswarm.TaskStatus{State: dswarm.TaskStateRunning}})
+	}
+	f.SetContainers([]container.Summary{
+		runningTask("srv", "immich", "immich-server", "immich", 1),
+		runningTask("ml", "immich", "immich-machine-learning", "immich-machine-learning", 1),
+	})
+}
+
+// `exec immich` reaches immich-server (container_name immich); -c takes a
+// compose key or a container_name.
+func TestExec_ImmichDefaultAndContainerFlag(t *testing.T) {
+	root := makeBatchFixture(t)
+	f := fakeSwarm(t)
+	immichStack(t, root, f)
+	got := stubDocker(t)
+	for _, argv := range [][]string{
+		{"exec", "immich", "sh"},
+		{"exec", "-c", "immich-machine-learning", "immich", "sh"},
+		{"exec", "--container", "immich", "immich", "sh"},
+		{"exec", "-c", "immich-server", "immich", "sh"},
+	} {
+		resetFlags()
+		require.Zero(t, executeArgs(append([]string{"--config-dir", root}, argv...)), "%v", argv)
+	}
+	assert.Equal(t, [][]string{{"exec", "-i", "srv", "sh"}, {"exec", "-i", "ml", "sh"}, {"exec", "-i", "srv", "sh"}, {"exec", "-i", "srv", "sh"}}, *got)
+
+	resetFlags()
+	assert.NotZero(t, executeArgs([]string{"--config-dir", root, "exec", "-c", "redis", "immich", "sh"}))
+	assert.Len(t, *got, 4)
+}
+
+// stubServiceLogs makes every `docker service logs` print two lines naming
+// its service, and records the argv.
+func stubServiceLogs(t *testing.T) *[][]string {
+	t.Helper()
+	var mu sync.Mutex
+	var got [][]string
+	old := serviceLogsCLI
+	serviceLogsCLI = func(_ context.Context, args []string, stdout, stderr io.Writer) error {
+		mu.Lock()
+		got = append(got, args)
+		mu.Unlock()
+		name := args[len(args)-1]
+		_, _ = io.WriteString(stdout, "hello from "+name+"\nsecond ")
+		_, _ = io.WriteString(stdout, "line\n")
+		_, _ = io.WriteString(stderr, "warn "+name)
+		return nil
+	}
+	t.Cleanup(func() { serviceLogsCLI = old })
+	return &got
+}
+
+func runLogs(t *testing.T, argv ...string) (int, string, string) {
+	t.Helper()
+	var out, errb bytes.Buffer
+	rootCmd.SetOut(&out)
+	rootCmd.SetErr(&errb)
+	t.Cleanup(func() { rootCmd.SetOut(nil); rootCmd.SetErr(nil) })
+	resetFlags()
+	return executeArgs(argv), out.String(), errb.String()
+}
+
+// `logs immich` streams every service of the stack, each line prefixed with
+// its compose key, as compose did.
+func TestLogs_StreamsEveryServiceWithPrefixes(t *testing.T) {
+	root := makeBatchFixture(t)
+	f := fakeSwarm(t)
+	immichStack(t, root, f)
+	got := stubServiceLogs(t)
+
+	code, out, errOut := runLogs(t, "--config-dir", root, "logs", "-f", "-n", "50", "-t", "--since", "1h", "immich")
+	require.Zero(t, code)
+	assert.ElementsMatch(t, [][]string{
+		{"service", "logs", "--raw", "--follow", "--timestamps", "--tail", "50", "--since", "1h", "immich_immich-machine-learning"},
+		{"service", "logs", "--raw", "--follow", "--timestamps", "--tail", "50", "--since", "1h", "immich_immich-server"},
+	}, *got)
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	assert.ElementsMatch(t, []string{
+		"immich-machine-learning | hello from immich_immich-machine-learning",
+		"immich-machine-learning | second line",
+		"immich-server           | hello from immich_immich-server",
+		"immich-server           | second line",
+	}, lines)
+	assert.Contains(t, errOut, "immich-server           | warn immich_immich-server\n")
+	assert.Empty(t, f.Execs())
+}
+
+func TestLogs_ContainerFlagLimitsToOneService(t *testing.T) {
+	root := makeBatchFixture(t)
+	f := fakeSwarm(t)
+	immichStack(t, root, f)
+	got := stubServiceLogs(t)
+
+	code, out, _ := runLogs(t, "--config-dir", root, "logs", "-c", "immich", "immich")
+	require.Zero(t, code)
+	require.Len(t, *got, 1)
+	assert.Equal(t, "immich_immich-server", (*got)[0][len((*got)[0])-1])
+	assert.NotContains(t, out, "machine-learning")
+}
+
+func TestLogs_UntilRefused(t *testing.T) {
+	root := makeBatchFixture(t)
+	f := fakeSwarm(t)
+	immichStack(t, root, f)
+	got := stubServiceLogs(t)
+	code, _, _ := runLogs(t, "--config-dir", root, "logs", "--until", "5m", "immich")
+	assert.NotZero(t, code)
+	assert.Empty(t, *got)
+}
+
+// An ambiguous stack is refused for exec with the choices listed.
+func TestExec_AmbiguousStackRefused(t *testing.T) {
+	root := makeBatchFixture(t)
+	f := fakeSwarm(t)
+	f.SetInfo(system.Info{Swarm: dswarm.Info{LocalNodeState: dswarm.LocalNodeStateActive, NodeID: "n2"}})
+	f.SetContainers([]container.Summary{runningTask("a", "alpha", "web", "alpha-web", 1), runningTask("b", "alpha", "db", "", 1)})
+	got := stubDocker(t)
+	_ = root
+	empty := t.TempDir()
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	oldErr := os.Stderr
+	os.Stderr = w
+	resetFlags()
+	code := executeArgs([]string{"--config-dir", empty, "exec", "alpha", "sh"})
+	os.Stderr = oldErr
+	_ = w.Close()
+	msg, _ := io.ReadAll(r)
+	assert.NotZero(t, code)
+	assert.Contains(t, string(msg), "db, web (alpha-web)")
 	assert.Empty(t, *got)
 }
 

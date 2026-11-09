@@ -350,7 +350,7 @@ func TestLocateTask(t *testing.T) {
 	f := swarmtest.New()
 	ctx := context.Background()
 	// not a manager: local
-	_, local, err := LocateTask(ctx, f, "gitea")
+	_, local, err := LocateTask(ctx, f, "gitea", "")
 	require.NoError(t, err)
 	assert.True(t, local)
 
@@ -362,7 +362,7 @@ func TestLocateTask(t *testing.T) {
 	require.NoError(t, err)
 	f.AddTask(dswarm.Task{ID: "t1", ServiceID: resp.ID, NodeID: "n2", DesiredState: dswarm.TaskStateRunning,
 		Status: dswarm.TaskStatus{State: dswarm.TaskStateRunning}})
-	host, local, err := LocateTask(ctx, f, "gitea")
+	host, local, err := LocateTask(ctx, f, "gitea", "")
 	require.NoError(t, err)
 	assert.False(t, local)
 	assert.Equal(t, "laptop", host)
@@ -443,35 +443,83 @@ func TestJoin_RefusesEngineAlreadyInSwarm(t *testing.T) {
 	assert.Empty(t, h.fake.Joins())
 }
 
-func taskContainer(id, svcName string, created int64) container.Summary {
-	return container.Summary{ID: id, State: "running", Created: created,
-		Labels: map[string]string{SwarmServiceLabel: svcName}}
+// taskContainer is a running Swarm task container of stack, as translate
+// labels it.
+func taskContainer(id, stack, key, containerName string, created int64) container.Summary {
+	l := map[string]string{SwarmServiceLabel: stack + "_" + key, "com.docker.stack.namespace": stack}
+	if containerName != "" {
+		l["homelab.container_name"] = containerName
+	}
+	return container.Summary{ID: id, State: "running", Created: created, Labels: l}
+}
+
+func immichContainers() []container.Summary {
+	return []container.Summary{
+		taskContainer("srv", "immich", "immich-server", "immich", 1),
+		taskContainer("ml", "immich", "immich-machine-learning", "immich-machine-learning", 1),
+	}
 }
 
 func TestTaskContainer(t *testing.T) {
 	ctx := context.Background()
 	f := swarmtest.New()
 	f.SetContainers([]container.Summary{
-		taskContainer("old", "gitea_gitea", 1), taskContainer("new", "gitea_gitea", 2),
-		taskContainer("db", "gitea_db", 3), taskContainer("x", "other_other", 4),
+		taskContainer("old", "gitea", "gitea", "", 1), taskContainer("new", "gitea", "gitea", "", 2),
+		taskContainer("db", "gitea", "db", "", 3), taskContainer("x", "other", "other", "", 4),
 	})
-	id, err := TaskContainer(ctx, f, "gitea")
+	id, err := TaskContainer(ctx, f, "gitea", "")
 	require.NoError(t, err)
 	assert.Equal(t, "new", id, "the newest task during a rolling update")
+	id, err = TaskContainer(ctx, f, "gitea", "db")
+	require.NoError(t, err)
+	assert.Equal(t, "db", id)
 
 	// one service: no key needed
-	f.SetContainers([]container.Summary{taskContainer("w", "glance_web", 1)})
-	id, err = TaskContainer(ctx, f, "glance")
+	f.SetContainers([]container.Summary{taskContainer("w", "glance", "web", "", 1)})
+	id, err = TaskContainer(ctx, f, "glance", "")
 	require.NoError(t, err)
 	assert.Equal(t, "w", id)
 
-	// several, none named like the stack
-	f.SetContainers([]container.Summary{taskContainer("a", "immich_server", 1), taskContainer("b", "immich_ml", 1)})
-	_, err = TaskContainer(ctx, f, "immich")
-	require.ErrorContains(t, err, "several containers")
-
-	_, err = TaskContainer(ctx, f, "nothing")
+	_, err = TaskContainer(ctx, f, "nothing", "")
 	require.ErrorContains(t, err, "no running container on this node")
+}
+
+// immich has no immich_immich: its server is the one whose container_name
+// is the stack's name; -c takes a compose key or a container_name.
+func TestTaskContainer_ImmichDefaultAndContainerFlag(t *testing.T) {
+	ctx := context.Background()
+	f := swarmtest.New()
+	f.SetContainers(immichContainers())
+	for want, id := range map[string]string{
+		"": "srv", "immich-machine-learning": "ml", "immich-server": "srv", "immich": "srv",
+	} {
+		got, err := TaskContainer(ctx, f, "immich", want)
+		require.NoError(t, err, want)
+		assert.Equal(t, id, got, "-c %q", want)
+	}
+	_, err := TaskContainer(ctx, f, "immich", "redis")
+	require.ErrorContains(t, err, `no container "redis"`)
+	require.ErrorContains(t, err, "immich-machine-learning")
+}
+
+func TestPickService_AmbiguousStackRefusedWithList(t *testing.T) {
+	_, err := PickService("appflowy", []StackService{
+		{Name: "appflowy_web", Key: "web", ContainerName: "appflowy-web"},
+		{Name: "appflowy_cloud", Key: "cloud", ContainerName: "appflowy-cloud"},
+	}, "")
+	require.ErrorContains(t, err, "-c")
+	require.ErrorContains(t, err, "cloud (appflowy-cloud), web (appflowy-web)")
+}
+
+// `foo` must never reach a container of the stack `foo_bar` (whose task
+// containers are named foo_bar_<key>): selection is by exact stack label.
+func TestTaskContainer_ExactStackLabel(t *testing.T) {
+	f := swarmtest.New()
+	f.SetContainers([]container.Summary{taskContainer("fb", "foo_bar", "web", "", 1)})
+	_, err := TaskContainer(context.Background(), f, "foo", "")
+	require.ErrorContains(t, err, "no running container on this node")
+	_, err = TaskContainer(context.Background(), f, "foo", "bar_web")
+	require.Error(t, err)
 }
 
 type infoErrAPI struct{ *swarmtest.Fake }
@@ -481,7 +529,25 @@ func (infoErrAPI) Info(context.Context) (system.Info, error) {
 }
 
 func TestLocateTask_ReportsEngineErrors(t *testing.T) {
-	_, local, err := LocateTask(context.Background(), infoErrAPI{swarmtest.New()}, "gitea")
+	_, local, err := LocateTask(context.Background(), infoErrAPI{swarmtest.New()}, "gitea", "")
 	require.ErrorContains(t, err, "Docker daemon")
 	assert.False(t, local)
+}
+
+// An engine init must refuse is refused before any secret is asked for.
+func TestInit_PreflightBeforeAnyPrompt(t *testing.T) {
+	for name, set := range map[string]func(*swarmtest.Fake){
+		"in a swarm": func(f *swarmtest.Fake) {
+			f.SetInfo(system.Info{Swarm: dswarm.Info{LocalNodeState: dswarm.LocalNodeStateActive}})
+		},
+		"agent exists": func(f *swarmtest.Fake) {
+			f.SetContainers([]container.Summary{{ID: "c", Names: []string{"/homelab-agent"}}})
+		},
+	} {
+		in, h := newInit(t, testIP)
+		require.NoError(t, h.kr.Delete("", "TS_AUTHKEY")) // would be prompted for
+		set(h.fake)
+		require.Error(t, in.Do(context.Background()), name)
+		assert.Empty(t, h.prompts, "%s: prompted before refusing", name)
+	}
 }

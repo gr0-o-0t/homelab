@@ -71,7 +71,22 @@ const (
 	LabelNamespace = "com.docker.stack.namespace"
 	LabelService   = "homelab.service"
 	LabelRole      = "homelab.role"
+	// LabelContainerName is the compose container_name, when it has one:
+	// exec/logs -c accept it as well as the compose key.
+	LabelContainerName = "homelab.container_name"
 )
+
+func serviceLabels(stack string, role Role, containerName string) map[string]string {
+	l := map[string]string{
+		LabelNamespace: stack,
+		LabelService:   stack,
+		LabelRole:      string(role),
+	}
+	if containerName != "" {
+		l[LabelContainerName] = containerName
+	}
+	return l
+}
 
 // Stack is one catalog service translated into Swarm objects. Only Env may
 // hold secrets; the specs never do.
@@ -193,9 +208,18 @@ func translateService(stack, dir string, proj *types.Project, svc types.ServiceC
 		return swarm.ServiceSpec{}, nil, nil, err
 	}
 
+	// Task containers carry the stack and the compose container_name, so a
+	// node finds a stack's containers by exact label (exec/logs), never by
+	// a name prefix that would let `foo` match `foo_bar`.
+	clabels := map[string]string{}
+	maps.Copy(clabels, svc.Labels)
+	clabels[LabelNamespace] = stack
+	if svc.ContainerName != "" {
+		clabels[LabelContainerName] = svc.ContainerName
+	}
 	cs := &swarm.ContainerSpec{
 		Image:           svc.Image,
-		Labels:          svc.Labels,
+		Labels:          clabels,
 		Command:         svc.Entrypoint,
 		Args:            svc.Command,
 		Hostname:        svc.Hostname,
@@ -228,11 +252,7 @@ func translateService(stack, dir string, proj *types.Project, svc types.ServiceC
 	spec := swarm.ServiceSpec{
 		Annotations: swarm.Annotations{
 			Name: specName,
-			Labels: map[string]string{
-				LabelNamespace: stack,
-				LabelService:   stack,
-				LabelRole:      string(role),
-			},
+			Labels: serviceLabels(stack, role, svc.ContainerName),
 		},
 		TaskTemplate: swarm.TaskSpec{
 			ContainerSpec: cs,

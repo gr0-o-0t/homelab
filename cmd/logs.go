@@ -38,4 +38,5 @@ func init() {
 	f.StringVar(&logsFlags.since, "since", "", `Show logs since timestamp or relative duration (e.g. "30m", "2h")`)
 	f.StringVar(&logsFlags.until, "until", "", `Show logs before timestamp or relative duration`)
 	f.BoolVar(&logsFlags.tui, "tui", false, "Open the full-screen log viewer")
+	f.StringVarP(&logsFlags.container, "container", "c", "", "Only this container of the service: a compose key or container_name")
 }

@@ -479,12 +479,17 @@ func (in *Init) Do(ctx context.Context) (err error) {
 	if err != nil {
 		return err
 	}
+	// Refuse an engine that cannot take a new swarm before asking for any
+	// secret; the (slow) pull comes after the prompts.
+	if err := checkEngine(ctx, in.API); err != nil {
+		return err
+	}
 	vals, err := in.secrets()
 	if err != nil {
 		return err
 	}
 	_, _ = fmt.Fprintln(in.Out, "Note: TS_AUTHKEY must be a reusable auth key — every `homelab join` hands it to that PC's agent; a one-shot key cannot be reused.")
-	if err := preflight(ctx, in.API, in.Image, in.Out); err != nil {
+	if err := EnsureImage(ctx, in.API, in.Image, in.Out); err != nil {
 		return err
 	}
 

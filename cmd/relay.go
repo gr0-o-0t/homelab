@@ -50,10 +50,11 @@ var dockerCLI = func(args []string) error {
 	return err
 }
 
-// onTaskContainer runs fn with the ID of svc's task container on this node,
+// onTaskContainer runs fn with the ID of svc's task container on this node
+// (want: -c, see bootstrap.PickService),
 // relaying the whole invocation to another agent first when, on the leader,
 // the task runs elsewhere.
-func onTaskContainer(root, svc string, fn func(id string) error) error {
+func onTaskContainer(root, svc, want string, fn func(id string) error) error {
 	if err := validName(svc); err != nil {
 		return err
 	}
@@ -83,7 +84,7 @@ func onTaskContainer(root, svc string, fn func(id string) error) error {
 		}
 	}
 	if inSwarm && !worker {
-		host, local, err := bootstrap.LocateTask(ctx, api, svc)
+		host, local, err := bootstrap.LocateTask(ctx, api, svc, want)
 		if err != nil {
 			return fmt.Errorf("finding the node running %s: %w", svc, err)
 		}
@@ -91,7 +92,7 @@ func onTaskContainer(root, svc string, fn func(id string) error) error {
 			return relayTo(host, svc)
 		}
 	}
-	id, err := bootstrap.TaskContainer(ctx, api, svc)
+	id, err := bootstrap.TaskContainer(ctx, api, svc, want)
 	if err != nil {
 		return err
 	}

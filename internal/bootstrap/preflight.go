@@ -58,10 +58,9 @@ func EnsureImage(ctx context.Context, api swarm.API, img string, out io.Writer) 
 	return nil
 }
 
-// preflight refuses, before anything changes, an engine already in a swarm
-// or already running an agent container, then makes sure the agent image
-// is there. init and join only mutate the swarm once it passes.
-func preflight(ctx context.Context, api swarm.API, img string, out io.Writer) error {
+// checkEngine refuses, before anything is asked or changed, an engine
+// already in a swarm or already running an agent container.
+func checkEngine(ctx context.Context, api swarm.API) error {
 	info, err := api.Info(ctx)
 	if err != nil {
 		return fmt.Errorf("asking Docker for its swarm state: %w", err)
@@ -84,6 +83,15 @@ func preflight(ctx context.Context, api swarm.API, img string, out io.Writer) er
 					AgentContainer, AgentContainer)
 			}
 		}
+	}
+	return nil
+}
+
+// preflight is checkEngine, then the agent image made available: init and
+// join only mutate the swarm once it passes.
+func preflight(ctx context.Context, api swarm.API, img string, out io.Writer) error {
+	if err := checkEngine(ctx, api); err != nil {
+		return err
 	}
 	return EnsureImage(ctx, api, img, out)
 }
