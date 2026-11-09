@@ -45,6 +45,10 @@ It prints the command that adds the other PCs.`,
 		if initFlags.importDir != "" {
 			return errors.New("--import is not implemented yet")
 		}
+		img, err := bootstrap.ResolveImage(initFlags.image, Version)
+		if err != nil {
+			return err
+		}
 		sm, err := openSecrets()
 		if err != nil {
 			return fmt.Errorf("opening the keyring: %w", err)
@@ -57,7 +61,7 @@ It prints the command that adds the other PCs.`,
 				Prompt:     terminalPrompt,
 				ReadFile:   os.ReadFile,
 				SaveClient: saveClient,
-				Image:      agentImage(initFlags.image),
+				Image:      img,
 				Out:        c.OutOrStdout(),
 			}
 			return in.Do(cmdContext())
@@ -80,6 +84,16 @@ printed (or reads it from stdin with --secret-stdin).
 Needs Docker Engine and Tailscale up on the host.`,
 	Args: cobra.NoArgs,
 	RunE: func(c *cobra.Command, _ []string) error {
+		// Refuse a bad endpoint or image before the secret is asked for.
+		if joinFlags.endpoint != "" {
+			if err := bootstrap.ValidateEndpoint(joinFlags.endpoint); err != nil {
+				return err
+			}
+		}
+		img, err := bootstrap.ResolveImage(joinFlags.image, Version)
+		if err != nil {
+			return err
+		}
 		secret, err := readClusterSecret(os.Stdin, joinFlags.secretStdin)
 		if err != nil {
 			return err
@@ -98,7 +112,7 @@ Needs Docker Engine and Tailscale up on the host.`,
 				Leader:     callLeader,
 				ReadFile:   os.ReadFile,
 				SaveClient: saveClient,
-				Image:      agentImage(joinFlags.image),
+				Image:      img,
 				Out:        c.OutOrStdout(),
 			}
 			return j.Do(cmdContext())
@@ -107,19 +121,12 @@ Needs Docker Engine and Tailscale up on the host.`,
 }
 
 func init() {
-	initCmd.Flags().StringVar(&initFlags.image, "image", "", "agent image (default "+bootstrap.ImageRepo+":<version>)")
+	initCmd.Flags().StringVar(&initFlags.image, "image", "", "agent image (default "+bootstrap.ImageRepo+":<version>; required on a development build)")
 	initCmd.Flags().StringVar(&initFlags.importDir, "import", "", "import an existing single-host config dir")
-	joinCmd.Flags().StringVar(&joinFlags.image, "image", "", "agent image (default "+bootstrap.ImageRepo+":<version>)")
+	joinCmd.Flags().StringVar(&joinFlags.image, "image", "", "agent image (default "+bootstrap.ImageRepo+":<version>; required on a development build)")
 	joinCmd.Flags().StringVar(&joinFlags.endpoint, "endpoint", "", "the leader's remote CLI URL (default https://homelab.<tailnet>:7443)")
 	joinCmd.Flags().BoolVar(&joinFlags.secretStdin, "secret-stdin", false, "read the cluster secret from stdin")
 	rootCmd.AddCommand(initCmd, joinCmd)
-}
-
-func agentImage(flag string) string {
-	if flag != "" {
-		return flag
-	}
-	return bootstrap.DefaultImage(Version)
 }
 
 // terminalPrompt asks on the terminal; secrets are not echoed.

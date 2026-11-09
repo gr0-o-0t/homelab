@@ -2,7 +2,6 @@
 package swarmtest
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -60,6 +59,8 @@ type Fake struct {
 	execs      []*Exec
 	execExit   int
 	created    []*CreatedContainer
+	pulls      map[string]string // ref → ImagePull's JSON stream
+	leaves     int
 }
 
 // New returns an empty Fake.
@@ -530,7 +531,35 @@ func (f *Fake) ImagePull(_ context.Context, ref string, _ image.PullOptions) (io
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.rec("ImagePull", ref)
-	return io.NopCloser(bytes.NewReader(nil)), nil
+	return io.NopCloser(strings.NewReader(f.pulls[ref])), nil
+}
+
+// SetPullStream makes ImagePull of ref return stream (the engine's JSON
+// progress messages, possibly carrying an errorDetail).
+func (f *Fake) SetPullStream(ref, stream string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.pulls == nil {
+		f.pulls = map[string]string{}
+	}
+	f.pulls[ref] = stream
+}
+
+// SwarmLeave takes this engine out of the swarm.
+func (f *Fake) SwarmLeave(_ context.Context, force bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rec("SwarmLeave", strconv.FormatBool(force))
+	f.leaves++
+	f.info.Swarm = swarm.Info{LocalNodeState: swarm.LocalNodeStateInactive}
+	return nil
+}
+
+// Leaves counts SwarmLeave calls.
+func (f *Fake) Leaves() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.leaves
 }
 
 func (f *Fake) SwarmInit(_ context.Context, req swarm.InitRequest) (string, error) {

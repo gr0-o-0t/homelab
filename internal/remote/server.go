@@ -32,6 +32,10 @@ type ServerConfig struct {
 	// Vault, VaultKey and CaddyAdmin become the child's HOMELAB_VAULT,
 	// HOMELAB_VAULT_KEY and HOMELAB_CADDY_ADMIN.
 	Vault, VaultKey, CaddyAdmin string
+	// TSSocks and TSSocksCred are the leader's tailnet SOCKS5 proxy and its
+	// credential, the child's HOMELAB_TS_SOCKS and HOMELAB_TS_SOCKS_CRED:
+	// the exec/logs relay dials other agents through it. Never logged.
+	TSSocks, TSSocksCred string
 	// Path is the child's PATH (default: the agent's own).
 	Path string
 
@@ -363,7 +367,7 @@ func (s *Server) childEnv(h Handshake) []string {
 	if h.TTY && h.Term != "" && len(h.Term) <= 64 && !strings.ContainsAny(h.Term, "\x00\n=") {
 		term = h.Term
 	}
-	return []string{
+	env := []string{
 		"HOMELAB_AGENT=1",
 		"HOMELAB_VAULT=" + s.cfg.Vault,
 		"HOMELAB_VAULT_KEY=" + s.cfg.VaultKey,
@@ -373,6 +377,10 @@ func (s *Server) childEnv(h Handshake) []string {
 		"TERM=" + term,
 		"LANG=C.UTF-8",
 	}
+	if s.cfg.TSSocks != "" && s.cfg.TSSocksCred != "" {
+		env = append(env, SocksEnv+"="+s.cfg.TSSocks, SocksCredEnv+"="+s.cfg.TSSocksCred)
+	}
+	return env
 }
 
 // runChild runs the command to completion, or until ctx is cancelled, which

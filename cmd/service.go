@@ -13,7 +13,6 @@ import (
 	"github.com/groot/homelab/internal/config"
 	"github.com/groot/homelab/internal/desired"
 	"github.com/groot/homelab/internal/docker"
-	"github.com/groot/homelab/internal/run"
 	"github.com/groot/homelab/internal/scaffold"
 	"github.com/groot/homelab/internal/service"
 	"github.com/groot/homelab/internal/swarm"
@@ -191,24 +190,21 @@ func runServiceRestart(_ *cobra.Command, args []string) error {
 func runServiceLogs(_ *cobra.Command, args []string) error {
 	name := args[0]
 	root := configDir()
-	if err := validateService(root, name); err != nil {
-		return err
-	}
-	if handled, err := relayToTaskNode(name); handled {
-		return err
-	}
 	if logsFlags.tui {
+		// The viewer streams `homelab logs -f <svc>`, which finds the node.
+		if err := validateService(root, name); err != nil {
+			return err
+		}
 		return runLogTUI(root, name)
 	}
-	return run.Default().DockerComposeEnv(
-		run.ServiceComposeFile(root, name),
-		buildEnv(root, name),
-		logsArgs()...,
-	)
+	return onTaskContainer(root, name, func(id string) error {
+		return dockerCLI(append(logsArgs(), id))
+	})
 }
 
-// logsArgs translates homelab's logs flags into `docker compose logs` flags;
-// they are the same flags, so this is a straight pass-through.
+// logsArgs translates homelab's logs flags into `docker logs` (and, for the
+// core stack, `docker compose logs`) flags; they are the same flags, so this
+// is a straight pass-through.
 func logsArgs() []string {
 	a := []string{"logs"}
 	if logsFlags.follow {

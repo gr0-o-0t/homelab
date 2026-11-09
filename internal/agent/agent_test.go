@@ -123,6 +123,9 @@ func (e *fakeEdge) Start(context.Context) error {
 }
 func (e *fakeEdge) Stop() error             { e.rec.add("edge-stop"); return nil }
 func (e *fakeEdge) TailnetIPv4() netip.Addr { return e.ip }
+func (e *fakeEdge) SOCKS() (string, string, error) {
+	return "127.0.0.1:1080", "socks-cred-SECRET", nil
+}
 func (e *fakeEdge) ListenTLS(network, addr string) (net.Listener, error) {
 	// The rebalancer must already have been started: serving blocks.
 	if !e.rec.waitFor("rebalance") {
@@ -298,6 +301,10 @@ func TestAgent_LeaderStartupOrder(t *testing.T) {
 	assert.Equal(t, h.a.Binary, cfg.Binary)
 	assert.Equal(t, h.paths.VaultFile, cfg.Vault)
 	assert.Equal(t, h.paths.KeyFile, cfg.VaultKey)
+	// Children relay exec/logs to workers through the edge's tailnet proxy.
+	assert.Equal(t, "127.0.0.1:1080", cfg.TSSocks)
+	assert.Equal(t, "socks-cred-SECRET", cfg.TSSocksCred)
+	assert.NotContains(t, h.rec.Logs(), "socks-cred-SECRET")
 	assert.Equal(t, filepath.Join(h.paths.StateDir, "caddy-admin.sock"), cfg.CaddyAdmin)
 	require.NotNil(t, cfg.Resolve)
 	path, ok := cfg.Resolve([]string{"up", "x"})
@@ -393,6 +400,7 @@ func TestAgent_WorkerServesOnlyLocalExec(t *testing.T) {
 	assert.FileExists(t, filepath.Join(h.a.ShimDir, ShimName), "workers keep their shim volume current too")
 	assert.Equal(t, "s3cret", cfg.Secret)
 	assert.Empty(t, cfg.CaddyAdmin)
+	assert.Empty(t, cfg.TSSocks, "a worker relays nothing")
 
 	for _, argv := range [][]string{{"exec", "web", "sh"}, {"logs", "web"}} {
 		path, ok := cfg.Resolve(argv)

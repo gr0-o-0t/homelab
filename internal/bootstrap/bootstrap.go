@@ -29,8 +29,6 @@ import (
 
 	"github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
 	dswarm "github.com/docker/docker/api/types/swarm"
 	"github.com/docker/docker/api/types/system"
@@ -195,18 +193,9 @@ func AgentSpec(img string, leader bool) (*container.Config, *container.HostConfi
 	return cfg, hc, nc
 }
 
-// StartAgent pulls the image when the engine lacks it, then creates and
-// starts the agent container.
-func StartAgent(ctx context.Context, api swarm.API, img string, leader bool, out io.Writer) error {
-	if _, _, err := api.ImageInspectWithRaw(ctx, img); err != nil {
-		_, _ = fmt.Fprintf(out, "Pulling %s …\n", img)
-		rc, perr := api.ImagePull(ctx, img, image.PullOptions{})
-		if perr != nil {
-			return fmt.Errorf("pulling %s: %w", img, perr)
-		}
-		_, _ = io.Copy(io.Discard, rc)
-		_ = rc.Close()
-	}
+// StartAgent creates and starts the agent container. The image must already
+// be on the engine (EnsureImage, in preflight).
+func StartAgent(ctx context.Context, api swarm.API, img string, leader bool) error {
 	cfg, hc, nc := AgentSpec(img, leader)
 	if _, err := api.ContainerCreate(ctx, cfg, hc, nc, nil, AgentContainer); err != nil {
 		if errdefs.IsConflict(err) {
@@ -454,58 +443,6 @@ func IssueJoinToken(ctx context.Context, api swarm.API, sm *secrets.Manager) (Jo
 	return JoinToken{WorkerToken: sw.JoinTokens.Worker, ManagerAddr: addr, TSAuthKey: key}, nil
 }
 
-// LocateTask finds the node running svc's task. local is true when this
-// engine should run exec/logs itself: it is not a manager (a worker serving
-// its own containers), no task runs, or the task runs here. Otherwise
-// hostname is the node's.
-func LocateTask(ctx context.Context, api swarm.API, svc string) (hostname string, local bool, err error) {
-	info, err := api.Info(ctx)
-	if err != nil || info.Swarm.LocalNodeState != dswarm.LocalNodeStateActive || !info.Swarm.ControlAvailable {
-		return "", true, nil
-	}
-	list, err := api.ServiceList(ctx, dswarm.ServiceListOptions{
-		Filters: filters.NewArgs(filters.Arg("label", swarm.LabelService+"="+svc))})
-	if err != nil {
-		return "", false, err
-	}
-	// The container named like the service (gitea_gitea) first; then by name.
-	sort.Slice(list, func(i, j int) bool {
-		pi, pj := list[i].Spec.Name == svc+"_"+svc, list[j].Spec.Name == svc+"_"+svc
-		if pi != pj {
-			return pi
-		}
-		return list[i].Spec.Name < list[j].Spec.Name
-	})
-	for i := range list {
-		s := &list[i]
-		tasks, err := api.TaskList(ctx, dswarm.TaskListOptions{Filters: filters.NewArgs(
-			filters.Arg("service", s.ID), filters.Arg("desired-state", string(dswarm.TaskStateRunning)))})
-		if err != nil {
-			return "", false, err
-		}
-		for j := range tasks {
-			t := &tasks[j]
-			if t.Status.State != dswarm.TaskStateRunning {
-				continue
-			}
-			if t.NodeID == info.Swarm.NodeID {
-				return "", true, nil
-			}
-			nodes, err := api.NodeList(ctx, dswarm.NodeListOptions{})
-			if err != nil {
-				return "", false, err
-			}
-			for k := range nodes {
-				if n := &nodes[k]; n.ID == t.NodeID && n.Description.Hostname != "" {
-					return n.Description.Hostname, false, nil
-				}
-			}
-			return "", false, fmt.Errorf("%s runs on node %s, whose hostname is unknown", svc, t.NodeID)
-		}
-	}
-	return "", true, nil
-}
-
 // Prompt asks for a value; secret ones are not echoed.
 type Prompt func(label string, secret bool) (string, error)
 
@@ -527,9 +464,12 @@ type Init struct {
 }
 
 // Do creates the cluster on this PC.
-func (in *Init) Do(ctx context.Context) error {
+func (in *Init) Do(ctx context.Context) (err error) {
 	if in.Import != "" {
 		return errors.New("--import is not implemented yet")
+	}
+	if in.Image == "" {
+		return errors.New("no agent image")
 	}
 	ip, err := TailnetIPv4(ctx, in.Run)
 	if err != nil {
@@ -544,6 +484,9 @@ func (in *Init) Do(ctx context.Context) error {
 		return err
 	}
 	_, _ = fmt.Fprintln(in.Out, "Note: TS_AUTHKEY must be a reusable auth key — every `homelab join` hands it to that PC's agent; a one-shot key cannot be reused.")
+	if err := preflight(ctx, in.API, in.Image, in.Out); err != nil {
+		return err
+	}
 
 	nodeID, err := in.API.SwarmInit(ctx, dswarm.InitRequest{
 		ListenAddr:    "0.0.0.0:" + ManagerPort,
@@ -553,6 +496,7 @@ func (in *Init) Do(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("creating the swarm on %s: %w", ip, err)
 	}
+	defer leaveOnError(ctx, in.API, in.Out, &err)
 	_, _ = fmt.Fprintf(in.Out, "Swarm created; this node (%s) is the manager, advertising %s.\n", nodeID, ip)
 	if err := labelNode(ctx, in.API, nodeID, string(swarm.RoleCore)); err != nil {
 		return err
@@ -560,7 +504,7 @@ func (in *Init) Do(ctx context.Context) error {
 	if err := (&swarm.Deployer{API: in.API}).EnsureNetwork(ctx); err != nil {
 		return err
 	}
-	if err := StartAgent(ctx, in.API, in.Image, true, in.Out); err != nil {
+	if err := StartAgent(ctx, in.API, in.Image, true); err != nil {
 		return err
 	}
 	secret, err := NewClusterSecret(in.Rand)
@@ -635,9 +579,17 @@ type Join struct {
 }
 
 // Do joins this PC to the cluster as a worker.
-func (j *Join) Do(ctx context.Context) error {
+func (j *Join) Do(ctx context.Context) (err error) {
 	if strings.TrimSpace(j.Secret) == "" {
 		return errors.New("no cluster secret given")
+	}
+	if j.Endpoint != "" {
+		if err := ValidateEndpoint(j.Endpoint); err != nil {
+			return err
+		}
+	}
+	if j.Image == "" {
+		return errors.New("no agent image")
 	}
 	ip, err := TailnetIPv4(ctx, j.Run)
 	if err != nil {
@@ -650,6 +602,9 @@ func (j *Join) Do(ctx context.Context) error {
 	endpoint := j.Endpoint
 	if endpoint == "" {
 		endpoint = LeaderEndpoint(suffix)
+	}
+	if err := preflight(ctx, j.API, j.Image, j.Out); err != nil {
+		return err
 	}
 	out, err := j.Leader(ctx, endpoint, j.Secret, []string{"cluster", "join-token"})
 	if err != nil {
@@ -671,6 +626,7 @@ func (j *Join) Do(ctx context.Context) error {
 	}); err != nil {
 		return fmt.Errorf("joining the swarm at %s: %w", tok.ManagerAddr, err)
 	}
+	defer leaveOnError(ctx, j.API, j.Out, &err)
 	info, err := j.API.Info(ctx)
 	if err != nil {
 		return err
@@ -681,7 +637,7 @@ func (j *Join) Do(ctx context.Context) error {
 	if _, err := j.Leader(ctx, endpoint, j.Secret, []string{"cluster", "label", info.Swarm.NodeID, string(swarm.RoleWorker)}); err != nil {
 		return fmt.Errorf("asking the leader to label this node a worker: %w", err)
 	}
-	if err := StartAgent(ctx, j.API, j.Image, false, j.Out); err != nil {
+	if err := StartAgent(ctx, j.API, j.Image, false); err != nil {
 		return err
 	}
 	if err := SeedAgent(ctx, j.API, map[string]string{"TS_AUTHKEY": tok.TSAuthKey, "CLUSTER_SECRET": j.Secret},

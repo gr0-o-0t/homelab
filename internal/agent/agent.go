@@ -82,6 +82,9 @@ type Edge interface {
 	Stop() error
 	TailnetIPv4() netip.Addr
 	ListenTLS(network, addr string) (net.Listener, error)
+	// SOCKS is the tailnet node's SOCKS5 proxy address and credential,
+	// handed to the remote CLI's children only (exec/logs relay).
+	SOCKS() (addr, cred string, err error)
 }
 
 // Node is a worker's tailnet node (*tsnet.Server).
@@ -431,6 +434,13 @@ func (a *Agent) runLeader(ctx context.Context, p agentstate.Paths, sm *secrets.M
 		VaultKey:   p.KeyFile,
 		CaddyAdmin: edge.AdminSocket(p.StateDir),
 		Resolve:    a.Resolve,
+	}
+	// The relay of exec/logs to workers dials them through the edge's
+	// tailnet node; without it only local containers are reachable.
+	if addr, cred, err := ed.SOCKS(); err != nil {
+		a.logf("agent: warning: no tailnet proxy for relaying exec/logs to other nodes: %v", err)
+	} else {
+		cfg.TSSocks, cfg.TSSocksCred = addr, cred
 	}
 	return a.serve(ctx, ln, cfg)
 }

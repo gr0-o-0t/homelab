@@ -243,6 +243,18 @@ func claimAdminSocket(sock string) error {
 // agent serves the remote CLI on it too, so the leader is one tailnet node.
 func (e *Edge) Tailnet() *tsnet.Server { return e.ts }
 
+// SOCKS is the tailnet node's credentialed SOCKS5 proxy on 127.0.0.1
+// (tsnet Loopback, user "tsnet"): the agent's child processes dial other
+// agents through it, since the container itself has no route to the
+// tailnet or its MagicDNS names. Neither value may be logged.
+func (e *Edge) SOCKS() (addr, cred string, err error) {
+	if e.ts == nil {
+		return "", "", errors.New("the tailnet node is not up")
+	}
+	addr, cred, _, err = e.ts.Loopback()
+	return addr, cred, err
+}
+
 // TailnetIPv4 is the tailnet node's IPv4 (invalid before Start, or in tests).
 func (e *Edge) TailnetIPv4() netip.Addr {
 	if e.ts == nil {

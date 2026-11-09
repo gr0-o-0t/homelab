@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/99designs/keyring"
+	"github.com/docker/docker/api/types/container"
 	dswarm "github.com/docker/docker/api/types/swarm"
 	"github.com/docker/docker/api/types/system"
 	"github.com/stretchr/testify/assert"
@@ -364,4 +366,122 @@ func TestLocateTask(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, local)
 	assert.Equal(t, "laptop", host)
+}
+
+func TestInit_RefusesEngineAlreadyInSwarm(t *testing.T) {
+	in, h := newInit(t, testIP)
+	h.fake.SetInfo(system.Info{Swarm: dswarm.Info{LocalNodeState: dswarm.LocalNodeStateActive}})
+	err := in.Do(context.Background())
+	require.ErrorContains(t, err, "docker swarm leave --force")
+	assert.Empty(t, h.fake.Inits())
+	assert.Empty(t, h.fake.Created())
+}
+
+func TestInit_RefusesExistingAgentContainer(t *testing.T) {
+	in, h := newInit(t, testIP)
+	h.fake.SetContainers([]container.Summary{{ID: "c1", Names: []string{"/homelab-agent"}, State: "exited"}})
+	err := in.Do(context.Background())
+	require.ErrorContains(t, err, "docker rm -f homelab-agent")
+	assert.Empty(t, h.fake.Inits())
+}
+
+func TestInit_PullFailureTouchesNoSwarm(t *testing.T) {
+	in, h := newInit(t, testIP)
+	h.fake.SetPullStream(in.Image, `{"status":"Pulling from gr0-o-0t/homelab"}`+"\n"+
+		`{"errorDetail":{"message":"manifest unknown"},"error":"manifest unknown"}`+"\n")
+	err := in.Do(context.Background())
+	require.ErrorContains(t, err, "manifest unknown")
+	for _, c := range h.fake.CallLog() {
+		assert.False(t, strings.HasPrefix(c, "Swarm") || strings.HasPrefix(c, "Container") && c != "ContainerList",
+			"mutation after a failed pull: %s", c)
+	}
+	assert.Empty(t, h.fake.Inits())
+}
+
+func TestEnsureImage_SurfacesStreamErrors(t *testing.T) {
+	f := swarmtest.New()
+	f.SetPullStream("img:1", `{"errorDetail":{"message":"toomanyrequests: rate limit"}}`+"\n")
+	require.ErrorContains(t, EnsureImage(context.Background(), f, "img:1", io.Discard), "toomanyrequests")
+	f.SetPullStream("img:2", `{"status":"Downloaded newer image for img:2"}`+"\n")
+	require.NoError(t, EnsureImage(context.Background(), f, "img:2", io.Discard))
+}
+
+// A failure after SwarmInit leaves the swarm so a retry starts clean.
+func TestInit_LeavesSwarmWhenLaterStepFails(t *testing.T) {
+	in, h := newInit(t, testIP)
+	h.fake.SetExecExitCode(1) // agent-seed fails
+	require.Error(t, in.Do(context.Background()))
+	assert.Len(t, h.fake.Inits(), 1)
+	assert.Equal(t, 1, h.fake.Leaves())
+}
+
+func TestResolveImage(t *testing.T) {
+	for _, v := range []string{"dev", "", "v0.0.0-20261105150029-969b7619af8a"} {
+		_, err := ResolveImage("", v)
+		require.ErrorContains(t, err, "--image", v)
+	}
+	img, err := ResolveImage("", "v1.2.3")
+	require.NoError(t, err)
+	assert.Equal(t, "ghcr.io/gr0-o-0t/homelab:v1.2.3", img)
+	img, err = ResolveImage("local/homelab:test", "dev")
+	require.NoError(t, err)
+	assert.Equal(t, "local/homelab:test", img)
+}
+
+func TestJoin_RefusesPlainHTTPEndpointBeforeCallingLeader(t *testing.T) {
+	j, h := newJoin(t)
+	j.Endpoint = "http://homelab.tail1234.ts.net:7443"
+	require.ErrorContains(t, j.Do(context.Background()), "https://")
+	assert.Empty(t, h.calls)
+}
+
+func TestJoin_RefusesEngineAlreadyInSwarm(t *testing.T) {
+	j, h := newJoin(t)
+	h.fake.SetInfo(system.Info{Swarm: dswarm.Info{LocalNodeState: dswarm.LocalNodeStateActive}})
+	require.ErrorContains(t, j.Do(context.Background()), "docker swarm leave --force")
+	assert.Empty(t, h.calls, "the secret is not sent before preflight passes")
+	assert.Empty(t, h.fake.Joins())
+}
+
+func taskContainer(id, svcName string, created int64) container.Summary {
+	return container.Summary{ID: id, State: "running", Created: created,
+		Labels: map[string]string{SwarmServiceLabel: svcName}}
+}
+
+func TestTaskContainer(t *testing.T) {
+	ctx := context.Background()
+	f := swarmtest.New()
+	f.SetContainers([]container.Summary{
+		taskContainer("old", "gitea_gitea", 1), taskContainer("new", "gitea_gitea", 2),
+		taskContainer("db", "gitea_db", 3), taskContainer("x", "other_other", 4),
+	})
+	id, err := TaskContainer(ctx, f, "gitea")
+	require.NoError(t, err)
+	assert.Equal(t, "new", id, "the newest task during a rolling update")
+
+	// one service: no key needed
+	f.SetContainers([]container.Summary{taskContainer("w", "glance_web", 1)})
+	id, err = TaskContainer(ctx, f, "glance")
+	require.NoError(t, err)
+	assert.Equal(t, "w", id)
+
+	// several, none named like the stack
+	f.SetContainers([]container.Summary{taskContainer("a", "immich_server", 1), taskContainer("b", "immich_ml", 1)})
+	_, err = TaskContainer(ctx, f, "immich")
+	require.ErrorContains(t, err, "several containers")
+
+	_, err = TaskContainer(ctx, f, "nothing")
+	require.ErrorContains(t, err, "no running container on this node")
+}
+
+type infoErrAPI struct{ *swarmtest.Fake }
+
+func (infoErrAPI) Info(context.Context) (system.Info, error) {
+	return system.Info{}, errors.New("Cannot connect to the Docker daemon")
+}
+
+func TestLocateTask_ReportsEngineErrors(t *testing.T) {
+	_, local, err := LocateTask(context.Background(), infoErrAPI{swarmtest.New()}, "gitea")
+	require.ErrorContains(t, err, "Docker daemon")
+	assert.False(t, local)
 }

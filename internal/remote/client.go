@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"golang.org/x/net/proxy"
 	"gopkg.in/yaml.v3"
 
 	"github.com/groot/homelab/internal/config"
@@ -130,6 +132,11 @@ func (c *Client) Run(ctx context.Context, o RunOptions) (int, error) {
 	}
 	u.Scheme, u.Path = "wss", Path
 	d := websocket.Dialer{TLSClientConfig: c.TLSConfig, HandshakeTimeout: 15 * time.Second}
+	if dial, err := socksDialer(); err != nil {
+		return 1, err
+	} else if dial != nil {
+		d.NetDialContext = dial
+	}
 	conn, resp, err := d.DialContext(ctx, u.String(), http.Header{"Authorization": {"Bearer " + Token(c.Secret)}})
 	if resp != nil && resp.Body != nil {
 		_ = resp.Body.Close()
@@ -209,6 +216,33 @@ func (c *Client) Run(ctx context.Context, o RunOptions) (int, error) {
 			return *m.Exit, nil
 		}
 	}
+}
+
+// SocksEnv and SocksCredEnv carry the leader's tailnet SOCKS5 proxy (tsnet
+// Loopback) to the agent's children; see ServerConfig.TSSocks.
+const (
+	SocksEnv     = "HOMELAB_TS_SOCKS"
+	SocksCredEnv = "HOMELAB_TS_SOCKS_CRED" //nolint:gosec // an env var name, not a credential
+)
+
+// socksDialer dials through the tailnet SOCKS5 proxy when both env vars are
+// set (inside the leader agent, relaying to a worker's agent: the container
+// has no route to the tailnet), and is nil otherwise (a direct dial). The
+// proxy resolves the host name, so MagicDNS names work.
+func socksDialer() (func(ctx context.Context, network, addr string) (net.Conn, error), error) {
+	addr, cred := os.Getenv(SocksEnv), os.Getenv(SocksCredEnv)
+	if addr == "" || cred == "" {
+		return nil, nil
+	}
+	pd, err := proxy.SOCKS5("tcp", addr, &proxy.Auth{User: "tsnet", Password: cred}, proxy.Direct)
+	if err != nil {
+		return nil, fmt.Errorf("tailnet proxy: %w", err)
+	}
+	cd, ok := pd.(proxy.ContextDialer)
+	if !ok {
+		return nil, errors.New("tailnet proxy: SOCKS5 dialer has no DialContext")
+	}
+	return cd.DialContext, nil
 }
 
 // pumpStdin forwards r until it ends, then tells the agent so.

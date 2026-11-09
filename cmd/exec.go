@@ -3,7 +3,6 @@ package cmd
 import (
 	"os"
 
-	"github.com/groot/homelab/internal/run"
 	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 )
@@ -17,7 +16,9 @@ var execFlags struct {
 var execCmd = &cobra.Command{
 	Use:   "exec <service> <command> [args...]",
 	Short: "Execute a command in a running service container",
-	Long: `Execute a command in a running service container (equivalent to 'docker compose exec').
+	Long: `Execute a command in a running service container (like 'docker exec'), on
+whichever machine Swarm runs it. The container is the service's own
+(<service>_<service>), or its only one.
 A TTY is allocated when stdin and stdout are terminals; -T disables it.
 
   homelab exec jellyfin sh              # interactive shell
@@ -28,43 +29,13 @@ A TTY is allocated when stdin and stdout are terminals; -T disables it.
 	ValidArgsFunction: completeServiceNames,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := args[0]
-		cmdArgs := args[1:]
-		root := configDir()
-
-		if err := validateService(root, name); err != nil {
-			return err
-		}
-		if handled, err := relayToTaskNode(name); handled {
-			return err
-		}
-
-		var composeExecArgs []string
-		// compose exec allocates a TTY by default. Turn it off when there is
-		// no terminal (piping) or when asked, as docker's -T does.
 		tty := isatty.IsTerminal(os.Stdin.Fd()) && isatty.IsTerminal(os.Stdout.Fd())
 		if cmd.Flags().Changed("tty") {
 			tty = execFlags.tty
 		}
-		if !tty || execFlags.noTTY {
-			composeExecArgs = append(composeExecArgs, "-T")
-		}
-		if execFlags.user != "" {
-			composeExecArgs = append(composeExecArgs, "--user", execFlags.user)
-		}
-		if execFlags.workdir != "" {
-			composeExecArgs = append(composeExecArgs, "--workdir", execFlags.workdir)
-		}
-		for _, e := range execFlags.env {
-			composeExecArgs = append(composeExecArgs, "--env", e)
-		}
-		composeExecArgs = append(composeExecArgs, name)
-		composeExecArgs = append(composeExecArgs, cmdArgs...)
-
-		return run.Default().DockerComposeEnv(
-			run.ServiceComposeFile(root, name),
-			buildEnv(root, name),
-			append([]string{"exec"}, composeExecArgs...)...,
-		)
+		return onTaskContainer(configDir(), name, func(id string) error {
+			return dockerCLI(dockerExecArgs(id, tty, args[1:]))
+		})
 	},
 }
 
