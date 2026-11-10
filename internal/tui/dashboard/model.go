@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
@@ -176,6 +177,14 @@ func (s *streams) stopAll() {
 type Model struct {
 	opt Options
 
+	// A status read and a backup listing in flight: no second one starts
+	// until it returns (or times out), so a hung leader piles nothing up.
+	refreshing, listingBackups bool
+	// staleErr is why the last status read failed; the data shown is then
+	// from lastRefresh.
+	staleErr    string
+	lastRefresh time.Time
+
 	width, height int
 	view          view
 	mode          mode
@@ -230,11 +239,14 @@ func New(opt Options) Model {
 		opt:      opt,
 		services: opt.Services,
 		enabled:  map[string]bool{},
-		core:     map[string]string{},
-		marked:   map[string]bool{},
-		health:   map[string]result{},
-		spin:     sp,
-		streams:  &streams{},
+		// Init starts both reads.
+		refreshing:     true,
+		listingBackups: true,
+		core:           map[string]string{},
+		marked:         map[string]bool{},
+		health:         map[string]result{},
+		spin:           sp,
+		streams:        &streams{},
 	}
 }
 

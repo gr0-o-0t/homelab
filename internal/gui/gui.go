@@ -108,7 +108,8 @@ type shared struct {
 }
 
 type app struct {
-	opt Options
+	opt       Options
+	refresher refresher
 
 	mu      sync.Mutex
 	shared  // guarded by mu
@@ -158,16 +159,33 @@ func (a *app) animate() {
 
 // ── background state ──────────────────────────────────────────────────────────
 
+// refresh re-reads the status (waited for) and the backups (in the
+// background, never delaying the status); a read still in flight is not
+// started again.
 func (a *app) refresh() {
+	a.refresher.run(a.refreshStatus, a.refreshBackups)
+}
+
+func (a *app) refreshStatus() {
 	l := load(a.opt)
 	a.mu.Lock()
 	a.core, a.layers, a.layerObjs, a.exts = l.core, l.layers, l.layerObjs, l.exts
-	a.backups, a.backupsErr = l.backups, l.backupsErr
 	a.discoverErr = l.discoverErr
 	if l.discoverErr == "" {
 		a.services = l.services
 	}
 	a.loaded, a.lastRefresh = true, time.Now()
+	a.mu.Unlock()
+	g.Update()
+}
+
+func (a *app) refreshBackups() {
+	bl, berr := loadBackups(a.opt)
+	a.mu.Lock()
+	if berr == "" {
+		a.backups = bl
+	}
+	a.backupsErr = berr
 	a.mu.Unlock()
 	g.Update()
 }

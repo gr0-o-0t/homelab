@@ -7,6 +7,7 @@ package clistate
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/groot/homelab/internal/actions"
 	"github.com/groot/homelab/internal/backup"
@@ -145,9 +147,16 @@ type Source interface {
 // CLI is the Source that runs this binary: Argv is its prefix (selfCLI).
 type CLI struct {
 	Argv []string
-	// Run runs argv and returns its stdout; nil runs it with os/exec.
-	Run func(argv []string) ([]byte, error)
+	// Run runs argv and returns its stdout, giving up when ctx ends; nil
+	// runs it with os/exec, killing the child at the deadline.
+	Run func(ctx context.Context, argv []string) ([]byte, error)
+	// Timeout bounds every call; zero is DefaultTimeout.
+	Timeout time.Duration
 }
+
+// DefaultTimeout bounds one front-end CLI call: a hung leader costs one
+// child process for this long, never more.
+const DefaultTimeout = 15 * time.Second
 
 func (c CLI) json(out any, args ...string) error {
 	if len(c.Argv) == 0 {
@@ -158,8 +167,20 @@ func (c CLI) json(out any, args ...string) error {
 	if run == nil {
 		run = execOutput
 	}
-	data, err := run(argv)
+	timeout := c.Timeout
+	if timeout <= 0 {
+		timeout = DefaultTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	data, err := run(ctx, argv)
+	if err == nil && ctx.Err() != nil {
+		err = ctx.Err()
+	}
 	if err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			err = fmt.Errorf("no answer from the leader within %s", timeout)
+		}
 		return fmt.Errorf("homelab %s: %w", strings.Join(args, " "), err)
 	}
 	if err := json.Unmarshal(data, out); err != nil {
@@ -168,8 +189,9 @@ func (c CLI) json(out any, args ...string) error {
 	return nil
 }
 
-func execOutput(argv []string) ([]byte, error) {
-	cmd := exec.Command(argv[0], argv[1:]...) // #nosec G204 -- this binary plus fixed args
+func execOutput(ctx context.Context, argv []string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...) // #nosec G204 -- this binary plus fixed args
+	cmd.WaitDelay = time.Second                           // do not wait on pipes a killed child left open
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()

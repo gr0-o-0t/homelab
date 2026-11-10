@@ -1,7 +1,9 @@
 package dashboard
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"testing"
 
@@ -17,7 +19,7 @@ import (
 // recording each argv: what selfCLI would get back from the leader.
 func fakeCLI(t *testing.T, st clistate.Status, ran *[][]string) clistate.CLI {
 	t.Helper()
-	return clistate.CLI{Argv: []string{"homelab", "--no-color"}, Run: func(argv []string) ([]byte, error) {
+	return clistate.CLI{Argv: []string{"homelab", "--no-color"}, Run: func(_ context.Context, argv []string) ([]byte, error) {
 		*ran = append(*ran, argv)
 		args := argv[2:]
 		switch {
@@ -81,4 +83,42 @@ func TestDashboard_FromCLIStatus(t *testing.T) {
 	assert.Contains(t, view, "https://web.home.example.com")
 	assert.Contains(t, ran, []string{"homelab", "--no-color", "status", "--json"})
 	assert.Contains(t, ran, []string{"homelab", "--no-color", "status", "web", "--json"})
+}
+
+// A refresh still in flight is not started again: every tick while the
+// leader hangs adds nothing.
+func TestDashboard_NoOverlappingRefresh(t *testing.T) {
+	m := New(Options{Source: clistate.CLI{Argv: []string{"homelab"}}, Layers: fakeLayers(), CLI: []string{"homelab"}})
+	require.True(t, m.refreshing, "Init's read is in flight")
+	out, cmd := m.Update(coreTickMsg{})
+	m = out.(Model)
+	assert.True(t, m.refreshing)
+	// Only the next tick is scheduled: no status read.
+	assert.NotNil(t, cmd)
+	m2, c := m.startRefresh()
+	assert.Nil(t, c, "no second read while one is in flight")
+	m, _ = m2, c
+
+	out, _ = m.Update(refreshErrMsg{err: errors.New("no answer from the leader within 15s")})
+	m = out.(Model)
+	assert.False(t, m.refreshing)
+	_, c = m.startRefresh()
+	assert.NotNil(t, c, "the next tick reads again")
+}
+
+// After a failed refresh the last data stays on screen, marked stale.
+func TestDashboard_FailedRefreshIsStale(t *testing.T) {
+	m := newTestModel(stubServices())
+	out, _ := m.Update(refreshedMsg{services: stubServices()})
+	m = out.(Model)
+	require.False(t, m.lastRefresh.IsZero())
+	out, _ = m.Update(refreshErrMsg{err: errors.New("no answer from the leader within 15s")})
+	m = out.(Model)
+	view := m.View()
+	assert.Contains(t, view, "immich", "the last data is still shown")
+	assert.Contains(t, view, "stale — last updated "+m.lastRefresh.Format("15:04:05"))
+	assert.Contains(t, view, "refresh failing: no answer from the leader")
+
+	out, _ = m.Update(refreshedMsg{services: stubServices()})
+	assert.NotContains(t, out.(Model).View(), "stale")
 }

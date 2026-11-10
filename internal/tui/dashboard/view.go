@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/groot/homelab/internal/actions"
 	"github.com/groot/homelab/internal/service"
@@ -156,7 +157,12 @@ func (m Model) renderBody() string {
 		return m.renderModal(h)
 	}
 	lw := m.listWidth()
-	list := fitBlock(m.renderList(h, lw), lw, h)
+	list := m.renderList(h, lw)
+	if m.staleErr != "" {
+		// Last good data, not current: dimmed (see the status bar).
+		list = styles.Muted.Render(ansi.Strip(list))
+	}
+	list = fitBlock(list, lw, h)
 	if lw >= m.width {
 		return list
 	}
@@ -605,6 +611,8 @@ func (m Model) renderStatusBar() string {
 		if m.lastOut != nil {
 			s += "  " + hintBar("o", "output")
 		}
+	case m.staleErr != "" && m.mode == modeNormal:
+		s = styles.Warning.Render(m.staleLine())
 	default:
 		s = m.hints()
 	}
@@ -701,4 +709,14 @@ func stripAnsi(s string) string {
 		b.WriteByte(c)
 	}
 	return b.String()
+}
+
+// staleLine says the data shown is the last that was read, and why the
+// refresh fails.
+func (m Model) staleLine() string {
+	when := "never"
+	if !m.lastRefresh.IsZero() {
+		when = m.lastRefresh.Format("15:04:05")
+	}
+	return fmt.Sprintf("%s stale — last updated %s, refresh failing: %s", styles.Icon("error"), when, m.staleErr)
 }

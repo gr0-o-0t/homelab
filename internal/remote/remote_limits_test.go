@@ -129,8 +129,36 @@ func TestLocks_FollowTheCommandPath(t *testing.T) {
 		"status": false, "logs": false, "session run": false,
 		"files put": true, "files get": false,
 	} {
-		assert.Equal(t, want, Locks(strings.Fields(path)), path)
+		assert.Equal(t, want, Locks(strings.Fields(path), strings.Fields(path)), path)
 	}
+	// backup --list only reads: lock-free, wherever the flag is.
+	for argv, want := range map[string]bool{
+		"backup --list": false, "backup --list --json": false, "--json backup --list=true": false,
+		"backup web": true, "backup --list=false": true, "backup --all": true,
+	} {
+		assert.Equal(t, want, Locks([]string{"backup"}, strings.Fields(argv)), argv)
+	}
+}
+
+// backup --list runs while an up holds the lock: the front ends list backups
+// on every refresh.
+func TestRunner_BackupListSkipsTheLock(t *testing.T) {
+	e := newTestServer(t, nil)
+	c := e.client(testSecret, "1.4.2")
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		code, _, _, err := run(t, c, RunOptions{Argv: []string{"up", "a", "1500"}})
+		assert.NoError(t, err)
+		assert.Equal(t, 0, code)
+	})
+	waitPid(t, e.stateDir, "a")
+	code, _, _, err := run(t, c, RunOptions{Argv: []string{"backup", "--list", "--json", "b", "50"}})
+	require.NoError(t, err)
+	require.Equal(t, 0, code)
+	wg.Wait()
+	as, ae := span(t, e.stateDir, "a")
+	bs, be := span(t, e.stateDir, "b")
+	assert.True(t, as < bs && be < ae, "backup --list waited on the lock: a=[%d,%d] b=[%d,%d]", as, ae, bs, be)
 }
 
 func TestRunner_ReadOnlySubcommandsSkipTheLock(t *testing.T) {

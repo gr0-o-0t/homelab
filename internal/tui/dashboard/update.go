@@ -4,6 +4,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -23,7 +24,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg := msg.(type) {
 		case logs.ClosedMsg:
 			m.mode = modeNormal
-			return m, m.refreshAll()
+			return m.refreshAll()
 		case tea.KeyMsg:
 			if msg.String() == "ctrl+c" {
 				m.logv.Stop()
@@ -62,6 +63,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleMouse(msg)
 
 	case refreshedMsg:
+		m.refreshing, m.staleErr, m.lastRefresh = false, "", time.Now()
 		m.services = msg.services
 		if msg.core != nil {
 			m.core = msg.core
@@ -73,9 +75,11 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, m.fetchLogsCmd())
 
 	case refreshErrMsg:
-		m.toast, m.toastErr = msg.err.Error(), true
+		// The data shown stays, marked stale (renderStatusBar, dimmed list).
+		m.refreshing, m.staleErr = false, msg.err.Error()
 
 	case backupsMsg:
+		m.listingBackups = false
 		m.backups, m.backErr = msg.list, ""
 		if msg.err != nil {
 			m.backErr = msg.err.Error()
@@ -95,7 +99,9 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case coreTickMsg:
 		// Tasks change state behind the dashboard's back (crashes,
 		// other PCs): one status call refreshes the list and the edge.
-		cmds = append(cmds, m.refreshCmd(), coreTickCmd())
+		var c tea.Cmd
+		m, c = m.startRefresh()
+		cmds = append(cmds, c, coreTickCmd())
 
 	case logTickMsg:
 		cmds = append(cmds, m.fetchLogsCmd(), logTickCmd())
@@ -137,13 +143,37 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.toast, m.toastErr = msg.label+": "+msg.err.Error(), true
 		}
-		cmds = append(cmds, m.refreshAll())
+		var c tea.Cmd
+		m, c = m.refreshAll()
+		cmds = append(cmds, c)
 	}
 	return m, tea.Batch(cmds...)
 }
 
-func (m Model) refreshAll() tea.Cmd {
-	return tea.Batch(m.refreshCmd(), m.backupsCmd())
+// refreshAll re-reads the status and the backups, each unless a read of it
+// is already in flight: a slow or hung leader must not pile up CLI calls.
+func (m Model) refreshAll() (Model, tea.Cmd) {
+	m, rc := m.startRefresh()
+	m, bc := m.startBackups()
+	return m, tea.Batch(rc, bc)
+}
+
+// startRefresh starts a status read unless one is in flight.
+func (m Model) startRefresh() (Model, tea.Cmd) {
+	if m.refreshing {
+		return m, nil
+	}
+	m.refreshing = true
+	return m, m.refreshCmd()
+}
+
+// startBackups starts a backup listing unless one is in flight.
+func (m Model) startBackups() (Model, tea.Cmd) {
+	if m.listingBackups {
+		return m, nil
+	}
+	m.listingBackups = true
+	return m, m.backupsCmd()
 }
 
 // actionDone records a captured run: the Health pane for checks run there,
@@ -172,7 +202,7 @@ func (m Model) actionDone(msg actionDoneMsg) (tea.Model, tea.Cmd) {
 	case m.mode == modeNormal && (res.err != nil || showsReport(a, msg.p.inputs)):
 		m = m.openOutput(res)
 	}
-	return m, m.refreshAll()
+	return m.refreshAll()
 }
 
 // showsReport reports whether an action's output is the point of running it.
@@ -428,7 +458,7 @@ func (m Model) keyNormal(k string) (tea.Model, tea.Cmd) {
 		m.marked = map[string]bool{}
 		m = m.clampCursors()
 	case "R":
-		return m, m.refreshAll()
+		return m.refreshAll()
 	case "o":
 		if m.lastOut != nil {
 			m = m.openOutput(*m.lastOut)
@@ -504,7 +534,9 @@ func (m Model) switchView(v view) (tea.Model, tea.Cmd) {
 	m = m.clampCursors()
 	var cmds []tea.Cmd
 	if v == viewBackups {
-		cmds = append(cmds, m.backupsCmd())
+		var c tea.Cmd
+		m, c = m.startBackups()
+		cmds = append(cmds, c)
 	}
 	cmds = append(cmds, m.fetchLogsCmd(), m.fetchInspectCmd())
 	return m, tea.Batch(cmds...)

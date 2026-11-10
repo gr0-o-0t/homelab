@@ -52,14 +52,6 @@ func DetachOnDisconnect(path []string) bool {
 	return len(path) > 0 && Detached[path[0]]
 }
 
-// Locks reports whether the canonical command path takes the lock.
-func Locks(path []string) bool {
-	if len(path) == 0 || ReadOnly[strings.Join(path, " ")] {
-		return false
-	}
-	return Mutating[path[0]]
-}
-
 // refusedFlags may not appear anywhere in a forwarded argv: they would choose
 // the agent's state.
 var refusedFlags = []string{"--config-dir", "--config"}
@@ -154,4 +146,25 @@ func majorMinor(v string) string {
 		return v
 	}
 	return parts[0] + "." + parts[1]
+}
+
+// ReadOnlyFlags are flags that turn a Mutating command into an observing one:
+// `backup --list` only reads the backups volume, and the front ends run it
+// on every refresh, so it must not wait behind an up or a backup.
+var ReadOnlyFlags = map[string]string{"backup": "--list"}
+
+// Locks reports whether argv, resolved to the canonical command path, takes
+// the lock.
+func Locks(path, argv []string) bool {
+	if len(path) == 0 || ReadOnly[strings.Join(path, " ")] {
+		return false
+	}
+	if f, ok := ReadOnlyFlags[path[0]]; ok {
+		for _, a := range argv {
+			if a == f || a == f+"=true" {
+				return false
+			}
+		}
+	}
+	return Mutating[path[0]]
 }

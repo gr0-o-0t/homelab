@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -77,7 +78,9 @@ func (m Model) fetchLogsCmd() tea.Cmd {
 	return func() tea.Msg {
 		// The CLI's own `logs`: every container of the stack, from whichever
 		// node runs it.
-		out, _ := exec.Command(argv[0], argv[1:]...).CombinedOutput() // #nosec G204 -- argv is the CLI plus fixed args
+		ctx, cancel := context.WithTimeout(context.Background(), clistate.DefaultTimeout)
+		defer cancel()
+		out, _ := exec.CommandContext(ctx, argv[0], argv[1:]...).CombinedOutput() // #nosec G204 -- argv is the CLI plus fixed args
 		var kept []string
 		for _, l := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 			if l != "" {

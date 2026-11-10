@@ -1,10 +1,12 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"slices"
+	"time"
 
 	dswarm "github.com/docker/docker/api/types/swarm"
 
@@ -88,7 +90,9 @@ func serviceAddresses(svc *service.Service, env map[string]string) map[string][]
 func clusterNodes() []clistate.Node {
 	out := []clistate.Node{}
 	_ = withSwarmAPI(func(api swarm.API) error {
-		nodes, err := api.NodeList(cmdContext(), dswarm.NodeListOptions{})
+		ctx, cancel := context.WithTimeout(cmdContext(), 5*time.Second)
+		defer cancel()
+		nodes, err := api.NodeList(ctx, dswarm.NodeListOptions{})
 		if err != nil {
 			return err
 		}

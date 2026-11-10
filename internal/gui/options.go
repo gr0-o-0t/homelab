@@ -1,6 +1,8 @@
 package gui
 
 import (
+	"sync/atomic"
+
 	"github.com/groot/homelab/internal/backup"
 	"github.com/groot/homelab/internal/clistate"
 	"github.com/groot/homelab/internal/network"
@@ -28,21 +30,19 @@ type ContainerState struct{ Name, State string }
 // agentContainer runs Caddy and the tailnet node (bootstrap.AgentContainer).
 const agentContainer = "homelab-agent"
 
-// loaded is one refresh's worth of state, as the CLI reported it.
+// loaded is one status read's worth of state, as the CLI reported it.
 type loaded struct {
 	services    []service.Service
 	core        []ContainerState
 	layers      []string // configured: ts + enabled extensions
 	layerObjs   []network.NetworkLayer
 	exts        []extState
-	backups     []backup.Listing
-	backupsErr  string
 	discoverErr string
 }
 
 // load asks the Source for everything the GUI shows: services (with the
 // catalog entries not installed), the edge and extension states, the enabled
-// layers and the backups.
+// layers. Backups are read apart (loadBackups).
 func load(opt Options) loaded {
 	var l loaded
 	if opt.Source == nil {
@@ -73,12 +73,44 @@ func load(opt Options) loaded {
 			})
 		}
 	}
-	bl, berr := opt.Source.Backups()
-	l.backups = bl
-	if berr != nil {
-		l.backupsErr = berr.Error()
-	}
 	return l
+}
+
+// loadBackups lists the leader's backups ("" or the error).
+func loadBackups(opt Options) ([]backup.Listing, string) {
+	if opt.Source == nil {
+		return nil, "no homelab binary configured"
+	}
+	bl, err := opt.Source.Backups()
+	if err != nil {
+		return nil, err.Error()
+	}
+	return bl, ""
+}
+
+// flight is one kind of background read: a second does not start while one
+// is in flight, so a slow or hung leader piles nothing up.
+type flight struct{ busy atomic.Bool }
+
+func (f *flight) begin() bool { return f.busy.CompareAndSwap(false, true) }
+func (f *flight) end()        { f.busy.Store(false) }
+
+// refresher runs the GUI's two reads: the status, which the caller waits
+// for, and the backups listing, started in the background so a slow listing
+// never delays the status. Each is skipped while a previous one runs.
+type refresher struct{ status, backups flight }
+
+func (r *refresher) run(status, backups func()) {
+	if r.backups.begin() {
+		go func() {
+			defer r.backups.end()
+			backups()
+		}()
+	}
+	if r.status.begin() {
+		defer r.status.end()
+		status()
+	}
 }
 
 // addressesOf is svc's addresses per layer it is on, as the CLI reported
