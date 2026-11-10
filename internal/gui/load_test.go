@@ -17,7 +17,7 @@ import (
 )
 
 // The GUI's refresh reads everything through the CLI source — `status
-// --json` and `backup --list --json`, forwarded to the leader — never the
+// --json` and `backup-list --json`, forwarded to the leader — never the
 // local engine or config dir.
 func TestLoad_ThroughCLISource(t *testing.T) {
 	st := clistate.Status{
@@ -29,7 +29,7 @@ func TestLoad_ThroughCLISource(t *testing.T) {
 	var ran [][]string
 	src := clistate.CLI{Argv: []string{"homelab"}, Run: func(_ context.Context, argv []string) ([]byte, error) {
 		ran = append(ran, argv)
-		if slices.Equal(argv, []string{"homelab", "backup", "--list", "--json"}) {
+		if slices.Equal(argv, []string{"homelab", "backup-list", "--json"}) {
 			return []byte(`[{"dir":"/var/lib/homelab-backups/b1","services":["web"]}]`), nil
 		}
 		require.Equal(t, []string{"homelab", "status", "--json"}, argv)
@@ -51,7 +51,8 @@ func TestLoad_ThroughCLISource(t *testing.T) {
 	bl, berr := loadBackups(Options{Source: src})
 	require.Empty(t, berr)
 	require.Len(t, bl, 1)
-	assert.Len(t, ran, 2)
+	require.Len(t, ran, 2)
+	assert.Equal(t, []string{"homelab", "backup-list", "--json"}, ran[1], "the lock-free listing, not backup --list")
 
 	addrs := addressesOf(&l.services[0], l.layerObjs)
 	require.Len(t, addrs, 2)

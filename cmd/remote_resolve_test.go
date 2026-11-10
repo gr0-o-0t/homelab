@@ -5,6 +5,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/groot/homelab/internal/remote"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 )
@@ -25,6 +26,22 @@ func TestResolveCommand_CanonicalPathThroughAliases(t *testing.T) {
 		path, ok := ResolveCommand(tc.argv)
 		assert.Equal(t, tc.ok, ok, "%q", tc.argv)
 		assert.Equal(t, tc.path, path, "%q", tc.argv)
+	}
+}
+
+// The agent's lock decision through the real cobra tree: every spelling of
+// backup that mentions --list (as a flag, a flag's value, a positional after
+// --, or overridden later) takes the lock; only backup-list is lock-free.
+func TestResolveCommand_BackupLocksWhateverTheFlags(t *testing.T) {
+	for argv, want := range map[string]bool{
+		"backup --list": true, "backup --list --json": true, "backup --all": true,
+		"backup --all --out --list": true, "backup --group --list": true, "backup --group media --list": true,
+		"backup --fetch --list": true, "backup --all -- --list": true, "backup --all --list --list=false": true,
+		"backup-list --json": false, "--json backup-list": false,
+	} {
+		path, ok := ResolveCommand(strings.Fields(argv))
+		assert.True(t, ok, argv)
+		assert.Equal(t, want, remote.Locks(path), argv)
 	}
 }
 

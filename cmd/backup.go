@@ -81,7 +81,26 @@ func init() {
 	backupCmd.Flags().BoolVar(&backupFlags.list, "list", false, "List existing backups in the destination directory (with --json: machine-readable)")
 	backupCmd.Flags().StringVar(&backupFlags.fetch, "fetch", "", "Copy the named backup from the leader into <local-dir>/<name> on this PC")
 	_ = backupCmd.RegisterFlagCompletionFunc("group", completeGroupNames)
-	rootCmd.AddCommand(backupCmd, backupExportCmd)
+	rootCmd.AddCommand(backupCmd, backupExportCmd, backupListCmd)
+}
+
+// backupListCmd is `backup --list` as a command of its own, for the front
+// ends that poll it on every refresh. backup is Mutating, so `backup --list`
+// takes the agent's lock (the server decides on the command path, never on
+// flags); backup-list is in remote.ReadOnly and never waits behind an up or
+// a backup. Hidden plumbing: users have `backup --list`.
+var backupListCmd = &cobra.Command{
+	Use:    "backup-list",
+	Short:  "List existing backups, newest first (backup --list without the lock; used by the front ends)",
+	Hidden: true,
+	Args:   cobra.NoArgs,
+	RunE: func(*cobra.Command, []string) error {
+		dir, err := backup.ResolveUnder(backupsRoot, "")
+		if err != nil {
+			return err
+		}
+		return listBackups(dir)
+	},
 }
 
 // backupRunsLocally reports whether c is `backup --fetch`, which writes to

@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/groot/homelab/internal/actions"
 	"github.com/groot/homelab/internal/clistate"
 	"github.com/groot/homelab/internal/docker"
 	"github.com/groot/homelab/internal/network"
@@ -31,7 +32,7 @@ func fakeCLI(t *testing.T, st clistate.Status, ran *[][]string) clistate.CLI {
 					return json.Marshal(s)
 				}
 			}
-		case slices.Equal(args, []string{"backup", "--list", "--json"}):
+		case slices.Equal(args, []string{"backup-list", "--json"}):
 			return []byte("[]"), nil
 		}
 		t.Fatalf("unexpected CLI call %v", argv)
@@ -83,6 +84,18 @@ func TestDashboard_FromCLIStatus(t *testing.T) {
 	assert.Contains(t, view, "https://web.home.example.com")
 	assert.Contains(t, ran, []string{"homelab", "--no-color", "status", "--json"})
 	assert.Contains(t, ran, []string{"homelab", "--no-color", "status", "web", "--json"})
+}
+
+// The Backups view and a backup choice list backups with `backup-list
+// --json`, the lock-free command, never `backup --list` (which waits behind
+// any running up or backup).
+func TestDashboard_ListsBackupsWithBackupList(t *testing.T) {
+	var ran [][]string
+	m := New(Options{Source: fakeCLI(t, clistate.Status{}, &ran), Layers: fakeLayers(), CLI: []string{"homelab"}})
+	m.backupsCmd()()
+	m.choicesCmd(actions.Input{Key: "backup", Kind: actions.Choice, Source: actions.SourceBackups})()
+	want := []string{"homelab", "--no-color", "backup-list", "--json"}
+	assert.Equal(t, [][]string{want, want}, ran)
 }
 
 // A refresh still in flight is not started again: every tick while the

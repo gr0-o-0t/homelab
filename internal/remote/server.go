@@ -262,7 +262,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	go s.readLoop(ctx, conn, stdin, ch, cancel, alive)
 	go keepAlive(ctx, ss, s.cfg.PingInterval, cancel)
 
-	if Locks(path, h.Argv) {
+	if Locks(path) {
 		select {
 		case s.lock <- struct{}{}:
 		default:

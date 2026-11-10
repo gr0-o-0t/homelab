@@ -68,7 +68,7 @@ func helperMain(args []string) {
 		_, _ = buf.ReadFrom(os.Stdin)
 		fmt.Print("got:" + buf.String())
 		os.Exit(0)
-	case "up", "rm", "cf", "backup": // up|rm|cf|backup <sub…> <id> <sleep-ms>: records its interval in dir
+	case "up", "rm", "cf", "backup", "backup-list": // up|rm|cf|backup|backup-list <sub…> <id> <sleep-ms>: records its interval in dir
 		id := args[len(args)-2]
 		ms, _ := strconv.Atoi(args[len(args)-1])
 		_ = os.WriteFile(filepath.Join(dir, id+".pid"), []byte(strconv.Itoa(os.Getpid())), 0o600)
@@ -130,7 +130,7 @@ func testResolve(argv []string) ([]string, bool) {
 		return []string{"cf", argv[1]}, true
 	}
 	switch name {
-	case "help", "completion", "__complete", "status", "ls", "cat", "up", "delete", "agent", "envshim", "version", "login", "join", "backup", "restore":
+	case "help", "completion", "__complete", "status", "ls", "cat", "up", "delete", "agent", "envshim", "version", "login", "join", "backup", "backup-list", "restore":
 		return []string{name}, true
 	}
 	return nil, false

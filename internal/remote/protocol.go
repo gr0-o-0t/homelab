@@ -29,13 +29,15 @@ var Mutating = map[string]bool{
 	"ext": true, "cf": true, "new": true, "cluster": true, "files": true,
 }
 
-// ReadOnly are the canonical paths of observing subcommands under a
-// Mutating command; their siblings (cf route add/rm, ext enable/disable)
-// take the lock.
+// ReadOnly are the canonical paths of observing commands that never take the
+// lock: subcommands under a Mutating command (their siblings, cf route
+// add/rm and ext enable/disable, take it), and backup-list, the hidden
+// lock-free twin of `backup --list` the front ends poll on every refresh.
 var ReadOnly = map[string]bool{
 	"cf status": true, "cf logs": true,
 	"ext list": true, "ext status": true, "ext logs": true,
 	"files get": true,
+	"backup-list": true,
 }
 
 // Detached are the commands (canonical top-level names) that run to
@@ -148,23 +150,13 @@ func majorMinor(v string) string {
 	return parts[0] + "." + parts[1]
 }
 
-// ReadOnlyFlags are flags that turn a Mutating command into an observing one:
-// `backup --list` only reads the backups volume, and the front ends run it
-// on every refresh, so it must not wait behind an up or a backup.
-var ReadOnlyFlags = map[string]string{"backup": "--list"}
-
-// Locks reports whether argv, resolved to the canonical command path, takes
-// the lock.
-func Locks(path, argv []string) bool {
+// Locks reports whether the canonical command path takes the lock. It looks
+// at the path only, never at flags: the server cannot parse an argv the way
+// cobra will in the child, so a flag-based exemption could be spelled to let
+// a mutating run through unlocked.
+func Locks(path []string) bool {
 	if len(path) == 0 || ReadOnly[strings.Join(path, " ")] {
 		return false
-	}
-	if f, ok := ReadOnlyFlags[path[0]]; ok {
-		for _, a := range argv {
-			if a == f || a == f+"=true" {
-				return false
-			}
-		}
 	}
 	return Mutating[path[0]]
 }

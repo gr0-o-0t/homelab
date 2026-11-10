@@ -11,7 +11,7 @@ import (
 
 // Options is everything the GUI needs from the CLI. It reads nothing local:
 // what it shows comes from Source — this binary's `status --json` and
-// `backup --list --json`, forwarded to the leader — so it works from any PC.
+// `backup-list --json`, forwarded to the leader — so it works from any PC.
 // Every Source call is made off the render thread.
 type Options struct {
 	Source clistate.Source

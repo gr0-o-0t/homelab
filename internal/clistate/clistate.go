@@ -1,6 +1,6 @@
 // Package clistate is what the front ends (dashboard, GUI) display, as the
 // CLI reports it: `homelab status --json`, `homelab status <svc> --json` and
-// `homelab backup --list --json`. Running those through this binary forwards
+// `homelab backup-list --json`. Running those through this binary forwards
 // them to the leader agent, so a front end shows the cluster from any PC — it
 // never reads the local Docker engine or the local config dir.
 package clistate
@@ -219,10 +219,11 @@ func (c CLI) Service(name string) (Service, error) {
 	return s, err
 }
 
-// Backups runs `homelab backup --list --json`.
+// Backups runs `homelab backup-list --json`: backup --list without the
+// agent's lock, so a refresh never waits behind an up or a backup.
 func (c CLI) Backups() ([]backup.Listing, error) {
 	var l []backup.Listing
-	err := c.json(&l, "backup", "--list", "--json")
+	err := c.json(&l, "backup-list", "--json")
 	return l, err
 }
 
