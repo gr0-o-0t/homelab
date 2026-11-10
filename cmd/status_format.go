@@ -33,6 +33,9 @@ func mergedCoreState(state, health string) string {
 // Returns one of: healthy, running, starting, unhealthy, restarting,
 // stopped, partial (N/M).
 func mergedState(svc service.Service, health string) string {
+	if svc.StateUnknown {
+		return styles.Warning.Render("unknown")
+	}
 	// Check container-level states first for states that Running count can't distinguish.
 	for i := range svc.Containers {
 		if svc.Containers[i].State == "restarting" {

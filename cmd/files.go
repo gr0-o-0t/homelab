@@ -7,6 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/groot/homelab/internal/desired"
 	"github.com/groot/homelab/internal/swarm"
 )
 
@@ -52,17 +53,44 @@ var filesPutCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		return withDeployer(configDir(), true, func(ctx context.Context, d *swarm.Deployer) error {
-			if err := d.WriteConfigFile(ctx, args[0], args[1], data); err != nil {
-				return err
-			}
-			fmt.Fprintf(c.ErrOrStderr(), "%s/%s updated and %s redeployed\n", args[0], args[1], args[0])
-			return nil
-		})
+		root, svc, rel := configDir(), args[0], args[1]
+		// The secrets manager is required: validation checks no secret value
+		// ends up in a spec.
+		if err := withDeployer(root, true, func(_ context.Context, d *swarm.Deployer) error {
+			return d.WriteConfigFile(svc, rel, data)
+		}); err != nil {
+			return err
+		}
+		return applyEdit(root, svc, rel, c.ErrOrStderr())
 	},
 }
 
 func init() {
 	filesCmd.AddCommand(filesGetCmd, filesPutCmd)
 	rootCmd.AddCommand(filesCmd)
+}
+
+// applyEdit rolls a saved file out the way `homelab up <svc>` does — shared
+// databases and generated secrets prepared first — when the service is
+// desired running. A stopped (or never started) service is left so: the
+// file waits for the next `homelab up`.
+func applyEdit(root, svc, rel string, w io.Writer) error {
+	d, _, err := desired.LoadDesired(root)
+	if err != nil {
+		return err
+	}
+	if st := d.Services[svc]; st != desired.Running {
+		state := "not running"
+		if st == desired.Stopped {
+			state = "stopped"
+		}
+		_, _ = fmt.Fprintf(w, "%s/%s saved; %s is %s — run `homelab up %s` to apply\n", svc, rel, svc, state, svc)
+		return nil
+	}
+	recordService(root, svc, desired.Running)
+	if err := upOne(root, svc); err != nil {
+		return fmt.Errorf("saved %s, but redeploying %s failed: %w — the file is saved; run `homelab up %s` to retry", rel, svc, err, svc)
+	}
+	_, _ = fmt.Fprintf(w, "%s/%s saved and %s redeployed\n", svc, rel, svc)
+	return nil
 }

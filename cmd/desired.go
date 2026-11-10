@@ -22,3 +22,9 @@ func recordService(root, name string, st desired.State) {
 		fmt.Fprintf(os.Stderr, "warning: desired state: %v\n", err)
 	}
 }
+
+// desiredStopped reports whether name is recorded as stopped.
+func desiredStopped(root, name string) bool {
+	d, _, err := desired.LoadDesired(root)
+	return err == nil && d.Services[name] == desired.Stopped
+}

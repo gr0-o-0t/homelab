@@ -36,11 +36,6 @@ func (c *Client) Close() error {
 	return c.c.Close()
 }
 
-// NewWithClient wraps an existing Docker SDK client. Used in tests.
-func NewWithClient(c *dockerclient.Client) *Client {
-	return &Client{c: c}
-}
-
 // ShortID returns the first n characters of a container ID.
 func ShortID(id string) string {
 	if len(id) > 12 {

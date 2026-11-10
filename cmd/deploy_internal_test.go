@@ -147,8 +147,8 @@ func TestLifecycle_NoSecretsManagerRefusesDeploy(t *testing.T) {
 	assert.Equal(t, uint64(0), replicasOf(alphaServices(t, f)[0]), "stop still works")
 }
 
-// R20: the core stack still runs on compose for now.
-func TestLifecycle_CoreStackStaysOnCompose(t *testing.T) {
+// With no service, the lifecycle verbs refuse before touching Swarm.
+func TestLifecycle_NoServiceMakesNoSwarmCall(t *testing.T) {
 	f := fakeSwarm(t)
 	root := webFixture(t)
 	runCLI(t, root, "down")

@@ -31,7 +31,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case tea.WindowSizeMsg:
 			m.width, m.height = msg.Width, msg.Height
-		case refreshedMsg, coreStatusMsg, backupsMsg, actionDoneMsg, coreTickMsg, logTickMsg, inspectTickMsg, spinner.TickMsg:
+		case refreshedMsg, backupsMsg, actionDoneMsg, coreTickMsg, logTickMsg, inspectTickMsg, spinner.TickMsg:
 			return m.update(msg)
 		}
 		lm, cmd := m.logv.Update(msg)
@@ -63,6 +63,9 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case refreshedMsg:
 		m.services = msg.services
+		if msg.core != nil {
+			m.core = msg.core
+		}
 		if msg.enabled != nil {
 			m.enabled = msg.enabled
 		}
@@ -71,9 +74,6 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case refreshErrMsg:
 		m.toast, m.toastErr = msg.err.Error(), true
-
-	case coreStatusMsg:
-		m.core = msg
 
 	case backupsMsg:
 		m.backups, m.backErr = msg.list, ""
@@ -93,9 +93,9 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case coreTickMsg:
-		// Containers change state behind the dashboard's back (crashes,
-		// other terminals), so the list refreshes on the same tick.
-		cmds = append(cmds, m.coreRefreshCmd(), m.refreshCmd(), coreTickCmd())
+		// Tasks change state behind the dashboard's back (crashes,
+		// other PCs): one status call refreshes the list and the edge.
+		cmds = append(cmds, m.refreshCmd(), coreTickCmd())
 
 	case logTickMsg:
 		cmds = append(cmds, m.fetchLogsCmd(), logTickCmd())
@@ -143,7 +143,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) refreshAll() tea.Cmd {
-	return tea.Batch(m.refreshCmd(), m.coreRefreshCmd(), m.backupsCmd())
+	return tea.Batch(m.refreshCmd(), m.backupsCmd())
 }
 
 // actionDone records a captured run: the Health pane for checks run there,

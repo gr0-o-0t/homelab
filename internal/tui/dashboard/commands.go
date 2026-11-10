@@ -2,7 +2,6 @@ package dashboard
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,62 +13,43 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/groot/homelab/internal/actions"
-	"github.com/groot/homelab/internal/backup"
-	"github.com/groot/homelab/internal/service"
+	"github.com/groot/homelab/internal/clistate"
 )
 
 // Bubble Tea commands: the dashboard's side effects.
 //
-// Everything that talks to Docker, the config directory or the CLI lives here
+// Everything that talks to the CLI — which is how the dashboard reads the
+// cluster, from any PC — lives here
 // and reports back as a message, so Update stays a pure state machine and
 // never blocks.
 
 var errNoCLI = errors.New("no homelab binary configured")
 
+// refreshCmd reads `homelab status --json` through the CLI (forwarded to the
+// leader): the services with their counts, the enabled extensions and the
+// edge's state, in one call.
 func (m Model) refreshCmd() tea.Cmd {
-	root, src, catalog, enabled := m.opt.Root, m.opt.State, m.opt.Catalog, m.opt.Enabled
+	src, catalog := m.opt.Source, m.opt.Catalog
 	return func() tea.Msg {
-		var (
-			svcs []service.Service
-			err  error
-		)
-		if src != nil {
-			svcs, err = service.DiscoverAllWith(root, src, catalog)
-		} else {
-			svcs, err = service.DiscoverWithCatalog(root, catalog)
+		if src == nil {
+			return refreshErrMsg{err: errNoCLI}
 		}
+		st, err := src.Status()
 		if err != nil {
 			return refreshErrMsg{err: err}
 		}
-		msg := refreshedMsg{services: svcs}
-		if enabled != nil {
-			msg.enabled = enabled()
-		}
-		return msg
+		return refreshedMsg{services: st.List(catalog), enabled: st.Enabled(), core: st.CoreStates(agentContainer)}
 	}
 }
 
-// coreRefreshCmd reports the state of each core container by name.
-func (m Model) coreRefreshCmd() tea.Cmd {
-	dc, containers := m.opt.Docker, m.coreContainers()
-	return func() tea.Msg {
-		states := coreStatusMsg{}
-		if dc == nil {
-			return states
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		for _, c := range containers {
-			states[c] = dc.ContainerState(ctx, c)
-		}
-		return states
-	}
-}
-
-// backupsCmd lists the backups in the default directory, newest first.
+// backupsCmd lists the leader's backups, newest first.
 func (m Model) backupsCmd() tea.Cmd {
+	src := m.opt.Source
 	return func() tea.Msg {
-		list, err := backup.List(backup.DefaultDir())
+		if src == nil {
+			return backupsMsg{err: errNoCLI}
+		}
+		list, err := src.Backups()
 		return backupsMsg{list: list, err: err}
 	}
 }
@@ -111,28 +91,31 @@ func (m Model) fetchLogsCmd() tea.Cmd {
 	}
 }
 
+// fetchInspectCmd reads the selected service's tasks with `homelab status
+// <svc> --json`.
 func (m Model) fetchInspectCmd() tea.Cmd {
 	svc := m.selectedService()
-	if m.view != viewServices || svc == nil || !svc.Installed || isCore(svc) || m.opt.State == nil {
+	if m.view != viewServices || svc == nil || !svc.Installed || isCore(svc) || m.opt.Source == nil {
 		return nil
 	}
-	src, name := m.opt.State, svc.Name
+	src, name := m.opt.Source, svc.Name
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		details, err := src.ServiceContainers(ctx, name)
-		if err != nil || len(details) == 0 {
+		s, err := src.Service(name)
+		if err != nil {
 			return containerDetailMsg{svcName: name}
 		}
-		return containerDetailMsg{svcName: name, details: details}
+		return containerDetailMsg{svcName: name, details: s.Containers}
 	}
 }
 
 // choicesCmd resolves a Choice input's dynamic Source.
 func (m Model) choicesCmd(in actions.Input) tea.Cmd {
-	root := m.opt.Root
+	src := m.opt.Source
 	return func() tea.Msg {
-		c, err := actions.Choices(root, in)
+		if src == nil {
+			return choicesMsg{key: in.Key, choices: in.Choices}
+		}
+		c, err := clistate.Choices(src, in)
 		return choicesMsg{key: in.Key, choices: c, err: err}
 	}
 }

@@ -291,7 +291,7 @@ func runServiceDoctorFor(dir, name string, fix bool) bool {
 	defer closeSrc()
 
 	renderCheckGroup(diagnostics.RunServiceConfigChecks(dir, name), &pass)
-	renderCheckGroup(diagnostics.RunServiceContainerChecks(name, src), &pass)
+	renderCheckGroup(diagnostics.RunServiceContainerChecks(name, src, desiredStopped(dir, name)), &pass)
 	renderCheckGroup(diagnostics.RunServiceRoutingChecks(dir, name), &pass)
 
 	fmt.Println()

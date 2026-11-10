@@ -21,7 +21,8 @@ contribute to the catalog.
 > **Editing on the leader**: edit the files from any PC with `homelab edit
 > <service> <path>`: `docker-compose.yml`, `config.yaml`, or a file the
 > service bind-mounts. The file opens in your `$EDITOR`; when you save a change
-> it goes back to the leader and the service is redeployed. The compose file and
+> it goes back to the leader and, if the service runs, is applied as `homelab
+> up` does (shared databases and generated secrets first). The compose file and
 > config.yaml are checked first (they must parse and translate to Swarm
 > services, with no secret in a spec); an invalid one is refused and the
 > previous content kept. `exposure.yaml` is owned by `homelab enable`/`disable`.

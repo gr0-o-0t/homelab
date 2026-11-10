@@ -10,6 +10,7 @@ import (
 
 	"github.com/groot/homelab/internal/docker"
 	"github.com/groot/homelab/internal/exposure"
+	"github.com/groot/homelab/internal/network"
 	"github.com/groot/homelab/internal/network/layers"
 )
 
@@ -37,6 +38,13 @@ type Service struct {
 	Containers []docker.ContainerDetail
 	Running    int // containers (on Swarm: desired-running tasks) in state "running"
 	Total      int // containers (on Swarm: tasks Swarm wants running)
+	// StateUnknown: the state source could not be asked (Docker or Swarm
+	// unreachable), so Running/Total say nothing.
+	StateUnknown bool
+
+	// Addresses are the service's addresses per layer it is on, as the CLI
+	// reported them (internal/clistate); nil when discovered locally.
+	Addresses map[string][]network.ServiceAddress
 }
 
 // AggregateHealth reduces a multi-container service's per-container health
@@ -94,70 +102,19 @@ func DiscoverWith(repoRoot string, src StateSource) ([]Service, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	enrich(ctx, src, svcs, false)
-	return svcs, nil
-}
-
-// DiscoverWithCatalog merges installed services with catalog-only entries.
-// catalogNames lists names from the embedded catalog. Names already present on
-// disk appear as normal installed services; the remainder appear as catalog-only
-// stubs (Installed=false, no Dir, no container data). Installed services sort
-// first, both groups sorted alphabetically within themselves.
-func DiscoverWithCatalog(repoRoot string, catalogNames []string) ([]Service, error) {
-	installed, err := discover(repoRoot)
-	if err != nil {
-		return nil, err
-	}
-
-	installedSet := make(map[string]bool, len(installed))
-	for i := range installed {
-		s := &installed[i]
-		installedSet[s.Name] = true
-	}
-
-	for _, name := range catalogNames {
-		if installedSet[name] {
-			continue
-		}
-		installed = append(installed, Service{Name: name, Installed: false})
-	}
-
-	sort.Slice(installed, func(i, j int) bool {
-		if installed[i].Installed != installed[j].Installed {
-			return installed[i].Installed // installed before catalog-only
-		}
-		return installed[i].Name < installed[j].Name
-	})
-	return installed, nil
-}
-
-// DiscoverAllWith is like DiscoverWithCatalog but enriches installed
-// services with live container data from src. Catalog-only entries are
-// skipped.
-func DiscoverAllWith(repoRoot string, src StateSource, catalogNames []string) ([]Service, error) {
-	svcs, err := DiscoverWithCatalog(repoRoot, catalogNames)
-	if err != nil {
-		return nil, err
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	enrich(ctx, src, svcs, true)
+	enrich(ctx, src, svcs)
 	return svcs, nil
 }
 
 // enrich populates Containers/Running/Total/HostPorts for each service from
-// src, in place. onlyInstalled skips catalog-only stub entries.
-func enrich(ctx context.Context, src StateSource, svcs []Service, onlyInstalled bool) {
+// src, in place.
+func enrich(ctx context.Context, src StateSource, svcs []Service) {
 	for i := range svcs {
 		svc := &svcs[i]
-		if onlyInstalled && !svc.Installed {
-			continue
-		}
 		containers, err := src.ServiceContainers(ctx, svc.Name)
 		if err != nil {
-			continue // unreachable or not deployed: counts stay zero
+			svc.StateUnknown = true // unreachable: counts say nothing
+			continue
 		}
 		svc.Containers = containers
 		svc.Total = len(containers)

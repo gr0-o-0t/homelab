@@ -388,7 +388,6 @@ func section(title string) string { return styles.GroupTitle.Render(title) }
 func (m Model) serviceDetail(svc *service.Service, w int) []string {
 	lines := titleLine(styles.Icon("box"), svc.Name, stateTag(svc.Running, svc.Total), w)
 
-	env := m.rootEnv()
 	lines = append(lines, "", section("Access"))
 	for _, l := range m.offeredLayers() {
 		icon := styles.Icon(layerIcon(l.Name()))
@@ -397,7 +396,11 @@ func (m Model) serviceDetail(svc *service.Service, w int) []string {
 			lines = append(lines, styles.Muted.Render(icon+" "+tag+" off"))
 			continue
 		}
-		for _, addr := range l.ServiceAddresses(svc.Name, env) {
+		if len(svc.Addresses[l.Name()]) == 0 {
+			lines = append(lines, styles.Exposed.Render(icon)+" "+tag+" on")
+			continue
+		}
+		for _, addr := range svc.Addresses[l.Name()] {
 			text := styles.Primary.Render(addr.URL)
 			if addr.Note != "" {
 				text += " " + styles.Muted.Render("("+addr.Note+")")

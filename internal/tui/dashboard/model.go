@@ -22,6 +22,7 @@ import (
 
 	"github.com/groot/homelab/internal/actions"
 	"github.com/groot/homelab/internal/backup"
+	"github.com/groot/homelab/internal/clistate"
 	"github.com/groot/homelab/internal/docker"
 	"github.com/groot/homelab/internal/network"
 	"github.com/groot/homelab/internal/service"
@@ -77,12 +78,12 @@ const (
 type (
 	refreshedMsg struct {
 		services []service.Service
-		enabled  map[string]bool // nil: unchanged
+		enabled  map[string]bool   // nil: unchanged
+		core     map[string]string // edge container → state; nil: unchanged
 	}
 	refreshErrMsg struct{ err error }
-	// coreStatusMsg maps a core container name to its state.
-	coreStatusMsg map[string]string
-	logTailMsg    struct {
+
+	logTailMsg struct {
 		svcName string
 		lines   []string
 	}
@@ -115,25 +116,16 @@ type (
 	}
 )
 
-// EnvBuilderFn returns the environment map for a service name.
-type EnvBuilderFn func(svcName string) map[string]string
-
 // Options is what the dashboard needs from its host (cmd).
 type Options struct {
-	Root     string
-	Docker   *docker.Client // nil: no live container state
+	// Source is where everything the dashboard shows comes from: the CLI's
+	// `status --json` and friends, forwarded to the leader, so it shows the
+	// cluster from any PC.
+	Source   clistate.Source
 	Services []service.Service
 	Catalog  []string
 	// Layers is every registered network layer, the private one first.
 	Layers []network.NetworkLayer
-	// Enabled reports which extensions config.yaml enables. Called from a
-	// tea.Cmd on every refresh, since enabling one changes it; nil means only
-	// the private layer.
-	Enabled  func() map[string]bool
-	BuildEnv EnvBuilderFn
-	// State reports a service's containers (its Swarm tasks, cluster-wide);
-	// nil leaves the counts and the detail pane empty.
-	State service.StateSource
 	// CLI is the argv prefix every action runs through: this binary plus its
 	// global flags.
 	CLI []string
@@ -253,7 +245,6 @@ func (m Model) StopStreams() { m.streams.stopAll() }
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		m.refreshCmd(),
-		m.coreRefreshCmd(),
 		m.backupsCmd(),
 		coreTickCmd(),
 		logTickCmd(),
@@ -619,13 +610,6 @@ func (m Model) clampCursors() Model {
 		}
 	}
 	return m
-}
-
-func (m Model) rootEnv() map[string]string {
-	if m.opt.BuildEnv == nil {
-		return map[string]string{}
-	}
-	return m.opt.BuildEnv("")
 }
 
 // withMark returns a copy of the marks with name toggled; Models are values,

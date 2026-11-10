@@ -1396,7 +1396,7 @@ func (a *app) networkView() {
 // ── Backups ───────────────────────────────────────────────────────────────────
 
 func (a *app) backupsView() {
-	a.viewHeader(glyphBackups, "Backups", fmt.Sprintf("%d in %s", len(a.v.backups), shortPath(filepath.Join(a.opt.Root, "backups"))))
+	a.viewHeader(glyphBackups, "Backups", fmt.Sprintf("%d on the leader (homelab-backups volume)", len(a.v.backups)))
 	t := a.globalTarget()
 	acts := filterBy(actions.For(t), func(x actions.Action) bool { return touchesCommand(x, "backup", "restore") })
 	fl := newFlow()
@@ -1404,11 +1404,7 @@ func (a *app) backupsView() {
 		act := &acts[i]
 		a.actionButton(*act, t, "stack", false, false, fl)
 	}
-	imgui.SameLine()
-	if button(glyphFolder+"  Open folder##bkdir", toneGhost, false) {
-		a.openURL(filepath.Join(a.opt.Root, "backups"))
-	}
-	textC(cMuted, "Secrets are not in backups — they stay in the keyring. After restoring on a new machine, run Configure on each service.")
+	textC(cMuted, "Secrets are not in backups — they stay in the leader's vault. After restoring on a new cluster, run Configure on each service. Copy one to this PC with homelab backup --fetch.")
 	imgui.Dummy(v2(0, a.px(6)))
 	if a.v.backupsErr != "" {
 		textWrapped(cError, glyphWarn+"  "+a.v.backupsErr)
@@ -1607,7 +1603,7 @@ func (a *app) healthView() {
 // ── Settings ──────────────────────────────────────────────────────────────────
 
 func (a *app) settingsView() {
-	a.viewHeader(glyphSettings, "Settings", shortPath(a.opt.Root))
+	a.viewHeader(glyphSettings, "Settings", "on the leader")
 	t := a.globalTarget()
 	conf := filterBy(actions.For(t), func(x actions.Action) bool { return x.Group == actions.GroupConfigure })
 	fl := newFlow()

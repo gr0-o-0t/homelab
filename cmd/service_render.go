@@ -46,6 +46,8 @@ func printServiceTable(svcs []service.Service, env map[string]string, wide bool)
 
 		var stateCol string
 		switch {
+		case svc.StateUnknown:
+			stateCol = styles.Warning.Render("unknown")
 		case svc.Total == 0:
 			stateCol = styles.Muted.Render("stopped")
 		case svc.Running == svc.Total:

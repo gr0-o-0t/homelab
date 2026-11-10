@@ -59,7 +59,7 @@ homelab restart <service...>                       # force-update every Swarm se
 homelab pull <service...>                          # pull images only (-a, --group)
 homelab update <service...>                        # pull + redeploy, tags resolved to digests (-a, --group)
 homelab reload [service]                           # load the routes into the agent's Caddy, or re-render one service's
-homelab edit <service> <path>                      # edit docker-compose.yml, config.yaml or a bind-mounted file in $EDITOR; validated, saved on the leader, service redeployed
+homelab edit <service> <path>                      # edit docker-compose.yml, config.yaml or a bind-mounted file in $EDITOR; validated, saved on the leader, applied as `up` does if the service runs
 homelab delete <service>... (alias: rm)            # Swarm services + exposure + config; type the name or -y
 ```
 
@@ -76,7 +76,7 @@ service is down) and `up` brings it back exactly as it was. Only `disable` and
 homelab                                            # interactive TUI (service browser)
 homelab --gui                                      # desktop GUI (giu; absent from -tags nogui builds)
 homelab ls [-q]                                    # list installed services (table, --json, -q names)
-homelab status [service]   (alias: ps)             # edge + services overview, or per-service detail (each task and its node)
+homelab status [service]   (alias: ps)             # edge + services overview, or per-service detail (each task and its node); --json for front ends
 homelab logs [service]                             # a service's logs from every node, key-prefixed (-f, -n, -t, --since, -c, --tui); no service: the leader agent's
 homelab caddy status                               # whether the agent's Caddy answers on its admin socket
 homelab caddy logs                                 # follow the leader agent's logs (Caddy logs there)
@@ -497,6 +497,7 @@ homelab down --group media            # stop all media services
 | `internal/diagnostics` | `doctor`/`status --check` checks |
 | `internal/scaffold` | `//go:embed templates/*`; `Render()` + `Write()` for new-service boilerplate |
 | `internal/actions` | Registry of every user-facing action (argv, inputs, danger, icon, availability) the TUI and GUI render from |
+| `internal/clistate` | What the front ends display, as `homelab status --json` reports it; the CLI-backed `Source` they read through |
 | `internal/tui/dashboard` | Bubble Tea fullscreen service browser |
 | `internal/tui/logs` | Bubble Tea streaming log viewer |
 | `internal/tui/wizard` | Multi-step new-service scaffold wizard |
@@ -522,7 +523,7 @@ Every action's argv is also parsed through `rootCmd` in tests.
 - **minis is the single manager**: no HA; all state, data volumes, host bind paths, the docker socket and shared databases pin to the core node. Nothing permanent on laptop/desktop.
 - **No secrets on disk in plain text**: the vault in the agent volume (root-only key file, no unlock prompt, Swarm autolock off); service env through a Swarm secret, never the spec, argv or labels.
 - **Tests never reach the real Docker daemon or a tailnet**: packages that touch Docker take an interface with fakes (`swarm/swarmtest`), and every test package that can shell out to docker has a `TestMain` pointing `DOCKER_HOST` at a nonexistent socket. New test packages that touch docker need the same guard.
-- **Front ends run the CLI**: the TUI dashboard and the GUI never reimplement an action — each button/key execs this binary (`selfCLI`) with the matching command, so they cannot drift from the CLI (and are forwarded to the agent like any other invocation).
+- **Front ends run the CLI**: the TUI dashboard and the GUI never reimplement an action — each button/key execs this binary (`selfCLI`) with the matching command — and read everything they show the same way (`status --json`, `status <svc> --json`, `backup --list --json`, via `internal/clistate`). Each invocation is forwarded to the leader, so they show the cluster from any PC and never read the local engine or config dir. `selfCLI` passes no `--config-dir` (the agent refuses it).
 - **Spinner + captured output**: Caddy reload output is captured in a `bytes.Buffer` Commander while the spinner runs; buffer is printed only on error.
 
 ## Adding a New Service

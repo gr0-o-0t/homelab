@@ -50,6 +50,8 @@ func runServiceStatus(dir, name string, env map[string]string) error {
 
 	var containerStatus string
 	switch {
+	case svc.StateUnknown:
+		containerStatus = styles.Warning.Render("unknown (Docker/Swarm unavailable)")
 	case svc.Total == 0:
 		containerStatus = styles.Muted.Render("stopped")
 	case svc.Running == svc.Total:

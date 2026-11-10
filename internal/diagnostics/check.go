@@ -262,8 +262,9 @@ func RunServiceConfigChecks(dir, name string) CheckGroup {
 // RunServiceContainerChecks checks a service's Swarm tasks, cluster-wide: all
 // the tasks Swarm wants running are running, and the newest running one's
 // image and health (health only for a container on this node). src nil means
-// Docker is unreachable.
-func RunServiceContainerChecks(name string, src service.StateSource) CheckGroup {
+// Docker is unreachable. stopped is the service's desired state: no tasks is
+// then expected, a warning rather than a failure.
+func RunServiceContainerChecks(name string, src service.StateSource, stopped bool) CheckGroup {
 	const title = "Service Tasks"
 	if src == nil {
 		return CheckGroup{Title: title, Results: []CheckResult{{
@@ -295,6 +296,9 @@ func RunServiceContainerChecks(name string, src service.StateSource) CheckGroup 
 	switch {
 	case len(cs) == 0:
 		r.Status, r.Message = StatusFail, "no tasks scheduled — run homelab up "+name
+		if stopped {
+			r.Status, r.Message = StatusWarn, "no tasks scheduled — "+name+" is stopped"
+		}
 	case running < len(cs):
 		r.Status = StatusFail
 		for i := range cs {

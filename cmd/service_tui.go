@@ -8,10 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/mattn/go-isatty"
 
-	"github.com/groot/homelab/internal/config"
-	"github.com/groot/homelab/internal/docker"
-	"github.com/groot/homelab/internal/network"
-	"github.com/groot/homelab/internal/service"
+	"github.com/groot/homelab/internal/clistate"
 	tuiDashboard "github.com/groot/homelab/internal/tui/dashboard"
 	tuiLogs "github.com/groot/homelab/internal/tui/logs"
 	tuiWizard "github.com/groot/homelab/internal/tui/wizard"
@@ -29,27 +26,14 @@ func isTTY() bool {
 // installs, the setup and new-service wizards — runs inside it: streams in its
 // embedded log viewer, interactive commands by suspending it.
 func runDashboardTUI(root string) error {
-	dc, _ := docker.New()
-	if dc != nil {
-		defer func() { _ = dc.Close() }()
-	}
-	src, closeSrc := stateSource(root)
-	defer closeSrc()
-	catalog := catalogNames()
-	svcs, err := discoverAll(root, src, catalog)
-	if err != nil {
-		return err
-	}
+	// Everything shown comes from this binary's `status --json` and friends,
+	// forwarded to the leader: the dashboard works from any PC.
+	cli := selfCLI(root)
 	model := tuiDashboard.New(tuiDashboard.Options{
-		Root:     root,
-		Docker:   dc,
-		State:    src,
-		Services: svcs,
-		Catalog:  catalog,
-		Layers:   extRegistry().All(),
-		Enabled:  func() map[string]bool { return enabledExtensions(root) },
-		BuildEnv: func(name string) map[string]string { return buildEnv(root, name) },
-		CLI:      selfCLI(root),
+		Source:  clistate.CLI{Argv: cli},
+		Catalog: catalogNames(),
+		Layers:  extRegistry().All(),
+		CLI:     cli,
 	})
 	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
 
@@ -70,16 +54,6 @@ func runDashboardTUI(root string) error {
 		fm.StopStreams()
 	}
 	return err
-}
-
-// enabledExtensions reports which extensions config.yaml enables.
-func enabledExtensions(root string) map[string]bool {
-	cfg, _ := config.Load(config.RootConfigFile(root, rootFlags.configFile))
-	out := map[string]bool{}
-	for _, name := range extRegistry().Names() {
-		out[name] = cfg != nil && hasResolvedExtension(cfg, name)
-	}
-	return out
 }
 
 // runLogTUI launches the fullscreen log viewer for a single service.
@@ -134,41 +108,23 @@ func runWizardTUI(root, initialName string) error {
 
 // ── shared by the dashboard and the GUI ───────────────────────────────────────
 
-// uiLayers is the private layer plus every extension enabled in config.yaml:
-// the layers a front end can show and offer to enable.
-func uiLayers(root string) []network.NetworkLayer {
-	cfg, _ := config.Load(config.RootConfigFile(root, rootFlags.configFile))
-	var layers []network.NetworkLayer
-	for _, name := range extRegistry().Names() {
-		layer, ok := extRegistry().Get(name)
-		if ok && cfg != nil && (name == "ts" || hasResolvedExtension(cfg, name)) {
-			layers = append(layers, layer)
-		}
-	}
-	return layers
-}
-
-// selfCLI is the argv prefix front ends run actions through: this binary,
-// with the same config selection. Every button is then exactly its command.
+// selfCLI is the argv prefix front ends run actions and read state through:
+// this binary, which forwards each invocation to the leader agent. The agent
+// refuses --config-dir/--config (it uses its own state), so they are passed
+// only when commands run here (HOMELAB_AGENT=1).
 func selfCLI(root string) []string {
 	exe, err := os.Executable()
 	if err != nil {
 		exe = os.Args[0]
 	}
-	cli := []string{exe, "--no-color", "--config-dir", root}
-	if rootFlags.configFile != "" {
-		cli = append(cli, "--config", rootFlags.configFile)
+	cli := []string{exe, "--no-color"}
+	if os.Getenv("HOMELAB_AGENT") == "1" {
+		cli = append(cli, "--config-dir", root)
+		if rootFlags.configFile != "" {
+			cli = append(cli, "--config", rootFlags.configFile)
+		}
 	}
 	return cli
-}
-
-// discoverAll lists installed services (with their Swarm tasks when Docker
-// is reachable) followed by catalog entries not yet installed.
-func discoverAll(root string, src service.StateSource, catalog []string) ([]service.Service, error) {
-	if src != nil {
-		return service.DiscoverAllWith(root, src, catalog)
-	}
-	return service.DiscoverWithCatalog(root, catalog)
 }
 
 // ── scaffold ──────────────────────────────────────────────────────────────────

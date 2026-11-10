@@ -3,8 +3,11 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -13,6 +16,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/groot/homelab/internal/clistate"
+	"github.com/groot/homelab/internal/desired"
 	"github.com/groot/homelab/internal/diagnostics"
 	"github.com/groot/homelab/internal/service"
 	"github.com/groot/homelab/internal/swarm"
@@ -116,27 +121,93 @@ func TestDoctor_ServiceTasks(t *testing.T) {
 	root, f := stateCluster(t)
 	src := &swarm.Deployer{API: f, Root: root}
 
-	g := diagnostics.RunServiceContainerChecks("web", src)
+	g := diagnostics.RunServiceContainerChecks("web", src, false)
 	require.Len(t, g.Results, 2)
 	assert.Equal(t, diagnostics.StatusPass, g.Results[0].Status)
 	assert.Contains(t, g.Results[0].Message, "2/2 tasks running")
 	assert.Contains(t, g.Results[1].Message, "nginx:1")
 
-	g = diagnostics.RunServiceContainerChecks("busy", src)
+	g = diagnostics.RunServiceContainerChecks("busy", src, false)
 	assert.Equal(t, diagnostics.StatusFail, g.Results[0].Status)
 	assert.Contains(t, g.Results[0].Message, "1/2 tasks running")
 	assert.Contains(t, g.Results[0].Message, "pending")
 
-	g = diagnostics.RunServiceContainerChecks("idle", src)
+	g = diagnostics.RunServiceContainerChecks("idle", src, false)
 	assert.Equal(t, diagnostics.StatusFail, g.Results[0].Status)
 	assert.Contains(t, g.Results[0].Message, "no tasks")
 
 	assert.True(t, runServiceDoctorForQuiet(t, root, "web"))
 	assert.False(t, runServiceDoctorForQuiet(t, root, "idle"))
+
+	// A service desired stopped is expected to have no tasks: a warning.
+	g = diagnostics.RunServiceContainerChecks("idle", src, true)
+	assert.Equal(t, diagnostics.StatusWarn, g.Results[0].Status)
+	assert.Contains(t, g.Results[0].Message, "is stopped")
+	recordService(root, "idle", desired.Stopped)
+	assert.True(t, runServiceDoctorForQuiet(t, root, "idle"))
 }
 
 func runServiceDoctorForQuiet(t *testing.T, root, name string) (ok bool) {
 	t.Helper()
 	captureStdout(t, func() { ok = runServiceDoctorFor(root, name, false) })
 	return ok
+}
+
+// With Swarm unreachable, states are unknown rather than "stopped".
+func TestDiscover_SwarmUnavailableIsUnknown(t *testing.T) {
+	root, f := stateCluster(t)
+	f.SetNodes(nil)
+	old := newSwarmAPI
+	newSwarmAPI = func() (swarm.API, error) { return brokenAPI{f}, nil }
+	t.Cleanup(func() { newSwarmAPI = old })
+
+	svcs, err := discoverServices(root)
+	require.NoError(t, err)
+	for _, s := range svcs {
+		assert.True(t, s.StateUnknown, s.Name)
+	}
+	out := captureStdout(t, func() { printServiceTable(svcs, map[string]string{}, false) })
+	assert.Contains(t, out, "unknown")
+	assert.NotContains(t, out, "stopped")
+}
+
+// brokenAPI is a Swarm API whose every service listing fails, as when the
+// daemon is down.
+type brokenAPI struct{ *swarmtest.Fake }
+
+func (brokenAPI) ServiceList(context.Context, dswarm.ServiceListOptions) ([]dswarm.Service, error) {
+	return nil, errors.New("Cannot connect to the Docker daemon")
+}
+
+// `status --json` is what the front ends read: services with counts and
+// tasks, the nodes, the edge; `status <svc> --json` is one service.
+func TestStatusJSON_ForFrontEnds(t *testing.T) {
+	root, _ := stateCluster(t)
+	t.Setenv("HOMELAB_CADDY_ADMIN", filepath.Join(t.TempDir(), "none.sock"))
+	t.Cleanup(resetFlags)
+
+	out := captureStdout(t, func() { runCLI(t, root, "--json", "status") })
+	var st clistate.Status
+	require.NoError(t, json.Unmarshal([]byte(out), &st), out)
+	assert.False(t, st.Edge.Reachable)
+	assert.NotEmpty(t, st.Edge.Error)
+	var hosts []string
+	for _, n := range st.Nodes {
+		hosts = append(hosts, n.Hostname)
+	}
+	assert.ElementsMatch(t, []string{"minis", "laptop"}, hosts)
+	byName := map[string]clistate.Service{}
+	for _, s := range st.Services {
+		byName[s.Name] = s
+	}
+	assert.Equal(t, 2, byName["web"].Running)
+	assert.Equal(t, 1, byName["busy"].Running)
+	assert.Equal(t, 2, byName["busy"].Total)
+
+	out = captureStdout(t, func() { runCLI(t, root, "--json", "status", "web") })
+	var web clistate.Service
+	require.NoError(t, json.Unmarshal([]byte(out), &web), out)
+	require.Len(t, web.Containers, 2)
+	nodes := []string{web.Containers[0].Node, web.Containers[1].Node}
+	assert.ElementsMatch(t, []string{"minis", "laptop"}, nodes)
 }

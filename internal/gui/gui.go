@@ -37,6 +37,7 @@ import (
 
 	"github.com/groot/homelab/internal/actions"
 	"github.com/groot/homelab/internal/backup"
+	"github.com/groot/homelab/internal/clistate"
 	"github.com/groot/homelab/internal/network"
 	"github.com/groot/homelab/internal/service"
 )
@@ -73,10 +74,6 @@ const (
 )
 
 // layerAddrs are a service's addresses on one layer.
-type layerAddrs struct {
-	Layer, Label string
-	Addrs        []network.ServiceAddress
-}
 
 type setupResult struct {
 	Form *setupForm
@@ -162,78 +159,31 @@ func (a *app) animate() {
 // ── background state ──────────────────────────────────────────────────────────
 
 func (a *app) refresh() {
-	svcs, err := a.opt.Discover()
-	var core []ContainerState
-	if a.opt.Core != nil {
-		core = a.opt.Core()
-	}
-	var layerObjs []network.NetworkLayer
-	if a.opt.Layers != nil {
-		layerObjs = a.opt.Layers()
-	}
-	var layerNames []string
-	for _, l := range layerObjs {
-		layerNames = append(layerNames, l.Name())
-	}
-	states := map[string]string{}
-	for _, c := range core {
-		states[c.Name] = c.State
-	}
-	var exts []extState
-	for _, l := range a.opt.AllLayers {
-		if l.Name() == "ts" {
-			continue
-		}
-		exts = append(exts, extState{
-			Name: l.Name(), Label: l.Label(), Container: l.ContainerName(),
-			Enabled: slices.Contains(layerNames, l.Name()), Running: states[l.ContainerName()] == "running",
-		})
-	}
-	bl, berr := backup.List(backup.DefaultDir())
-
+	l := load(a.opt)
 	a.mu.Lock()
-	a.core, a.layers, a.layerObjs, a.exts = core, layerNames, layerObjs, exts
-	a.backups, a.backupsErr = bl, ""
-	if berr != nil {
-		a.backupsErr = berr.Error()
-	}
-	a.discoverErr = ""
-	if err != nil {
-		a.discoverErr = err.Error()
-	} else {
-		a.services = svcs
+	a.core, a.layers, a.layerObjs, a.exts = l.core, l.layers, l.layerObjs, l.exts
+	a.backups, a.backupsErr = l.backups, l.backupsErr
+	a.discoverErr = l.discoverErr
+	if l.discoverErr == "" {
+		a.services = l.services
 	}
 	a.loaded, a.lastRefresh = true, time.Now()
 	a.mu.Unlock()
 	g.Update()
 }
 
-// resolveAddrs looks up a service's addresses on each layer it is exposed
-// on. Slow (it may shell into containers), so always in the background.
+// resolveAddrs shows a service's addresses on each layer it is exposed on,
+// as `status --json` reported them.
 func (a *app) resolveAddrs(name string) {
 	go func() {
 		a.mu.Lock()
-		var svc *service.Service
+		var out []layerAddrs
 		for i := range a.services {
 			if a.services[i].Name == name {
 				s := a.services[i]
-				svc = &s
+				out = addressesOf(&s, a.layerObjs)
 			}
 		}
-		objs := a.layerObjs
-		a.mu.Unlock()
-		if svc == nil || a.opt.Env == nil {
-			return
-		}
-		env := a.opt.Env(name)
-		var out []layerAddrs
-		for _, l := range objs {
-			if !svc.On(service.LayerName(l.Name())) {
-				continue
-			}
-			out = append(out, layerAddrs{Layer: l.Name(), Label: l.Label(), Addrs: l.ServiceAddresses(name, env)})
-		}
-		a.mu.Lock()
 		m := maps.Clone(a.addrs)
 		if m == nil {
 			m = map[string][]layerAddrs{}
@@ -278,7 +228,7 @@ func (a *app) loadSetup(svc string) {
 // loadChoices resolves a dynamic Choice source (groups, backups).
 func (a *app) loadChoices(in actions.Input) {
 	go func() {
-		items, err := actions.Choices(a.opt.Root, in)
+		items, err := clistate.Choices(a.opt.Source, in)
 		res := choiceResult{Items: items}
 		if err != nil {
 			res.Err = err.Error()

@@ -247,10 +247,32 @@ func resolveTargets(root, verb string, all bool, group string, args []string) ([
 func discoverServices(root string) ([]service.Service, error) {
 	src, closeFn := stateSource(root)
 	defer closeFn()
+	var (
+		svcs []service.Service
+		err  error
+	)
 	if src == nil {
-		return service.Discover(root)
+		svcs, err = service.Discover(root)
+		for i := range svcs {
+			svcs[i].StateUnknown = true
+		}
+	} else {
+		svcs, err = service.DiscoverWith(root, src)
 	}
-	return service.DiscoverWith(root, src)
+	if err == nil && stateUnavailable(svcs) {
+		fmt.Fprintf(os.Stderr, "%s Docker/Swarm unavailable — service states are unknown\n", styles.Warning.Render("!"))
+	}
+	return svcs, err
+}
+
+// stateUnavailable reports whether the Swarm state could not be read.
+func stateUnavailable(svcs []service.Service) bool {
+	for i := range svcs {
+		if svcs[i].StateUnknown {
+			return true
+		}
+	}
+	return false
 }
 
 func validName(name string) error { return config.ValidServiceName(name) }

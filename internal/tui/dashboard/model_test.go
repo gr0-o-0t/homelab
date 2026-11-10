@@ -54,24 +54,36 @@ func fakeLayers() []network.NetworkLayer {
 	}
 }
 
+// withAddresses gives each service the addresses `status --json` reports:
+// one per layer it is on.
+func withAddresses(svcs []service.Service) []service.Service {
+	for i := range svcs {
+		for _, l := range svcs[i].Layers {
+			if svcs[i].Addresses == nil {
+				svcs[i].Addresses = map[string][]network.ServiceAddress{}
+			}
+			svcs[i].Addresses[l] = []network.ServiceAddress{{URL: "https://" + svcs[i].Name + "." + l}}
+		}
+	}
+	return svcs
+}
+
 func stubServices() []service.Service {
-	return []service.Service{
+	return withAddresses([]service.Service{
 		{Name: "caddy", Installed: true, Running: 1, Total: 1, Layers: []string{"ts"}},
 		{Name: "immich", Installed: true, Running: 3, Total: 3, Layers: []string{"ts", "cf", "tor", "i2p", "ygg"}},
 		{Name: "jellyfin", Installed: true, Running: 1, Total: 2},
 		{Name: "sonarr", Installed: true, Running: 0, Total: 1},
 		{Name: "paperless", Installed: false}, // catalog-only
 		{Name: "vaultwarden", Installed: false},
-	}
+	})
 }
 
 func newTestModel(svcs []service.Service) Model {
 	m := New(Options{
-		Root:     "/nonexistent/homelab-test",
 		Services: svcs,
 		Catalog:  []string{"paperless", "vaultwarden"},
 		Layers:   fakeLayers(),
-		BuildEnv: func(string) map[string]string { return map[string]string{"DOMAIN": "example.com"} },
 		CLI:      []string{"homelab-test-binary"},
 	})
 	m.width, m.height = 120, 40

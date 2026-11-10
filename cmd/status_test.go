@@ -55,7 +55,8 @@ func TestStatusEdgeTable_RendersEdgeSection(t *testing.T) {
 	os.Stdout = w
 
 	rootCmd := cmd.RootCmd()
-	rootCmd.SetArgs([]string{"--config-dir", tmp, "status"})
+	// --json may linger from another test in this binary: say no explicitly.
+	rootCmd.SetArgs([]string{"--config-dir", tmp, "--json=false", "status"})
 	err = rootCmd.Execute()
 	require.NoError(t, err)
 

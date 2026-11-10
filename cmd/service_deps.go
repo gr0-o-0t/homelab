@@ -182,6 +182,9 @@ func ensureGeneratedSecrets(p *db.Provisioner, name string) error {
 
 // prepareService is what `up` does before compose for any service: generate
 // its own secrets, then start and provision what it depends on.
+// provisionDBs is ensureDBDependencies; a var so tests can observe it.
+var provisionDBs = ensureDBDependencies
+
 func prepareService(ctx context.Context, root, name string) error {
 	sm, err := secrets.Open()
 	if err != nil {
@@ -190,7 +193,7 @@ func prepareService(ctx context.Context, root, name string) error {
 	if err := ensureGeneratedSecrets(db.New(root, sm), name); err != nil {
 		return err
 	}
-	return ensureDBDependencies(ctx, root, name)
+	return provisionDBs(ctx, root, name)
 }
 
 // bootstrapIfShared finishes bringing up a shared service started directly

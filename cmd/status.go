@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/groot/homelab/internal/config"
@@ -20,7 +21,11 @@ var statusCmd = &cobra.Command{
 	Long: `Display the status of the edge (the leader agent's Caddy, network extensions)
 and every installed service.
 
-With a service argument, show status for that specific service.`,
+With a service argument, show status for that specific service.
+
+With --json, print it as one document (internal/clistate): services with
+their tasks and addresses, the nodes, the extensions and the edge. The
+dashboard and the GUI read the cluster this way, from any PC.`,
 	Args:              cobra.MaximumNArgs(1),
 	ValidArgsFunction: completeServiceNames,
 	RunE:              runStatus,
@@ -30,6 +35,9 @@ var statusCheckFlag bool
 
 func runStatus(_ *cobra.Command, args []string) error {
 	dir := configDir()
+	if rootFlags.json {
+		return writeStatusJSON(dir, args, os.Stdout)
+	}
 	cfgFile := rootConfigFile()
 	cfg, _ := config.Load(cfgFile)
 	env := buildEnv(dir, "")

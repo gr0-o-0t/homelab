@@ -53,9 +53,9 @@ var editCmd = &cobra.Command{
 	Long: `Edit a service's docker-compose.yml, its config.yaml, or a config file it
 bind-mounts (glance's config/glance.yml, grafana's provisioning files, ...) from
 any PC: the file is fetched from the leader, opened in $VISUAL / $EDITOR
-(default vi), and if you changed it, sent back and the service redeployed so
-the new content reaches its tasks. <path> is relative to the service's
-directory.
+(default vi), and if you changed it, sent back; the change is then applied
+as "homelab up" does if the service runs (a stopped one waits for "up").
+<path> is relative to the service's directory.
 
 docker-compose.yml and config.yaml are checked before they are saved: they
 must parse (placement roles valid, cache_volumes naming compose volumes) and

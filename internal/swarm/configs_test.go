@@ -121,7 +121,7 @@ func TestConfigs_SymlinkRefused(t *testing.T) {
 func TestFilesPut_RejectsTraversal(t *testing.T) {
 	d, _, dir := glanceService(t)
 	for _, p := range []string{"../../config.yaml", "../x", "/etc/passwd", "config/../../x", "", "."} {
-		err := d.WriteConfigFile(context.Background(), "glance", p, []byte("evil"))
+		err := d.WriteConfigFile("glance", p, []byte("evil"))
 		assert.Error(t, err, p)
 	}
 	b, err := os.ReadFile(filepath.Join(dir, "config", "glance.yml"))
@@ -133,7 +133,7 @@ func TestFilesPut_RejectsNonConfigFiles(t *testing.T) {
 	d, _, dir := glanceService(t)
 	for _, p := range []string{"exposure.yaml", "other.conf"} {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, p), []byte("orig"), 0o644))
-		err := d.WriteConfigFile(context.Background(), "glance", p, []byte("evil"))
+		err := d.WriteConfigFile("glance", p, []byte("evil"))
 		require.Error(t, err, p)
 		assert.Contains(t, err.Error(), "not a bind-mounted config", p)
 		_, err = d.ReadConfigFile("glance", p)
@@ -155,12 +155,13 @@ func TestFilesPut_SpecFileSavedAndRedeployed(t *testing.T) {
 	assert.Contains(t, string(got), "image: nginx:1")
 
 	edited := strings.Replace(glanceCompose, "image: nginx:1", "image: nginx:1\n    hostname: edited", 1)
-	require.NoError(t, d.WriteConfigFile(ctx, "glance", "docker-compose.yml", []byte(edited)))
+	require.NoError(t, d.WriteConfigFile("glance", "docker-compose.yml", []byte(edited)))
+	require.NoError(t, d.Up(ctx, "glance")) // what files put runs next (via the up path)
 	b, _ := os.ReadFile(filepath.Join(dir, "docker-compose.yml"))
 	assert.Equal(t, edited, string(b))
 	assert.Equal(t, "edited", services(t, f, "glance")[0].Spec.TaskTemplate.ContainerSpec.Hostname, "redeployed")
 
-	require.NoError(t, d.WriteConfigFile(ctx, "glance", "config.yaml", []byte("vars:\n  X:\n    value: \"1\"\n")))
+	require.NoError(t, d.WriteConfigFile("glance", "config.yaml", []byte("vars:\n  X:\n    value: \"1\"\n")))
 	assert.FileExists(t, filepath.Join(dir, "config.yaml"))
 }
 
@@ -168,7 +169,6 @@ func TestFilesPut_SpecFileSavedAndRedeployed(t *testing.T) {
 // YAML that does not parse, a secret interpolated into the spec, an unknown
 // placement role.
 func TestFilesPut_SpecFileRefusedNothingWritten(t *testing.T) {
-	ctx := context.Background()
 	d, f, dir := glanceService(t)
 	sm := secrets.NewForTest(keyring.NewArrayKeyring(nil))
 	require.NoError(t, sm.Set("glance", "TOKEN", "s3cr3t-token"))
@@ -185,7 +185,7 @@ func TestFilesPut_SpecFileRefusedNothingWritten(t *testing.T) {
 		{"config.yaml", cfg + "placement:\n  glance: somewhere\n", "unknown role"},
 		{"config.yaml", cfg + "cache_volumes: [nosuch]\n", "not a volume"},
 	} {
-		err := d.WriteConfigFile(ctx, "glance", tc.file, []byte(tc.content))
+		err := d.WriteConfigFile("glance", tc.file, []byte(tc.content))
 		require.Error(t, err, tc.content)
 		assert.Contains(t, err.Error(), tc.want, tc.content)
 		assert.Contains(t, err.Error(), "nothing changed", tc.content)
@@ -201,6 +201,23 @@ func TestFilesPut_SpecFileRefusedNothingWritten(t *testing.T) {
 	assert.Error(t, err)
 }
 
+// A spec file the service did not have is refused just the same, and stays
+// absent; no staging leftovers remain in the service dir or the state root.
+func TestFilesPut_NewSpecFileRefusedStaysAbsent(t *testing.T) {
+	d, _, dir := glanceService(t)
+	cfg := filepath.Join(dir, "config.yaml")
+	require.NoFileExists(t, cfg)
+	err := d.WriteConfigFile("glance", "config.yaml", []byte("placement:\n  glance: somewhere\n"))
+	require.ErrorContains(t, err, "nothing changed")
+	assert.NoFileExists(t, cfg)
+	for _, p := range []string{dir, filepath.Dir(filepath.Dir(dir))} {
+		entries, _ := os.ReadDir(p)
+		for _, e := range entries {
+			assert.False(t, strings.HasPrefix(e.Name(), "."), "leftover %s in %s", e.Name(), p)
+		}
+	}
+}
+
 func TestFilesPut_RejectsSymlinkEscape(t *testing.T) {
 	d, _, dir := glanceService(t)
 	outside := t.TempDir()
@@ -210,7 +227,7 @@ func TestFilesPut_RejectsSymlinkEscape(t *testing.T) {
 	require.NoError(t, os.Symlink(outside, filepath.Join(dir, "config", "dir")))
 
 	for _, p := range []string{"config/link.yml", "config/dir/secret", "config/dir/new"} {
-		assert.Error(t, d.WriteConfigFile(context.Background(), "glance", p, []byte("evil")), p)
+		assert.Error(t, d.WriteConfigFile("glance", p, []byte("evil")), p)
 		_, err := d.ReadConfigFile("glance", p)
 		assert.Error(t, err, p)
 	}
@@ -230,15 +247,17 @@ func TestFilesPut_RedeploysService(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "v1", string(got))
 
-	require.NoError(t, d.WriteConfigFile(ctx, "glance", "config/glance.yml", []byte("v2 new")))
+	require.NoError(t, d.WriteConfigFile("glance", "config/glance.yml", []byte("v2 new")))
+	require.NoError(t, d.Up(ctx, "glance"))
 	b, err := os.ReadFile(filepath.Join(dir, "config", "glance.yml"))
 	require.NoError(t, err)
 	assert.Equal(t, "v2 new", string(b))
 	assert.NotEqual(t, before, configsOf(t, f, "glance"), "a new config rolled out")
 
 	// a new file under a bound directory is a config too; a single bound file works
-	require.NoError(t, d.WriteConfigFile(ctx, "glance", "config/sub/new.yml", []byte("n")))
-	require.NoError(t, d.WriteConfigFile(ctx, "glance", "one.conf", []byte("uno")))
+	require.NoError(t, d.WriteConfigFile("glance", "config/sub/new.yml", []byte("n")))
+	require.NoError(t, d.WriteConfigFile("glance", "one.conf", []byte("uno")))
+	require.NoError(t, d.Up(ctx, "glance"))
 	targets := map[string]bool{}
 	for _, r := range services(t, f, "glance")[0].Spec.TaskTemplate.ContainerSpec.Configs {
 		targets[r.File.Name] = true
@@ -249,8 +268,8 @@ func TestFilesPut_RedeploysService(t *testing.T) {
 
 func TestFilesPut_RejectsOversizeAndEmpty(t *testing.T) {
 	d, _, _ := glanceService(t)
-	assert.Error(t, d.WriteConfigFile(context.Background(), "glance", "one.conf", nil))
-	assert.Error(t, d.WriteConfigFile(context.Background(), "glance", "one.conf", make([]byte, swarm.MaxConfigSize+1)))
+	assert.Error(t, d.WriteConfigFile("glance", "one.conf", nil))
+	assert.Error(t, d.WriteConfigFile("glance", "one.conf", make([]byte, swarm.MaxConfigSize+1)))
 }
 
 func TestDeployer_RefusesInvalidServiceNames(t *testing.T) {
@@ -269,7 +288,7 @@ func TestDeployer_RefusesInvalidServiceNames(t *testing.T) {
 		assert.ErrorContains(t, err, "invalid service name", svc)
 		_, err = d.ReadConfigFile(svc, "config/glance.yml")
 		assert.ErrorContains(t, err, "invalid service name", svc)
-		assert.ErrorContains(t, d.WriteConfigFile(ctx, svc, "config/x", []byte("x")), "invalid service name", svc)
+		assert.ErrorContains(t, d.WriteConfigFile(svc, "config/x", []byte("x")), "invalid service name", svc)
 	}
 	_, err := os.Stat(filepath.Join(root, "core", "config", "x"))
 	assert.True(t, os.IsNotExist(err))
