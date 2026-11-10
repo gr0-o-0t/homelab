@@ -16,7 +16,19 @@ make tidy       # go mod tidy
 make test       # go test ./...
 make ci         # lint + test-race + build
 make catalog    # export assets/services/ → services/ for local browsing
+make image      # local agent image homelab:dev (+ ghcr.io/gr0-o-0t/homelab:<tag> on a tag) from the static headless binary
+make release    # dist/: tarballs + SHA256SUMS, and dist/image/linux_{amd64,arm64}/homelab (the image's build context)
 ```
+
+The agent image (`Dockerfile`) is `docker:<ver>-cli` (Alpine + static docker
+CLI, busybox sh/tar/rm for the backup helpers; pinned by tag and digest) +
+tzdata + the static headless binary at `/usr/local/bin/homelab`
+(`ENTRYPOINT homelab`, `CMD agent`, root, label
+`org.opencontainers.image.version`). Nothing is compiled inside Docker: the
+context is `dist/image/` only (`.dockerignore`). Releases push
+`ghcr.io/gr0-o-0t/homelab:<tag>` and `:latest` for linux/amd64 + arm64
+(`.github/workflows/release.yml`). Test a local build with
+`init|join|upgrade --image homelab:dev`.
 
 Run a single test package:
 
@@ -37,13 +49,37 @@ homelab init [--import <dir>] [--image <ref>]      # first PC (minis): swarm ini
 homelab join [--endpoint <url>] [--secret-stdin]   # another PC: swarm join as a worker, start its agent
 homelab login [--endpoint <url>] [--secret-stdin]  # use this PC as a client only (no agent, no swarm)
 homelab logout                                     # forget the endpoint and the cluster secret here
+homelab upgrade [--version X] [--image REF]        # roll a new agent image: pull on every node, workers one by one, the leader last
 ```
 
 `init`/`join` advertise the host's Tailscale IPv4 and refuse an address outside
 100.64.0.0/10. `init --import ~/.config/homelab` brings a Compose-era config dir
 (root and service config, exposure, routing, desired state, keyring secrets)
-into the new leader and reuses its named volumes. `homelab upgrade` (rolling the
-agents, workers first) is planned (Task 20) and does not exist yet.
+into the new leader and reuses its named volumes.
+
+`upgrade` (forwarded; Mutating and Detached) resolves the image on the PC
+(default `ghcr.io/gr0-o-0t/homelab:<this CLI's version>`; a dev build needs
+`--image`) and sends `upgrade --image REF [--version V]` to the leader, which
+(`bootstrap.Upgrade`): makes the image available on its engine; asks every
+Ready worker's agent its `version` and has it pull (`agent self-replace
+--pull-only`) — a worker already on the target is left alone, a Down node or
+an unreachable agent is **skipped**, a failed pull halts before anything is
+replaced; then replaces the workers one by one through `agent self-replace
+--image REF`, waiting up to 60 s for each to answer on the expected version
+(`--version`, else the image's `org.opencontainers.image.version` label) — a
+failure or mismatch halts before the leader; then replaces its own agent and
+the session ends. The PC prints "agent restarting", reconnects for up to
+60 s and checks the leader's `version`. Replacement (`bootstrap.SelfReplace`):
+the agent inspects its own `homelab-agent` container and starts a helper
+container `homelab-agent-replace` (new image, docker socket, AutoRemove,
+spec in `HOMELAB_REPLACE_SPEC`) running `agent replace-helper`, which after
+3 s stops and removes the old container (never its volumes), creates the new
+one with the identical config, host config (mounts, restart policy) and
+networks + aliases on the new image, and rolls back to the old image if it
+does not start. `agent self-replace` runs remotely only on a worker agent
+(`ServerConfig.AllowInternal`) and refuses on the leader. The agent accepts
+`upgrade` and `version` from a CLI of another major.minor
+(`remote.AcrossVersions`); every other command is refused.
 
 ### Service lifecycle
 
@@ -282,7 +318,7 @@ tsnet listener, `https://homelab.<tailnet>:7443`), authenticated with
 HMAC-SHA256 of the cluster secret. The agent runs this same binary against its
 state dir, under a pty when the client has a terminal, and streams output and
 the exit code back. A major.minor version mismatch between CLI and agent is
-refused. Mutating commands take a server-wide lock; `backup`/`restore` run on
+refused, except for `upgrade` and `version`. Mutating commands take a server-wide lock; `backup`/`restore`/`upgrade` run on
 to completion if the client disconnects. `--config-dir`/`--config` are refused
 in a forwarded argv. `exec` and `logs` for a task on another node are relayed
 to that node's agent.
@@ -474,7 +510,7 @@ homelab down --group media            # stop all media services
 | `cmd/` | Cobra command definitions; forwarding to the agent (`remote.go`), exec/logs relay (`relay.go`) |
 | `internal/agent` | The `homelab agent` process: leader (edge, DNS, cloudflared, bring-up, rebalancer, remote CLI) or worker |
 | `internal/agentstate` | Agent state paths (`/var/lib/homelab`), cluster.yaml, backups volume |
-| `internal/bootstrap` | `init`/`join`: swarm init/join on the tailnet IP, agent container spec, import into the agent |
+| `internal/bootstrap` | `init`/`join`: swarm init/join on the tailnet IP, agent container spec, import into the agent; `upgrade` rollout and agent self-replacement (helper container) |
 | `internal/importer` | Compose-era config dir → leader state tree + vault secrets (`init --import`) |
 | `internal/remote` | Remote CLI protocol, client and server (auth, lock, detach, version check) |
 | `internal/edge` | In-process Caddy on the agent's tsnet node; Caddyfile assembly, adapt, load via admin socket |

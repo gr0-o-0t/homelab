@@ -15,7 +15,7 @@ endif
 
 LDFLAGS := -ldflags="-X github.com/groot/homelab/cmd.Version=$(VERSION)"
 
-.PHONY: build build-headless build-linux-amd64 build-linux-amd64-headless build-linux-arm64 release install tidy test test-race lint lint-full ci catalog version
+.PHONY: build build-headless build-linux-amd64 build-linux-amd64-headless build-linux-arm64 release image install tidy test test-race lint lint-full ci catalog version
 
 # The default build includes the desktop GUI (`homelab --gui`), which needs
 # cgo plus the OpenGL and X11 development headers
@@ -54,12 +54,28 @@ release:
 	@for b in $(DIST)/homelab_$(VERSION)_linux_amd64_headless/homelab $(DIST)/homelab_$(VERSION)_linux_arm64/homelab; do \
 		file "$$b" | grep -q 'statically linked' || { echo "$$b is not statically linked"; exit 1; }; \
 	done
+	@# The agent image's build context (Dockerfile): the same static binaries.
+	@install -D -m 0755 $(DIST)/homelab_$(VERSION)_linux_amd64_headless/homelab $(DIST)/image/linux_amd64/homelab
+	@install -D -m 0755 $(DIST)/homelab_$(VERSION)_linux_arm64/homelab $(DIST)/image/linux_arm64/homelab
 	@cd $(DIST) && for d in homelab_$(VERSION)_linux_*/; do \
 		d=$${d%/}; cp ../LICENSE ../README.md ../CHANGELOG.md "$$d/"; \
 		tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@$$(git log -1 --format=%ct)" \
 			-czf "$$d.tar.gz" "$$d" && rm -rf "$$d"; \
 	done && sha256sum *.tar.gz > SHA256SUMS
 	@ls -lh $(DIST)
+
+# A local agent image for this machine's architecture, from the static
+# headless binary: homelab:dev (for `homelab init|join|upgrade --image
+# homelab:dev`), plus ghcr.io/gr0-o-0t/homelab:<tag> when HEAD is tagged.
+# Release images (amd64 + arm64) are built by .github/workflows/release.yml.
+IMAGE_REPO := ghcr.io/gr0-o-0t/homelab
+HOST_ARCH := $(shell go env GOARCH)
+
+image:
+	@rm -rf $(DIST)/image/linux_$(HOST_ARCH)
+	CGO_ENABLED=0 GOOS=linux GOARCH=$(HOST_ARCH) go build -tags nogui $(LDFLAGS) -o "$(DIST)/image/linux_$(HOST_ARCH)/homelab" .
+	@file "$(DIST)/image/linux_$(HOST_ARCH)/homelab" | grep -q 'statically linked' || { echo "the image binary is not statically linked"; exit 1; }
+	docker build --build-arg VERSION=$(VERSION) -t homelab:dev $(if $(GIT_TAG),-t $(IMAGE_REPO):$(VERSION)) .
 
 install:
 	CGO_ENABLED=1 go install $(LDFLAGS) .

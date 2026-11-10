@@ -42,6 +42,10 @@ type ServerConfig struct {
 	// Resolve maps argv to its canonical command path through the cobra
 	// tree (cmd.ResolveCommand). Without it every command is refused.
 	Resolve Resolver
+	// AllowInternal are the canonical paths of Internal commands this server
+	// runs for a client: a worker agent's "agent self-replace", through
+	// which the leader's upgrade replaces it. The leader allows none.
+	AllowInternal map[string]bool
 
 	// KillGrace is how long a child gets between SIGTERM and SIGKILL once
 	// its client is gone (default 10s).
@@ -239,7 +243,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		s.cfg.Logf("remote: bad handshake from %s: %q", r.RemoteAddr, err.Error())
 		return
 	}
-	path, code, err := validate(h, s.cfg.Version, s.cfg.Resolve)
+	path, code, err := validate(h, s.cfg.Version, s.cfg.Resolve, s.cfg.AllowInternal)
 	if err != nil {
 		// Client-supplied strings are quoted: no forged log lines.
 		s.cfg.Logf("remote: refused %q from %s: %q", CommandName(h.Argv), r.RemoteAddr, err.Error())

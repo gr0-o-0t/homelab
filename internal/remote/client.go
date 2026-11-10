@@ -25,6 +25,28 @@ import (
 // ClusterSecretVar is the root keyring secret holding the cluster secret.
 const ClusterSecretVar = "CLUSTER_SECRET"
 
+// ErrUnreachable is matched (errors.Is) by a Run error that comes from not
+// reaching the agent at all — the PC is off or asleep, or its agent is
+// restarting — as opposed to the agent refusing or failing the command.
+var ErrUnreachable = errors.New("agent unreachable")
+
+// unreachable wraps a dial error: its message is the dial error's, and it is
+// both that error and ErrUnreachable.
+type unreachable struct{ err error }
+
+func (u unreachable) Error() string   { return u.err.Error() }
+func (u unreachable) Unwrap() []error { return []error{u.err, ErrUnreachable} }
+
+// ErrConnectionLost is matched by a Run error that comes from the
+// connection dropping mid-command, before any exit status arrived — as when
+// `homelab upgrade` replaces the very agent it is talking to.
+var ErrConnectionLost = errors.New("connection to the agent lost")
+
+type lost struct{ err error }
+
+func (l lost) Error() string   { return l.err.Error() }
+func (l lost) Unwrap() []error { return []error{l.err, ErrConnectionLost} }
+
 // Client forwards commands to the leader agent.
 type Client struct {
 	Endpoint string // https://homelab.<tailnet>.ts.net:7443
@@ -145,7 +167,10 @@ func (c *Client) Run(ctx context.Context, o RunOptions) (int, error) {
 		if resp != nil && resp.StatusCode == http.StatusUnauthorized {
 			return 1, fmt.Errorf("the agent at %s refused this machine's cluster secret (401) — run `homelab login`", u.Host)
 		}
-		return 1, fmt.Errorf("connect to the agent at %s: %w", u.Host, err)
+		if resp != nil { // it answered, just not with a websocket
+			return 1, fmt.Errorf("connect to the agent at %s: %w", u.Host, err)
+		}
+		return 1, fmt.Errorf("connect to the agent at %s: %w", u.Host, unreachable{err})
 	}
 	defer func() { _ = conn.Close() }()
 	conn.SetReadLimit(maxFrame)
@@ -190,7 +215,7 @@ func (c *Client) Run(ctx context.Context, o RunOptions) (int, error) {
 			if ctx.Err() != nil {
 				return 1, ctx.Err()
 			}
-			return 1, fmt.Errorf("connection to the agent lost: %w", err)
+			return 1, fmt.Errorf("connection to the agent lost: %w", lost{err})
 		}
 		if kind == websocket.BinaryMessage {
 			if o.Stdout != nil {

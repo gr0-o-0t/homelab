@@ -20,6 +20,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -510,6 +511,8 @@ func (a *Agent) runWorker(ctx context.Context, p agentstate.Paths, sm *secrets.M
 		Vault:     p.VaultFile,
 		VaultKey:  p.KeyFile,
 		Resolve:   WorkerResolver(a.Resolve),
+		// agent is Internal: the server refuses it unless allowed here.
+		AllowInternal: map[string]bool{SelfReplacePath: true},
 	}
 	return a.serve(ctx, ln, cfg)
 }
@@ -518,15 +521,20 @@ func (a *Agent) runWorker(ctx context.Context, p agentstate.Paths, sm *secrets.M
 // containers. Everything else goes to the leader.
 var workerCommands = map[string]bool{"exec": true, "logs": true}
 
-// WorkerResolver wraps r so that only `exec` and `logs` resolve; every other
-// command is refused as unknown.
+// SelfReplacePath is the hidden command through which the leader's
+// `homelab upgrade` pulls the new image on a worker and replaces the
+// worker's agent container. Only worker agents run it for a client.
+const SelfReplacePath = "agent self-replace"
+
+// WorkerResolver wraps r so that only `exec`, `logs` and `agent
+// self-replace` resolve; every other command is refused as unknown.
 func WorkerResolver(r remote.Resolver) remote.Resolver {
 	return func(argv []string) ([]string, bool) {
 		if r == nil {
 			return nil, false
 		}
 		path, ok := r(argv)
-		if !ok || len(path) == 0 || !workerCommands[path[0]] {
+		if !ok || len(path) == 0 || (!workerCommands[path[0]] && strings.Join(path, " ") != SelfReplacePath) {
 			return nil, false
 		}
 		return path, true

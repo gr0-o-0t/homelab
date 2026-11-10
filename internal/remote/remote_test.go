@@ -63,6 +63,9 @@ func helperMain(args []string) {
 		line, err := bufio.NewReader(os.Stdin).ReadString('\n')
 		_ = os.WriteFile(filepath.Join(dir, id+".answer"), fmt.Appendf(nil, "%q %v", line, err), 0o600)
 		os.Exit(0)
+	case "version", "upgrade", "agent": // prints what ran
+		fmt.Println("RAN=" + strings.Join(args, " "))
+		os.Exit(0)
 	case "cat": // echoes stdin
 		var buf bytes.Buffer
 		_, _ = buf.ReadFrom(os.Stdin)
@@ -130,7 +133,10 @@ func testResolve(argv []string) ([]string, bool) {
 		return []string{"cf", argv[1]}, true
 	}
 	switch name {
-	case "help", "completion", "__complete", "status", "ls", "cat", "up", "delete", "agent", "envshim", "version", "login", "join", "backup", "backup-list", "restore":
+	case "help", "completion", "__complete", "status", "ls", "cat", "up", "delete", "agent", "envshim", "version", "login", "join", "backup", "backup-list", "restore", "upgrade":
+		if name == "agent" && len(argv) > 1 && !strings.HasPrefix(argv[1], "-") {
+			return []string{"agent", argv[1]}, true
+		}
 		return []string{name}, true
 	}
 	return nil, false
@@ -258,7 +264,6 @@ func TestRemote_RejectsConfigDirInArgv(t *testing.T) {
 		{"--config", "/tmp/x.yaml", "ls"},
 		{"ls", "--config=/tmp/x.yaml"},
 		{},
-		{"version"},
 		{"login"},
 		{"--no-color", "join"},
 		{"--gui"}, // the root command renders locally
@@ -383,6 +388,70 @@ func TestClient_RefusesVersionMismatch(t *testing.T) {
 	code, _, _, err = run(t, e.client(testSecret, "v1.4.9"), RunOptions{Argv: []string{"ls"}})
 	require.NoError(t, err)
 	assert.Equal(t, 0, code)
+}
+
+// upgrade must reach an agent older than the CLI (the normal upgrade path),
+// and version is how upgrade checks an agent; nothing else crosses a
+// major.minor difference.
+func TestRemote_UpgradeAndVersionAllowedAcrossVersionMismatch(t *testing.T) {
+	e := newTestServer(t, nil)
+	for _, v := range []string{"1.5.0", "1.3.9", "2.0.0", "dev"} {
+		c := e.client(testSecret, v)
+		for _, argv := range [][]string{{"upgrade", "--image", "x:1"}, {"version"}} {
+			code, out, _, err := run(t, c, RunOptions{Argv: argv})
+			require.NoError(t, err, "%s %q", v, argv)
+			assert.Equal(t, 0, code)
+			assert.Contains(t, out, "RAN="+argv[0])
+		}
+		for _, argv := range [][]string{{"ls"}, {"status"}, {"up", "a", "1"}, {"backup-list", "a", "1"},
+			{"cf", "status"}, {"rm", "x", "a", "1"}, {"restore", "x"}} {
+			code, out, _, err := run(t, c, RunOptions{Argv: argv})
+			require.Error(t, err, "%s %q ran across a version mismatch", v, argv)
+			assert.Equal(t, 2, code)
+			assert.Contains(t, err.Error(), "differ — run `homelab upgrade`")
+			assert.NotContains(t, out, "ARGV=")
+		}
+	}
+	// Same major.minor: version and upgrade run as before.
+	code, _, _, err := run(t, e.client(testSecret, "1.4.0"), RunOptions{Argv: []string{"version"}})
+	require.NoError(t, err)
+	assert.Equal(t, 0, code)
+}
+
+// agent self-replace runs only where the server allows it (a worker agent);
+// every other agent subcommand, and the leader, refuse it.
+func TestRemote_SelfReplaceOnlyWhereAllowed(t *testing.T) {
+	leader := newTestServer(t, nil)
+	_, out, _, err := run(t, leader.client(testSecret, "1.4.2"), RunOptions{Argv: []string{"agent", "self-replace", "--image", "x"}})
+	require.Error(t, err)
+	assert.NotContains(t, out, "RAN=")
+
+	worker := newTestServer(t, func(c *ServerConfig) { c.AllowInternal = map[string]bool{"agent self-replace": true} })
+	c := worker.client(testSecret, "1.4.2")
+	code, out, _, err := run(t, c, RunOptions{Argv: []string{"agent", "self-replace", "--image", "x"}})
+	require.NoError(t, err)
+	assert.Equal(t, 0, code)
+	assert.Contains(t, out, "RAN=agent self-replace --image x")
+	for _, argv := range [][]string{{"agent"}, {"agent", "replace-helper"}} {
+		_, _, _, err := run(t, c, RunOptions{Argv: argv})
+		require.Error(t, err, "%q", argv)
+	}
+	// Not across a version mismatch either.
+	_, _, _, err = run(t, worker.client(testSecret, "1.5.0"), RunOptions{Argv: []string{"agent", "self-replace", "--image", "x"}})
+	require.Error(t, err)
+}
+
+// A dial failure is ErrUnreachable (an offline PC); a refusal is not.
+func TestClient_UnreachableIsDistinguished(t *testing.T) {
+	c := &Client{Endpoint: "https://127.0.0.1:1", Secret: testSecret, Version: "1.4.2"}
+	_, err := c.Run(context.Background(), RunOptions{Argv: []string{"version"}})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrUnreachable)
+
+	e := newTestServer(t, nil)
+	_, _, _, err = run(t, e.client(testSecret, "1.5.0"), RunOptions{Argv: []string{"ls"}})
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, ErrUnreachable)
 }
 
 func TestLoadClient(t *testing.T) {

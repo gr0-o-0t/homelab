@@ -10,6 +10,13 @@ on:
 # step fails at the very end.
 permissions:
   contents: write
+  # Pushing the agent image to ghcr.io with the GITHUB_TOKEN.
+  packages: write
+
+# Must equal bootstrap.ImageRepo: `homelab init|join|upgrade` pull
+# <IMAGE>:<version> by default. GHCR names are lowercase.
+env:
+  IMAGE: ghcr.io/gr0-o-0t/homelab
 
 jobs:
   release:
@@ -35,6 +42,28 @@ jobs:
       # dist/homelab_<tag>_linux_<arch>.tar.gz, plus dist/SHA256SUMS.
       - name: Build and package
         run: make release
+
+      # The agent image, linux/amd64 + linux/arm64, from the static headless
+      # binaries `make release` just built (dist/image/linux_<arch>/homelab):
+      # nothing is compiled again inside Docker. QEMU only runs the image's
+      # `apk add tzdata` for arm64.
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push the agent image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          build-args: VERSION=${{ github.ref_name }}
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ github.ref_name }}
+            ${{ env.IMAGE }}:latest
 
       # Release notes are the CHANGELOG.md section for this tag, followed by
       # install instructions. A tag without a section fails here rather than
@@ -64,7 +93,21 @@ jobs:
           sudo install -m 0755 "$NAME/homelab" /usr/local/bin/homelab
           ```
 
-          Then run `homelab setup` to configure, or `homelab update` to refresh an existing core.
+          On the first PC (the Swarm manager), create the cluster; it prints the join command:
+
+          ```bash
+          homelab init
+          ```
+
+          On every other PC, join it; or, on a PC that should only run the CLI, log in:
+
+          ```bash
+          homelab join     # or: homelab login
+          ```
+
+          To move an existing cluster to this version, install this CLI on a PC and run
+          `homelab upgrade`: it rolls the agent image `ghcr.io/gr0-o-0t/homelab:${{ github.ref_name }}`
+          across the workers, then the leader.
           NOTES
 
       - name: Create release

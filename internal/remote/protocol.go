@@ -26,7 +26,7 @@ var Mutating = map[string]bool{
 	"add": true, "setup": true, "up": true, "down": true, "start": true, "stop": true,
 	"restart": true, "pull": true, "update": true, "delete": true, "enable": true,
 	"disable": true, "reload": true, "backup": true, "restore": true, "prune": true,
-	"ext": true, "cf": true, "new": true, "cluster": true, "files": true,
+	"ext": true, "cf": true, "new": true, "cluster": true, "files": true, "upgrade": true,
 }
 
 // ReadOnly are the canonical paths of observing commands that never take the
@@ -36,17 +36,18 @@ var Mutating = map[string]bool{
 var ReadOnly = map[string]bool{
 	"cf status": true, "cf logs": true,
 	"ext list": true, "ext status": true, "ext logs": true,
-	"files get": true,
+	"files get":   true,
 	"backup-list": true,
 }
 
 // Detached are the commands (canonical top-level names) that run to
 // completion when their client disconnects: stopping a backup midway leaves
 // a service scaled to zero, and stopping a restore can kill it in the
-// middle of replacing a volume. The server stops streaming to the vanished
-// client, copies the output to the agent log, and keeps the lock until the
-// command exits.
-var Detached = map[string]bool{"backup": true, "restore": true}
+// middle of replacing a volume; stopping an upgrade can leave the cluster
+// half rolled, a worker's agent mid-replacement. The server stops streaming
+// to the vanished client, copies the output to the agent log, and keeps the
+// lock until the command exits.
+var Detached = map[string]bool{"backup": true, "restore": true, "upgrade": true}
 
 // DetachOnDisconnect reports whether the canonical command path survives
 // its client going away.
@@ -104,11 +105,30 @@ func CommandName(argv []string) string {
 	return ""
 }
 
+// AcrossVersions are the commands (canonical top-level names) an agent runs
+// for a client whose major.minor differs: upgrade, invoked by a CLI newer
+// than the agent (the normal upgrade path), and version, which is how
+// upgrade checks an agent. Nothing else crosses a version difference.
+var AcrossVersions = map[string]bool{"upgrade": true, "version": true}
+
+// AgentAnswers are LocalOnly commands the agent still runs when a client
+// asks it directly (a CLI typing `homelab version` runs it locally; upgrade
+// asks an agent for its own).
+var AgentAnswers = map[string]bool{"version": true}
+
 // validate refuses a handshake before anything runs, and otherwise returns
-// the canonical command path (never empty).
-func validate(h Handshake, agentVersion string, resolve Resolver) ([]string, int, error) {
-	if majorMinor(h.Version) != majorMinor(agentVersion) {
+// the canonical command path (never empty). allowInternal are the canonical
+// paths of Internal commands this server runs for a client.
+func validate(h Handshake, agentVersion string, resolve Resolver, allowInternal map[string]bool) ([]string, int, error) {
+	mismatch := majorMinor(h.Version) != majorMinor(agentVersion)
+	refuseMismatch := func() ([]string, int, error) {
 		return nil, 2, fmt.Errorf("homelab CLI %s and agent %s differ — run `homelab upgrade`", h.Version, agentVersion)
+	}
+	// The command is only resolved for a mismatched client when it names
+	// one that may cross: the rest are refused before the agent's cobra
+	// tree sees them.
+	if mismatch && !AcrossVersions[CommandName(h.Argv)] {
+		return refuseMismatch()
 	}
 	if len(h.Argv) == 0 {
 		return nil, 2, fmt.Errorf("no command given")
@@ -128,9 +148,17 @@ func validate(h Handshake, agentVersion string, resolve Resolver) ([]string, int
 		return nil, 2, fmt.Errorf("the root command runs on the local machine, not the agent")
 	}
 	name := path[0]
+	// The resolved name decides, not the first word: an alias must not
+	// smuggle another command across the version check.
+	if mismatch && !AcrossVersions[name] {
+		return refuseMismatch()
+	}
+	if allowInternal[strings.Join(path, " ")] {
+		return path, 0, nil
+	}
 	// help, completion and cobra's __complete* run on the client
 	// (cmd.shouldForward); nothing forwards them.
-	if LocalOnly[name] || name == "help" || name == "completion" || strings.HasPrefix(name, "__") {
+	if (LocalOnly[name] && !AgentAnswers[name]) || name == "help" || name == "completion" || strings.HasPrefix(name, "__") {
 		return nil, 2, fmt.Errorf("`homelab %s` runs on the local machine, not the agent", name)
 	}
 	if Internal[name] {

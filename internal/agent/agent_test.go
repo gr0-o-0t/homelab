@@ -184,6 +184,9 @@ func newHarness(t *testing.T, role Role) *harness {
 			if len(argv) == 0 {
 				return nil, false
 			}
+			if argv[0] == "agent" && len(argv) > 1 {
+				return argv[:2], true
+			}
 			return []string{argv[0]}, true
 		},
 		Inspect: func(context.Context) (NodeInfo, error) { return NodeInfo{Role: role, Hostname: "laptop"}, nil },
@@ -310,6 +313,7 @@ func TestAgent_LeaderStartupOrder(t *testing.T) {
 	path, ok := cfg.Resolve([]string{"up", "x"})
 	assert.True(t, ok, "the leader serves every command")
 	assert.Equal(t, []string{"up"}, path)
+	assert.Empty(t, cfg.AllowInternal, "the leader replaces itself only as upgrade's last step, never on request")
 }
 
 // Without CF_TUNNEL_TOKEN the tunnel connector is removed, not left running
@@ -407,11 +411,17 @@ func TestAgent_WorkerServesOnlyLocalExec(t *testing.T) {
 		assert.True(t, ok, "%v", argv)
 		assert.Equal(t, argv[:1], path)
 	}
-	for _, argv := range [][]string{{"up", "web"}, {"delete", "web"}, {"enable", "web"}, {"setup"}, {}} {
+	// upgrade replaces a worker's agent through the worker itself.
+	path, ok := cfg.Resolve([]string{"agent", "self-replace", "--image", "x"})
+	assert.True(t, ok)
+	assert.Equal(t, []string{"agent", "self-replace"}, path)
+	assert.Equal(t, map[string]bool{"agent self-replace": true}, cfg.AllowInternal)
+	for _, argv := range [][]string{{"up", "web"}, {"delete", "web"}, {"enable", "web"}, {"setup"}, {},
+		{"agent"}, {"agent", "replace-helper"}, {"upgrade"}} {
 		_, ok := cfg.Resolve(argv)
 		assert.False(t, ok, "a worker refuses %v", argv)
 	}
-	_, ok := WorkerResolver(nil)([]string{"exec", "x"})
+	_, ok = WorkerResolver(nil)([]string{"exec", "x"})
 	assert.False(t, ok, "no resolver: refuse everything")
 }
 

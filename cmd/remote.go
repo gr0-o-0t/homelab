@@ -51,7 +51,11 @@ func rootPreRun(c *cobra.Command, _ []string) error {
 		if argv == nil {
 			argv = os.Args[1:]
 		}
-		code, err := forwardRun(argv)
+		run := forwardRun
+		if c == upgradeCmd {
+			run = forwardUpgrade
+		}
+		code, err := run(argv)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %s\n", err)
 			if code == 0 {

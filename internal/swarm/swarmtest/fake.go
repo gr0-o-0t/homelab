@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"slices"
 	"sort"
@@ -64,6 +65,8 @@ type Fake struct {
 	copies     []Copy
 	restartErr error
 	copyLimit  int64
+	removed    []Removed
+	startErr   map[string]error // image → ContainerStart error
 }
 
 // New returns an empty Fake.
@@ -694,6 +697,9 @@ type CreatedContainer struct {
 	Networking network.NetworkingConfig
 	Started    bool
 	Restarts   int
+
+	imageEnv    []string
+	imageLabels map[string]string
 }
 
 // SetInfo sets what Info returns.
@@ -842,6 +848,9 @@ func (f *Fake) ContainerStart(_ context.Context, name string, _ container.StartO
 	if err != nil {
 		return err
 	}
+	if err := f.startErr[c.Config.Image]; err != nil {
+		return err
+	}
 	c.Started = true
 	return nil
 }
@@ -892,11 +901,18 @@ func (f *Fake) CopyToContainer(_ context.Context, name, dst string, content io.R
 	return nil
 }
 
+// Removed is one recorded ContainerRemove.
+type Removed struct {
+	Name    string
+	Options container.RemoveOptions
+}
+
 // ContainerRemove forgets a created container.
-func (f *Fake) ContainerRemove(_ context.Context, name string, _ container.RemoveOptions) error {
+func (f *Fake) ContainerRemove(_ context.Context, name string, o container.RemoveOptions) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.rec("ContainerRemove", name)
+	f.removed = append(f.removed, Removed{Name: name, Options: o})
 	for i, c := range f.created {
 		if c.Name == name {
 			f.created = append(f.created[:i], f.created[i+1:]...)
@@ -904,6 +920,84 @@ func (f *Fake) ContainerRemove(_ context.Context, name string, _ container.Remov
 		}
 	}
 	return fmt.Errorf("swarmtest: container %q not found: %w", name, errdefs.ErrNotFound)
+}
+
+// Removed returns the recorded ContainerRemove calls, options included.
+func (f *Fake) Removed() []Removed {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]Removed(nil), f.removed...)
+}
+
+// ContainerInspect reports a created container as the engine would: its
+// config (env and labels merged with MergeImageDefaults' ones), host config,
+// networks with their aliases, and whether it runs. Image is the image ref
+// it was created from (the engine reports the image ID).
+func (f *Fake) ContainerInspect(_ context.Context, name string) (container.InspectResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rec("ContainerInspect", name)
+	c, err := f.createdByName(name)
+	if err != nil {
+		return container.InspectResponse{}, err
+	}
+	cfg := c.Config
+	cfg.Env = append(slices.Clone(c.imageEnv), c.Config.Env...)
+	if len(c.imageLabels) > 0 {
+		cfg.Labels = maps.Clone(c.imageLabels)
+		maps.Copy(cfg.Labels, c.Config.Labels)
+	}
+	hc := c.HostConfig
+	nets := map[string]*network.EndpointSettings{}
+	for k, v := range c.Networking.EndpointsConfig {
+		ep := *v
+		ep.NetworkID = "net-" + k
+		ep.EndpointID = "ep-" + name
+		ep.IPAddress = "10.0.0.2"
+		nets[k] = &ep
+	}
+	return container.InspectResponse{
+		ContainerJSONBase: &container.ContainerJSONBase{
+			ID: name, Name: "/" + name, Image: c.Config.Image, HostConfig: &hc,
+			State: &container.State{Running: c.Started},
+		},
+		Config:          &cfg,
+		NetworkSettings: &container.NetworkSettings{Networks: nets},
+	}, nil
+}
+
+// MergeImageDefaults makes ContainerInspect of name report env and labels
+// as if its image set them (the engine merges them into the container's).
+func (f *Fake) MergeImageDefaults(name string, env []string, labels map[string]string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if c, err := f.createdByName(name); err == nil {
+		c.imageEnv, c.imageLabels = env, labels
+	}
+}
+
+// ContainerStop stops a created container.
+func (f *Fake) ContainerStop(_ context.Context, name string, _ container.StopOptions) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rec("ContainerStop", name)
+	c, err := f.createdByName(name)
+	if err != nil {
+		return err
+	}
+	c.Started = false
+	return nil
+}
+
+// FailStart makes ContainerStart fail with err for containers created from
+// image (nil: succeed again).
+func (f *Fake) FailStart(image string, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.startErr == nil {
+		f.startErr = map[string]error{}
+	}
+	f.startErr[image] = err
 }
 
 // VolumeRemove records the removal and forgets the volume if listed.

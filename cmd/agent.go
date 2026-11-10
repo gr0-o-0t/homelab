@@ -2,7 +2,10 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/netip"
 	neturl "net/url"
@@ -16,6 +19,7 @@ import (
 
 	"github.com/groot/homelab/internal/agent"
 	"github.com/groot/homelab/internal/agentstate"
+	"github.com/groot/homelab/internal/bootstrap"
 )
 
 var agentFlags struct {
@@ -51,9 +55,80 @@ var agentCmd = &cobra.Command{
 	},
 }
 
+var selfReplaceFlags struct {
+	image    string
+	pullOnly bool
+}
+
+// agentSelfReplaceCmd is how the leader's `homelab upgrade` reaches a
+// worker: a worker agent runs it for the leader (remote AllowInternal),
+// pulling the image (--pull-only) or handing its own replacement to a helper
+// container. The leader never runs it: it replaces itself in-process, as
+// upgrade's last step.
+var agentSelfReplaceCmd = &cobra.Command{
+	Use:    "self-replace",
+	Short:  "Replace this worker's agent container with one on --image (upgrade plumbing)",
+	Hidden: true,
+	Args:   cobra.NoArgs,
+	RunE: func(_ *cobra.Command, _ []string) error {
+		if selfReplaceFlags.image == "" {
+			return errors.New("--image is required")
+		}
+		api, err := newSwarmAPI()
+		if err != nil {
+			return fmt.Errorf("connecting to docker: %w", err)
+		}
+		if c, ok := api.(io.Closer); ok {
+			defer func() { _ = c.Close() }()
+		}
+		ctx := cmdContext()
+		info, err := api.Info(ctx)
+		if err != nil {
+			return fmt.Errorf("asking Docker for this node's swarm role: %w", err)
+		}
+		if info.Swarm.ControlAvailable {
+			return errors.New("refusing on the leader: its agent is replaced only as the last step of `homelab upgrade`")
+		}
+		if selfReplaceFlags.pullOnly {
+			if err := bootstrap.EnsureImage(ctx, api, selfReplaceFlags.image, os.Stdout); err != nil {
+				return err
+			}
+			fmt.Printf("%s is on this node\n", selfReplaceFlags.image)
+			return nil
+		}
+		return bootstrap.SelfReplace(ctx, api, selfReplaceFlags.image, os.Stdout)
+	},
+}
+
+// agentReplaceHelperCmd is the helper container's process: it recreates the
+// agent container from the spec in its environment, then exits (the
+// container removes itself).
+var agentReplaceHelperCmd = &cobra.Command{
+	Use:    "replace-helper",
+	Short:  "Recreate the agent container from $" + bootstrap.ReplaceSpecEnv + " (upgrade plumbing)",
+	Hidden: true,
+	Args:   cobra.NoArgs,
+	RunE: func(_ *cobra.Command, _ []string) error {
+		var spec bootstrap.ReplaceSpec
+		if err := json.Unmarshal([]byte(os.Getenv(bootstrap.ReplaceSpecEnv)), &spec); err != nil {
+			return fmt.Errorf("reading $%s: %w", bootstrap.ReplaceSpecEnv, err)
+		}
+		cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+		if err != nil {
+			return fmt.Errorf("docker client: %w", err)
+		}
+		defer func() { _ = cli.Close() }()
+		// Not cancelled by a signal: stopping halfway would leave no agent.
+		return bootstrap.RunReplace(context.Background(), cli, spec, bootstrap.Sleep)
+	},
+}
+
 func init() {
 	agentCmd.Flags().StringVar(&agentFlags.root, "root", agentstate.Root, "agent state volume")
 	agentCmd.Flags().StringVar(&agentFlags.shimDir, "shim-dir", agent.DefaultShimDir, "mount point of the homelab-shim volume")
+	agentSelfReplaceCmd.Flags().StringVar(&selfReplaceFlags.image, "image", "", "the agent image to run")
+	agentSelfReplaceCmd.Flags().BoolVar(&selfReplaceFlags.pullOnly, "pull-only", false, "only make the image available on this node")
+	agentCmd.AddCommand(agentSelfReplaceCmd, agentReplaceHelperCmd)
 	rootCmd.AddCommand(agentCmd)
 }
 

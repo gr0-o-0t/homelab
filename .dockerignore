@@ -1,0 +1,3 @@
+# The image is built from prebuilt binaries only (see Dockerfile).
+*
+!dist/image/

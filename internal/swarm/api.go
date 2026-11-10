@@ -59,6 +59,10 @@ type API interface {
 		networkingConfig *network.NetworkingConfig, platform *ocispec.Platform, containerName string) (container.CreateResponse, error)
 	ContainerStart(ctx context.Context, container string, options container.StartOptions) error
 	ContainerRestart(ctx context.Context, container string, options container.StopOptions) error
+	// ContainerInspect and ContainerStop serve `homelab upgrade`: the agent
+	// container is recreated from its own inspected spec on a new image.
+	ContainerInspect(ctx context.Context, container string) (container.InspectResponse, error)
+	ContainerStop(ctx context.Context, container string, options container.StopOptions) error
 	// CopyToContainer extracts a tar stream at dstPath in a container
 	// (init --import's state tree; never secrets).
 	CopyToContainer(ctx context.Context, containerID, dstPath string, content io.Reader, options container.CopyToContainerOptions) error

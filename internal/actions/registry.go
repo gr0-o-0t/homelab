@@ -441,6 +441,23 @@ func build() []Action {
 		Action{ID: "global.cluster.login", Label: "Log in to cluster", Group: GroupConfigure, Icon: "link", Scope: Global,
 			Interactive: true, Help: "Use this machine as a client of the leader agent; asks for its endpoint and the cluster secret",
 			Args: named("login"), Commands: []string{"login"}},
+		Action{ID: "global.upgrade", Label: "Upgrade agents", Group: GroupMaintenance, Icon: "upgrade", Scope: Global,
+			Danger: Confirm, Help: "Roll a new homelab version across every agent: workers one by one, the leader last (it restarts)",
+			Inputs: []Input{
+				{Key: "version", Label: "Version", Kind: Text, Help: "Default: this CLI's version"},
+				{Key: "image", Label: "Image", Kind: Text, Help: "Default: ghcr.io/gr0-o-0t/homelab:<version>"},
+			},
+			Args: func(_ Target, in Inputs) []string {
+				args := []string{"upgrade"}
+				if in["version"] != "" {
+					args = append(args, "--version", in["version"])
+				}
+				if in["image"] != "" {
+					args = append(args, "--image", in["image"])
+				}
+				return args
+			},
+			Commands: []string{"upgrade", "upgrade --version", "upgrade --image"}},
 		Action{ID: "global.cluster.logout", Label: "Log out of cluster", Group: GroupConfigure, Icon: "unlink", Scope: Global,
 			Danger: Confirm, Help: "Forget the leader's endpoint and the cluster secret on this machine",
 			Args: named("logout"), Commands: []string{"logout"}},
