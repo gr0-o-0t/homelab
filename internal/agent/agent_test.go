@@ -406,7 +406,7 @@ func TestAgent_WorkerServesOnlyLocalExec(t *testing.T) {
 	assert.Empty(t, cfg.CaddyAdmin)
 	assert.Empty(t, cfg.TSSocks, "a worker relays nothing")
 
-	for _, argv := range [][]string{{"exec", "web", "sh"}, {"logs", "web"}} {
+	for _, argv := range [][]string{{"exec", "web", "sh"}, {"logs", "web"}, {"version", "--agent"}, {"version"}} {
 		path, ok := cfg.Resolve(argv)
 		assert.True(t, ok, "%v", argv)
 		assert.Equal(t, argv[:1], path)

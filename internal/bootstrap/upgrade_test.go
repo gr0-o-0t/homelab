@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
 	dswarm "github.com/docker/docker/api/types/swarm"
 	"github.com/docker/docker/api/types/volume"
@@ -39,16 +41,22 @@ func imageWith(version string, env ...string) image.InspectResponse {
 }
 
 // fakeWorkers is a cluster of worker agents reached over the tailnet: each
-// answers `version`, `agent self-replace --pull-only` and `agent
-// self-replace`, and comes back on the new version once replaced.
+// answers `version --agent` (version and boot ID), `agent self-replace
+// --pull-only` and `agent self-replace`, and comes back as a new container
+// on the new version once replaced — after lag more answers from the old
+// one, or never (staysOld: rolled back).
 type fakeWorkers struct {
 	mu          sync.Mutex
 	calls       []string
 	version     map[string]string
+	boot        map[string]string
 	unreachable map[string]bool
 	failPull    map[string]bool
 	staysOld    map[string]bool
-	log         *[]string // shared with the leader's replace, for ordering
+	lag         map[string]int
+	pending     map[string]int
+	backOn      map[string]string // the version a replaced agent comes back on (default v1.5.0)
+	log         *[]string         // shared with the leader's replace, for ordering
 }
 
 func (w *fakeWorkers) call(_ context.Context, host string, argv []string) (string, error) {
@@ -62,17 +70,36 @@ func (w *fakeWorkers) call(_ context.Context, host string, argv []string) (strin
 	if w.unreachable[host] {
 		return "", fmt.Errorf("connect to the agent at homelab-%s: dial: %w", host, remote.ErrUnreachable)
 	}
+	if w.boot == nil {
+		w.boot = map[string]string{}
+	}
+	if w.boot[host] == "" {
+		w.boot[host] = "old-" + host
+	}
 	switch {
-	case slices.Equal(argv, []string{"version"}):
-		return w.version[host] + "\n", nil
+	case slices.Equal(argv, VersionArgv):
+		if w.pending[host] > 0 {
+			w.pending[host]--
+			if w.pending[host] == 0 {
+				w.version[host], w.boot[host] = cmp.Or(w.backOn[host], "v1.5.0"), "new-"+host
+			}
+		}
+		return w.version[host] + "\nboot " + w.boot[host] + "\n", nil
 	case slices.Contains(argv, "--pull-only"):
 		if w.failPull[host] {
 			return "", errors.New("pulling: manifest unknown")
 		}
 		return "pulled\n", nil
 	case len(argv) >= 2 && argv[0] == "agent" && argv[1] == "self-replace":
-		if !w.staysOld[host] {
-			w.version[host] = "v1.5.0"
+		switch {
+		case w.staysOld[host]:
+		case w.lag[host] > 0:
+			if w.pending == nil {
+				w.pending = map[string]int{}
+			}
+			w.pending[host] = w.lag[host]
+		default:
+			w.version[host], w.boot[host] = cmp.Or(w.backOn[host], "v1.5.0"), "new-"+host
 		}
 		return "replacing\n", nil
 	}
@@ -175,8 +202,9 @@ func TestUpgrade_OfflineWorkerSkipped(t *testing.T) {
 // halts the rollout before the leader: rerunning finishes it.
 func TestUpgrade_FailedWorkerHaltsBeforeLeader(t *testing.T) {
 	for name, w := range map[string]*fakeWorkers{
-		"pull":     {version: map[string]string{"desktop": "v1.4.0"}, failPull: map[string]bool{"desktop": true}},
-		"mismatch": {version: map[string]string{"desktop": "v1.4.0"}, staysOld: map[string]bool{"desktop": true}},
+		"pull":        {version: map[string]string{"desktop": "v1.4.0"}, failPull: map[string]bool{"desktop": true}},
+		"mismatch":    {version: map[string]string{"desktop": "v1.4.0"}, backOn: map[string]string{"desktop": "v1.4.1"}},
+		"rolled back": {version: map[string]string{"desktop": "v1.4.0"}, staysOld: map[string]bool{"desktop": true}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := upgradeFake(workerNode("n1", "desktop", dswarm.NodeStateReady))
@@ -188,9 +216,12 @@ func TestUpgrade_FailedWorkerHaltsBeforeLeader(t *testing.T) {
 			assert.NotContains(t, log, "leader: self-replace")
 			require.Len(t, res, 1)
 			assert.Equal(t, WorkerFailed, res[0].Status)
-			if name == "mismatch" {
-				assert.Contains(t, out.String(), "v1.4.0")
-				assert.Contains(t, res[0].Detail, "expected v1.5.0")
+			switch name {
+			case "mismatch":
+				assert.Contains(t, out.String(), "v1.4.1")
+				assert.Contains(t, res[0].Detail, "reports v1.4.1, expected v1.5.0")
+			case "rolled back":
+				assert.Contains(t, res[0].Detail, "still the old agent")
 			}
 		})
 	}
@@ -310,11 +341,12 @@ func TestSelfReplace_HelperSpecMatchesOldContainer(t *testing.T) {
 	assert.Equal(t, newImage, h.Config.Image, "the helper runs the new image")
 	assert.Equal(t, []string{"agent", "replace-helper"}, []string(h.Config.Cmd))
 	assert.Equal(t, []string{"/var/run/docker.sock:/var/run/docker.sock"}, h.HostConfig.Binds, "the docker socket only")
-	assert.True(t, h.HostConfig.AutoRemove, "the helper is removed when it exits")
+	assert.False(t, h.HostConfig.AutoRemove, "a failed helper keeps its logs")
+	assert.Empty(t, h.HostConfig.RestartPolicy.Name, "a failed helper is not retried")
+	assert.Equal(t, "1", h.Config.Labels[HelperLabel], "labelled, so a later run can clean it up")
 
 	s := helperSpec(t, f)
 	assert.Equal(t, AgentContainer, s.Container)
-	assert.Equal(t, oldImage, s.OldImage, "kept for a rollback")
 	want := before.Config
 	want.Image = newImage
 	assert.Equal(t, want, s.Config, "the old container's config, image swapped; the image's own env not frozen in")
@@ -327,17 +359,90 @@ func TestSelfReplace_HelperSpecMatchesOldContainer(t *testing.T) {
 	assert.NotContains(t, f.CallLog(), "ContainerStop "+AgentContainer)
 }
 
-// A new container that does not start is rolled back to the old image.
-func TestRunReplace_RollsBackWhenTheNewAgentFails(t *testing.T) {
+// On success the old agent is kept aside until the new one has run steadily,
+// then removed.
+func TestRunReplace_SuccessRemovesTheOldAgent(t *testing.T) {
+	f := startedAgent(t, false)
+	oldID := created(t, f, AgentContainer).ID
+	replace(t, f)
+	names := map[string]bool{}
+	for _, c := range f.Created() {
+		names[c.Name] = true
+		assert.NotEqual(t, oldID, c.ID, "the old container is gone")
+	}
+	assert.False(t, names[OldContainer])
+	assert.False(t, names[HelperContainer], "the helper removes itself on success")
+	assert.Contains(t, f.CallLog(), "ContainerRename "+oldID+" "+OldContainer, "set aside, not removed, first")
+	assert.Equal(t, []string{oldID}, removedNames(f, oldID), "removed by ID once the new one proved itself")
+}
+
+func removedNames(f *swarmtest.Fake, match string) []string {
+	var out []string
+	for _, r := range f.Removed() {
+		if r.Name == match {
+			out = append(out, r.Name)
+		}
+	}
+	return out
+}
+
+// A new agent that does not start, or crash-loops, is removed and the very
+// same old container (same ID) is put back under its name and started.
+func TestRunReplace_RestoresTheOldAgent(t *testing.T) {
+	for name, breakIt := range map[string]func(*swarmtest.Fake){
+		"start fails": func(f *swarmtest.Fake) { f.FailStart(newImage, errors.New("exec format error")) },
+		"crash loop":  func(f *swarmtest.Fake) { f.CrashLoop(newImage, true) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := startedAgent(t, true)
+			before := created(t, f, AgentContainer)
+			require.NoError(t, SelfReplace(context.Background(), f, newImage, &bytes.Buffer{}))
+			spec := helperSpec(t, f)
+			breakIt(f)
+			err := RunReplace(context.Background(), f, spec, func(context.Context, time.Duration) bool { return true })
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "the old agent was put back and runs")
+			assert.True(t, created(t, f, HelperContainer).Config.Labels[HelperLabel] != "", "a failed helper stays for its logs")
+
+			after := created(t, f, AgentContainer)
+			assert.Equal(t, before.ID, after.ID, "the old container itself, not a copy")
+			assert.True(t, after.Started)
+			after.Started, after.StartedAt, after.RestartCount = before.Started, before.StartedAt, before.RestartCount
+			assert.Equal(t, before, after, "byte-identical: config, mounts, networks")
+			for _, c := range f.Created() {
+				assert.False(t, c.Config.Image == newImage && c.Name != HelperContainer, "the new agent is gone")
+				assert.NotEqual(t, OldContainer, c.Name)
+			}
+			for _, c := range f.CallLog() {
+				assert.False(t, strings.HasPrefix(c, "Volume") && !strings.HasPrefix(c, "VolumeList"), "volume call %q", c)
+			}
+			for _, r := range f.Removed() {
+				assert.False(t, r.Options.RemoveVolumes)
+				assert.NotEqual(t, before.ID, r.Name, "the old agent is never removed")
+			}
+		})
+	}
+}
+
+// A failed helper stays for its logs; the next replacement removes it. A
+// running one, or an old agent still set aside, refuses.
+func TestSelfReplace_Leftovers(t *testing.T) {
 	f := startedAgent(t, false)
 	require.NoError(t, SelfReplace(context.Background(), f, newImage, &bytes.Buffer{}))
-	spec := helperSpec(t, f)
-	f.FailStart(newImage, errors.New("exec format error"))
-	err := RunReplace(context.Background(), f, spec, func(context.Context, time.Duration) bool { return true })
+	err := SelfReplace(context.Background(), f, newImage, &bytes.Buffer{})
 	require.Error(t, err)
-	after := created(t, f, AgentContainer)
-	assert.Equal(t, oldImage, after.Config.Image)
-	assert.True(t, after.Started)
+	assert.Contains(t, err.Error(), "in progress")
+
+	require.NoError(t, f.ContainerStop(context.Background(), HelperContainer, container.StopOptions{}))
+	var out bytes.Buffer
+	require.NoError(t, SelfReplace(context.Background(), f, newImage, &out))
+	assert.Contains(t, out.String(), "failed earlier replacement")
+
+	require.NoError(t, f.ContainerStop(context.Background(), HelperContainer, container.StopOptions{}))
+	require.NoError(t, f.ContainerRename(context.Background(), AgentContainer, OldContainer))
+	err = SelfReplace(context.Background(), f, newImage, &bytes.Buffer{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), OldContainer)
 }
 
 func TestReplacementSpec_DropsImageDefaults(t *testing.T) {
@@ -349,4 +454,58 @@ func TestReplacementSpec_DropsImageDefaults(t *testing.T) {
 	assert.NotContains(t, s.Config.Env, "PATH=/usr/local/bin:/usr/bin:/bin")
 	assert.NotContains(t, s.Config.Labels, VersionLabel)
 	assert.Contains(t, s.Config.Env, "XDG_DATA_HOME="+agentstate.Root+"/xdg/data")
+}
+
+func TestDropImageDefaults_EntrypointWorkdirUserHealthcheck(t *testing.T) {
+	img := &dockerspec.DockerOCIImageConfig{ImageConfig: ocispec.ImageConfig{
+		Entrypoint: []string{"/usr/local/bin/homelab"}, WorkingDir: "/", User: "root"},
+		DockerOCIImageConfigExt: dockerspec.DockerOCIImageConfigExt{Healthcheck: &dockerspec.HealthcheckConfig{Test: []string{"CMD", "true"}, Retries: 3}},
+	}
+	cfg := container.Config{Entrypoint: []string{"/usr/local/bin/homelab"}, WorkingDir: "/", User: "root",
+		Healthcheck: &container.HealthConfig{Test: []string{"CMD", "true"}, Retries: 3}, Cmd: []string{"agent"}}
+	dropImageDefaults(&cfg, img)
+	assert.Nil(t, cfg.Entrypoint)
+	assert.Empty(t, cfg.WorkingDir)
+	assert.Empty(t, cfg.User)
+	assert.Nil(t, cfg.Healthcheck)
+	assert.Equal(t, []string{"agent"}, []string(cfg.Cmd), "set explicitly by init/join: kept")
+
+	own := container.Config{Entrypoint: []string{"/bin/sh"}, User: "1000", WorkingDir: "/srv"}
+	dropImageDefaults(&own, img)
+	assert.Equal(t, []string{"/bin/sh"}, []string(own.Entrypoint), "values of its own are kept")
+	assert.Equal(t, "1000", own.User)
+	assert.Equal(t, "/srv", own.WorkingDir)
+}
+
+// Without a known target version, only a new container counts: the old
+// agent still answering after the replacement is not accepted.
+func TestUpgrade_OldAgentAnsweringIsNotAccepted(t *testing.T) {
+	f := upgradeFake(workerNode("n1", "desktop", dswarm.NodeStateReady))
+	f.SetImage(newImage, image.InspectResponse{Config: &dockerspec.DockerOCIImageConfig{}}) // no version label
+	var log []string
+	w := &fakeWorkers{version: map[string]string{"desktop": "v1.4.0"}, staysOld: map[string]bool{"desktop": true}, log: &log}
+	u, _ := newUpgrade(f, w, &log)
+	res, err := u.Do(context.Background())
+	require.Error(t, err)
+	assert.Equal(t, WorkerFailed, res[0].Status)
+	assert.Contains(t, res[0].Detail, "still the old agent")
+	assert.NotContains(t, log, "leader: self-replace")
+}
+
+// The old agent answering for a while after the replace, then the new one:
+// the new one is accepted once it has answered steadily.
+func TestUpgrade_WaitsForTheNewAgent(t *testing.T) {
+	f := upgradeFake(workerNode("n1", "desktop", dswarm.NodeStateReady))
+	var log []string
+	w := &fakeWorkers{version: map[string]string{"desktop": "v1.4.0"}, lag: map[string]int{"desktop": 4}, log: &log}
+	u, _ := newUpgrade(f, w, &log)
+	res, err := u.Do(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, WorkerUpgraded, res[0].Status)
+	assert.Equal(t, "v1.5.0", res[0].Version)
+}
+
+func TestParseAgentID(t *testing.T) {
+	assert.Equal(t, AgentID{Version: "v1.5.0", Boot: "abc"}, ParseAgentID("v1.5.0\nboot abc\n"))
+	assert.Equal(t, AgentID{Version: "v1.5.0"}, ParseAgentID("v1.5.0\n"))
 }

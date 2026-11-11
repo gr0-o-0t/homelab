@@ -517,16 +517,17 @@ func (a *Agent) runWorker(ctx context.Context, p agentstate.Paths, sm *secrets.M
 	return a.serve(ctx, ln, cfg)
 }
 
-// workerCommands are all a worker agent runs: they act on its own
-// containers. Everything else goes to the leader.
-var workerCommands = map[string]bool{"exec": true, "logs": true}
+// workerCommands are all a worker agent runs: exec and logs act on its own
+// containers, version is how `homelab upgrade` checks it (and that a
+// replaced agent is a new one). Everything else goes to the leader.
+var workerCommands = map[string]bool{"exec": true, "logs": true, "version": true}
 
 // SelfReplacePath is the hidden command through which the leader's
 // `homelab upgrade` pulls the new image on a worker and replaces the
 // worker's agent container. Only worker agents run it for a client.
 const SelfReplacePath = "agent self-replace"
 
-// WorkerResolver wraps r so that only `exec`, `logs` and `agent
+// WorkerResolver wraps r so that only `exec`, `logs`, `version` and `agent
 // self-replace` resolve; every other command is refused as unknown.
 func WorkerResolver(r remote.Resolver) remote.Resolver {
 	return func(argv []string) ([]string, bool) {

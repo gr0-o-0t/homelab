@@ -63,6 +63,9 @@ type API interface {
 	// container is recreated from its own inspected spec on a new image.
 	ContainerInspect(ctx context.Context, container string) (container.InspectResponse, error)
 	ContainerStop(ctx context.Context, container string, options container.StopOptions) error
+	// ContainerRename keeps the old agent aside, intact, until its
+	// replacement has proved itself (and puts it back otherwise).
+	ContainerRename(ctx context.Context, container, newContainerName string) error
 	// CopyToContainer extracts a tar stream at dstPath in a container
 	// (init --import's state tree; never secrets).
 	CopyToContainer(ctx context.Context, containerID, dstPath string, content io.Reader, options container.CopyToContainerOptions) error

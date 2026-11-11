@@ -26,7 +26,7 @@ tzdata + the static headless binary at `/usr/local/bin/homelab`
 (`ENTRYPOINT homelab`, `CMD agent`, root, label
 `org.opencontainers.image.version`). Nothing is compiled inside Docker: the
 context is `dist/image/` only (`.dockerignore`). Releases push
-`ghcr.io/gr0-o-0t/homelab:<tag>` and `:latest` for linux/amd64 + arm64
+`ghcr.io/gr0-o-0t/homelab:<tag>` (and `:latest`, except for a prerelease tag with a `-`) for linux/amd64 + arm64
 (`.github/workflows/release.yml`). Test a local build with
 `init|join|upgrade --image homelab:dev`.
 
@@ -59,27 +59,46 @@ into the new leader and reuses its named volumes.
 
 `upgrade` (forwarded; Mutating and Detached) resolves the image on the PC
 (default `ghcr.io/gr0-o-0t/homelab:<this CLI's version>`; a dev build needs
-`--image`) and sends `upgrade --image REF [--version V]` to the leader, which
+`--image`), asks the leader `version --agent` (version + agent container ID)
+and sends `upgrade --image REF [--version V]` to the leader, which
 (`bootstrap.Upgrade`): makes the image available on its engine; asks every
-Ready worker's agent its `version` and has it pull (`agent self-replace
+Ready worker's agent `version --agent` and has it pull (`agent self-replace
 --pull-only`) — a worker already on the target is left alone, a Down node or
 an unreachable agent is **skipped**, a failed pull halts before anything is
 replaced; then replaces the workers one by one through `agent self-replace
---image REF`, waiting up to 60 s for each to answer on the expected version
+--image REF`, accepting a worker only when a *different* agent container
+(new ID) has answered steadily for 10 s within 60 s, on the expected version
 (`--version`, else the image's `org.opencontainers.image.version` label) — a
-failure or mismatch halts before the leader; then replaces its own agent and
-the session ends. The PC prints "agent restarting", reconnects for up to
-60 s and checks the leader's `version`. Replacement (`bootstrap.SelfReplace`):
-the agent inspects its own `homelab-agent` container and starts a helper
-container `homelab-agent-replace` (new image, docker socket, AutoRemove,
-spec in `HOMELAB_REPLACE_SPEC`) running `agent replace-helper`, which after
-3 s stops and removes the old container (never its volumes), creates the new
-one with the identical config, host config (mounts, restart policy) and
-networks + aliases on the new image, and rolls back to the old image if it
-does not start. `agent self-replace` runs remotely only on a worker agent
-(`ServerConfig.AllowInternal`) and refuses on the leader. The agent accepts
-`upgrade` and `version` from a CLI of another major.minor
+failure, rollback or mismatch halts before the leader; then prints
+`bootstrap.LeaderReplaceMarker` and replaces its own agent, ending the
+session. Only after seeing that marker does the PC print "agent restarting",
+reconnect for up to 60 s and check the leader the same way (a connection lost
+before it is reported; the detached rollout continues on the leader).
+Worker agents serve `exec`, `logs`, `version` and `agent self-replace` only.
+
+Replacement (`bootstrap.SelfReplace`, `RunReplace`): the agent inspects its
+own `homelab-agent` container (spec without what the old image itself sets:
+env, labels, entrypoint, working dir, user, healthcheck) and starts a helper
+container `homelab-agent-replace` (new image, docker socket only, no
+AutoRemove, no restart policy, label `homelab.agent-replace`, spec in
+`HOMELAB_REPLACE_SPEC`) running `agent replace-helper`. After 3 s the helper
+stops the old agent and renames it `homelab-agent-old` (kept intact), creates
+and starts the new one (identical config, host config — mounts, restart
+policy — and networks + aliases, new image), and waits up to 60 s for it to
+run 10 s with no restart. Only then is the old container removed and the
+helper removes itself. On any failure the new container is removed, the old
+one renamed back, started and checked running; the exited helper stays so
+`docker logs homelab-agent-replace` says why, and the next upgrade removes it
+(it refuses while a helper runs or a `homelab-agent-old` exists). No volume
+is ever removed or created. `agent self-replace` runs remotely only on a
+worker agent (`ServerConfig.AllowInternal`) and refuses on the leader. The
+agent accepts `upgrade` and `version` from a CLI of another major.minor
 (`remote.AcrossVersions`); every other command is refused.
+
+`EnsureImage` (init, join, upgrade) pulls only when the reference is not
+already on the engine: it never refreshes an existing local tag, so a moving
+tag (`:dev`, `:latest`) is used as it is there — rebuild/pull it on each node
+yourself, or upgrade to an immutable version tag.
 
 ### Service lifecycle
 

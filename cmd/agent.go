@@ -101,8 +101,9 @@ var agentSelfReplaceCmd = &cobra.Command{
 }
 
 // agentReplaceHelperCmd is the helper container's process: it recreates the
-// agent container from the spec in its environment, then exits (the
-// container removes itself).
+// agent container from the spec in its environment. On success it removes
+// its own container; on failure it exits non-zero and the container stays,
+// so `docker logs homelab-agent-replace` says why.
 var agentReplaceHelperCmd = &cobra.Command{
 	Use:    "replace-helper",
 	Short:  "Recreate the agent container from $" + bootstrap.ReplaceSpecEnv + " (upgrade plumbing)",

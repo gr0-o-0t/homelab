@@ -67,6 +67,7 @@ type Fake struct {
 	copyLimit  int64
 	removed    []Removed
 	startErr   map[string]error // image → ContainerStart error
+	crash      map[string]bool  // image → crash-looping once started
 }
 
 // New returns an empty Fake.
@@ -697,6 +698,11 @@ type CreatedContainer struct {
 	Networking network.NetworkingConfig
 	Started    bool
 	Restarts   int
+	// ID is the engine's container ID; RestartCount and StartedAt are what
+	// ContainerInspect reports in State.
+	ID           string
+	RestartCount int
+	StartedAt    string
 
 	imageEnv    []string
 	imageLabels map[string]string
@@ -817,7 +823,7 @@ func (f *Fake) ContainerCreate(_ context.Context, cfg *container.Config, hc *con
 			return container.CreateResponse{}, conflict("container", name)
 		}
 	}
-	c := &CreatedContainer{Name: name}
+	c := &CreatedContainer{Name: name, ID: fmt.Sprintf("%064x", f.nextSeq())}
 	if cfg != nil {
 		c.Config = *cfg
 	}
@@ -828,23 +834,56 @@ func (f *Fake) ContainerCreate(_ context.Context, cfg *container.Config, hc *con
 		c.Networking = *nc
 	}
 	f.created = append(f.created, c)
-	return container.CreateResponse{ID: name}, nil
+	return container.CreateResponse{ID: c.ID}, nil
 }
 
-func (f *Fake) createdByName(name string) (*CreatedContainer, error) {
+func (f *Fake) nextSeq() int {
+	f.seq++
+	return f.seq
+}
+
+// createdByRef finds a created container by name or ID, as the engine does.
+func (f *Fake) createdByRef(ref string) (*CreatedContainer, error) {
 	for _, c := range f.created {
-		if c.Name == name {
+		if c.Name == ref || (c.ID != "" && c.ID == ref) {
 			return c, nil
 		}
 	}
-	return nil, fmt.Errorf("swarmtest: container %q not found: %w", name, errdefs.ErrNotFound)
+	return nil, fmt.Errorf("swarmtest: container %q not found: %w", ref, errdefs.ErrNotFound)
+}
+
+// ContainerRename renames a created container; a taken name conflicts.
+func (f *Fake) ContainerRename(_ context.Context, ref, newName string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rec("ContainerRename", ref, newName)
+	c, err := f.createdByRef(ref)
+	if err != nil {
+		return err
+	}
+	if o, err := f.createdByRef(newName); err == nil && o != c {
+		return conflict("container", newName)
+	}
+	c.Name = newName
+	return nil
+}
+
+// CrashLoop makes containers created from image restart over and over once
+// started: each ContainerInspect sees their RestartCount grow (nil: stop).
+func (f *Fake) CrashLoop(image string, on bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.crash == nil {
+		f.crash = map[string]bool{}
+	}
+	f.crash[image] = on
 }
 
 func (f *Fake) ContainerStart(_ context.Context, name string, _ container.StartOptions) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.rec("ContainerStart", name)
-	c, err := f.createdByName(name)
+	c, err := f.createdByRef(name)
 	if err != nil {
 		return err
 	}
@@ -852,6 +891,8 @@ func (f *Fake) ContainerStart(_ context.Context, name string, _ container.StartO
 		return err
 	}
 	c.Started = true
+	c.RestartCount = 0
+	c.StartedAt = fmt.Sprintf("2026-11-10T00:00:%02d.000000000Z", f.nextSeq()%60)
 	return nil
 }
 
@@ -862,7 +903,7 @@ func (f *Fake) ContainerRestart(_ context.Context, name string, _ container.Stop
 	if f.restartErr != nil {
 		return f.restartErr
 	}
-	c, err := f.createdByName(name)
+	c, err := f.createdByRef(name)
 	if err != nil {
 		return err
 	}
@@ -894,7 +935,7 @@ func (f *Fake) CopyToContainer(_ context.Context, name, dst string, content io.R
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.rec("CopyToContainer", name, dst)
-	if _, err := f.createdByName(name); err != nil {
+	if _, err := f.createdByRef(name); err != nil {
 		return err
 	}
 	f.copies = append(f.copies, Copy{Container: name, Path: dst, Tar: b, Reader: fmt.Sprintf("%T", content)})
@@ -914,7 +955,10 @@ func (f *Fake) ContainerRemove(_ context.Context, name string, o container.Remov
 	f.rec("ContainerRemove", name)
 	f.removed = append(f.removed, Removed{Name: name, Options: o})
 	for i, c := range f.created {
-		if c.Name == name {
+		if c.Name == name || c.ID == name {
+			if c.Started && !o.Force {
+				return conflict("running container", name)
+			}
 			f.created = append(f.created[:i], f.created[i+1:]...)
 			return nil
 		}
@@ -937,7 +981,7 @@ func (f *Fake) ContainerInspect(_ context.Context, name string) (container.Inspe
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.rec("ContainerInspect", name)
-	c, err := f.createdByName(name)
+	c, err := f.createdByRef(name)
 	if err != nil {
 		return container.InspectResponse{}, err
 	}
@@ -956,10 +1000,21 @@ func (f *Fake) ContainerInspect(_ context.Context, name string) (container.Inspe
 		ep.IPAddress = "10.0.0.2"
 		nets[k] = &ep
 	}
+	if c.Started && f.crash[c.Config.Image] {
+		c.RestartCount++
+	}
+	status := container.StateExited
+	switch {
+	case c.Started:
+		status = container.StateRunning
+	case c.StartedAt == "":
+		status = container.StateCreated
+	}
 	return container.InspectResponse{
 		ContainerJSONBase: &container.ContainerJSONBase{
-			ID: name, Name: "/" + name, Image: c.Config.Image, HostConfig: &hc,
-			State: &container.State{Running: c.Started},
+			ID: c.ID, Name: "/" + c.Name, Image: c.Config.Image, HostConfig: &hc,
+			State:        &container.State{Running: c.Started, Status: status, StartedAt: c.StartedAt},
+			RestartCount: c.RestartCount,
 		},
 		Config:          &cfg,
 		NetworkSettings: &container.NetworkSettings{Networks: nets},
@@ -971,7 +1026,7 @@ func (f *Fake) ContainerInspect(_ context.Context, name string) (container.Inspe
 func (f *Fake) MergeImageDefaults(name string, env []string, labels map[string]string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if c, err := f.createdByName(name); err == nil {
+	if c, err := f.createdByRef(name); err == nil {
 		c.imageEnv, c.imageLabels = env, labels
 	}
 }
@@ -981,7 +1036,7 @@ func (f *Fake) ContainerStop(_ context.Context, name string, _ container.StopOpt
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.rec("ContainerStop", name)
-	c, err := f.createdByName(name)
+	c, err := f.createdByRef(name)
 	if err != nil {
 		return err
 	}

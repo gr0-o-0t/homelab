@@ -3,211 +3,100 @@ package bootstrap
 // `homelab upgrade`: roll a new agent image across the cluster. The leader
 // pulls the image on every node (each worker through its own agent), then
 // replaces the worker agents one by one, each back on the new version before
-// the next, and its own agent last.
-//
-// An agent container cannot replace itself: the process doing it dies with
-// the container it removes. So the agent starts a short-lived helper
-// container from the new image with the docker socket, handing it the spec
-// to recreate; the helper waits a moment (the agent finishes answering),
-// stops and removes the old container, creates and starts the new one with
-// the identical spec on the new image, and exits (AutoRemove). No volume is
-// ever removed or created: the new container mounts the same ones.
+// the next, and its own agent last (replace.go: how an agent is replaced).
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"maps"
 	"slices"
 	"sort"
 	"strings"
 	"time"
 
-	"github.com/containerd/errdefs"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/network"
 	dswarm "github.com/docker/docker/api/types/swarm"
 
 	"github.com/groot/homelab/internal/remote"
 	"github.com/groot/homelab/internal/swarm"
 )
 
-const (
-	// HelperContainer is the short-lived container that replaces an agent.
-	HelperContainer = "homelab-agent-replace"
-	// ReplaceSpecEnv carries the helper its ReplaceSpec, as JSON. The spec
-	// is the agent container's own, which holds no secret.
-	ReplaceSpecEnv = "HOMELAB_REPLACE_SPEC"
-	// VersionLabel is the image label holding the homelab version it runs.
-	VersionLabel = "org.opencontainers.image.version"
-	// ReplaceDelay is how long the helper waits before stopping the old
-	// agent, so the command that started it can return its result.
-	ReplaceDelay = 3 * time.Second
-	// WaitBack is how long upgrade waits for a replaced agent to answer.
-	WaitBack = 60 * time.Second
+// LeaderReplaceMarker is the line upgrade prints on the leader right before
+// it replaces its own agent: a client that saw it expects the session to end.
+const LeaderReplaceMarker = "Replacing the leader agent — agent restarting"
 
-	dockerSocketBind = "/var/run/docker.sock:/var/run/docker.sock"
-	stopTimeout      = 30 // seconds the old agent gets to shut down
-	pollEvery        = 2 * time.Second
-)
+// VersionArgv asks an agent its version and boot identity
+// (`homelab version --agent`).
+var VersionArgv = []string{"version", "--agent"}
 
-// ReplaceSpec is what the helper recreates: the old container's name, and
-// its config, host config and networks as inspected, on the new image.
-type ReplaceSpec struct {
-	Container string `json:"container"`
-	// OldImage is the old container's image ID, to roll back to when the
-	// new one does not start (a tag may already point at the new image).
-	OldImage   string                   `json:"old_image"`
-	Config     container.Config         `json:"config"`
-	HostConfig container.HostConfig     `json:"host_config"`
-	Networking network.NetworkingConfig `json:"networking"`
-	Delay      time.Duration            `json:"delay"`
+// AgentID is what `homelab version --agent` reports: the version, and the
+// agent container's ID — a replacement is a new container, so a changed
+// Boot proves the agent answering is not the old one.
+type AgentID struct {
+	Version string
+	Boot    string
 }
 
-// Sleep waits d or until ctx is done (false).
-func Sleep(ctx context.Context, d time.Duration) bool {
-	t := time.NewTimer(d)
-	defer t.Stop()
-	select {
-	case <-ctx.Done():
-		return false
-	case <-t.C:
-		return true
-	}
-}
-
-// ReplacementSpec is the spec that recreates container name on img: its
-// inspected config (env and labels without the ones its old image set, so
-// the new image's own apply), host config (every mount, the restart policy)
-// and networks with their aliases.
-func ReplacementSpec(ctx context.Context, api swarm.API, name, img string) (ReplaceSpec, error) {
-	insp, err := api.ContainerInspect(ctx, name)
-	if err != nil {
-		return ReplaceSpec{}, fmt.Errorf("inspecting the %s container: %w", name, err)
-	}
-	if insp.ContainerJSONBase == nil || insp.Config == nil || insp.HostConfig == nil {
-		return ReplaceSpec{}, fmt.Errorf("inspecting the %s container: incomplete answer from Docker", name)
-	}
-	cfg := *insp.Config
-	if ii, _, err := api.ImageInspectWithRaw(ctx, insp.Image); err == nil && ii.Config != nil {
-		cfg.Env = slices.DeleteFunc(slices.Clone(cfg.Env), func(e string) bool { return slices.Contains(ii.Config.Env, e) })
-		if len(cfg.Labels) > 0 {
-			labels := maps.Clone(cfg.Labels)
-			maps.DeleteFunc(labels, func(k, v string) bool { iv, ok := ii.Config.Labels[k]; return ok && iv == v })
-			cfg.Labels = labels
-			if len(labels) == 0 {
-				cfg.Labels = nil
-			}
+// ParseAgentID reads `homelab version --agent` output: the version on the
+// first line, `boot <container ID>` on the next (absent outside an agent).
+func ParseAgentID(out string) AgentID {
+	var id AgentID
+	for i, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		line = strings.TrimSpace(line)
+		if i == 0 {
+			id.Version = line
+		} else if b, ok := strings.CutPrefix(line, "boot "); ok {
+			id.Boot = strings.TrimSpace(b)
 		}
 	}
-	// The engine names an unnamed host after the container's short ID.
-	if len(insp.ID) >= 12 && cfg.Hostname == insp.ID[:12] {
-		cfg.Hostname = ""
+	return id
+}
+
+// WaitReplaced polls ask until the agent answering is a new one (its Boot
+// differs from before.Boot) that has kept answering for Settle — the
+// helper may still roll back a crashing one — and then checks its version
+// against want (when known). It gives up after WaitBack. When before.Boot is
+// unknown, the first answer after ReplaceDelay counts as new.
+func WaitReplaced(ctx context.Context, ask func(context.Context) (AgentID, error), before AgentID, want string,
+	sleep func(context.Context, time.Duration) bool) (AgentID, error) {
+	if !sleep(ctx, ReplaceDelay) { // the old agent answers until the helper stops it
+		return AgentID{}, ctx.Err()
 	}
-	cfg.Image = img
-	spec := ReplaceSpec{Container: name, OldImage: insp.Image, Config: cfg, HostConfig: *insp.HostConfig}
-	if insp.NetworkSettings != nil && len(insp.NetworkSettings.Networks) > 0 {
-		spec.Networking.EndpointsConfig = map[string]*network.EndpointSettings{}
-		for net, ep := range insp.NetworkSettings.Networks {
-			if ep == nil {
-				continue
+	var last, cand AgentID
+	steady := time.Duration(-1)
+	for range int(WaitBack / pollEvery) {
+		got, err := ask(ctx)
+		if err == nil && got.Version != "" {
+			last = got
+			isNew := before.Boot == "" || (got.Boot != "" && got.Boot != before.Boot)
+			switch {
+			case !isNew:
+				steady = -1
+			case steady < 0 || got.Boot != cand.Boot:
+				cand, steady = got, 0
+			default:
+				steady += pollEvery
 			}
-			// Only what was asked for: addresses and IDs are the engine's.
-			aliases := slices.DeleteFunc(slices.Clone(ep.Aliases), func(a string) bool {
-				return a == insp.ID || (len(insp.ID) >= 12 && a == insp.ID[:12])
-			})
-			if len(aliases) == 0 {
-				aliases = nil
-			}
-			spec.Networking.EndpointsConfig[net] = &network.EndpointSettings{
-				Aliases: aliases, IPAMConfig: ep.IPAMConfig, Links: ep.Links, DriverOpts: ep.DriverOpts,
+			if steady >= Settle || (steady >= 0 && before.Boot == "") {
+				if want != "" && cand.Version != want {
+					return cand, fmt.Errorf("version mismatch: the new agent reports %s, expected %s", cand.Version, want)
+				}
+				return cand, nil
 			}
 		}
-	}
-	return spec, nil
-}
-
-// SelfReplace replaces this node's agent container with one on img: it
-// makes img available, then starts the helper that does the replacement a
-// few seconds later. It returns once the helper is running; the agent (and
-// the command that called this) is stopped by the helper.
-func SelfReplace(ctx context.Context, api swarm.API, img string, out io.Writer) error {
-	if err := EnsureImage(ctx, api, img, out); err != nil {
-		return err
-	}
-	spec, err := ReplacementSpec(ctx, api, AgentContainer, img)
-	if err != nil {
-		return err
-	}
-	spec.Delay = ReplaceDelay
-	b, err := json.Marshal(spec)
-	if err != nil {
-		return err
-	}
-	cfg := &container.Config{
-		Image: img,
-		Cmd:   []string{"agent", "replace-helper"},
-		Env:   []string{ReplaceSpecEnv + "=" + string(b)},
-	}
-	hc := &container.HostConfig{Binds: []string{dockerSocketBind}, AutoRemove: true}
-	if _, err := api.ContainerCreate(ctx, cfg, hc, nil, nil, HelperContainer); err != nil {
-		if errdefs.IsConflict(err) {
-			return fmt.Errorf("another agent replacement is in progress (container %s exists) — if it is stuck, `docker rm -f %s` and retry: %w",
-				HelperContainer, HelperContainer, err)
+		if !sleep(ctx, pollEvery) {
+			return last, ctx.Err()
 		}
-		return fmt.Errorf("creating the replacement helper: %w", err)
 	}
-	if err := api.ContainerStart(ctx, HelperContainer, container.StartOptions{}); err != nil {
-		_ = api.ContainerRemove(context.WithoutCancel(ctx), HelperContainer, container.RemoveOptions{Force: true})
-		return fmt.Errorf("starting the replacement helper: %w", err)
+	switch {
+	case last.Version == "":
+		return last, fmt.Errorf("did not answer within %s of being replaced — see `docker logs %s` there", WaitBack, AgentContainer)
+	case before.Boot != "" && last.Boot == before.Boot:
+		return last, fmt.Errorf("still the old agent (%s): its replacement failed and was rolled back — see `docker logs %s` there",
+			last.Version, HelperContainer)
+	default:
+		return last, fmt.Errorf("the new agent did not answer steadily within %s — see `docker logs %s` there", WaitBack, HelperContainer)
 	}
-	_, _ = fmt.Fprintf(out, "agent restarting: the %s container is replaced with %s in %s\n", AgentContainer, img, ReplaceDelay)
-	return nil
-}
-
-// RunReplace is the helper's work (`homelab agent replace-helper`): after
-// spec.Delay, stop and remove the old container (its volumes kept), create
-// and start the new one. When the new one does not start, the old image is
-// put back with the same spec.
-func RunReplace(ctx context.Context, api swarm.API, spec ReplaceSpec, sleep func(context.Context, time.Duration) bool) error {
-	if spec.Container == "" || spec.Config.Image == "" {
-		return errors.New("replace: incomplete spec")
-	}
-	if spec.Delay > 0 && !sleep(ctx, spec.Delay) {
-		return ctx.Err()
-	}
-	t := stopTimeout
-	if err := api.ContainerStop(ctx, spec.Container, container.StopOptions{Timeout: &t}); err != nil && !errdefs.IsNotFound(err) {
-		return fmt.Errorf("stopping %s: %w", spec.Container, err)
-	}
-	// Never RemoveVolumes: the agent's state, shim and backups volumes stay.
-	if err := api.ContainerRemove(ctx, spec.Container, container.RemoveOptions{}); err != nil && !errdefs.IsNotFound(err) {
-		_ = api.ContainerStart(ctx, spec.Container, container.StartOptions{})
-		return fmt.Errorf("removing %s: %w", spec.Container, err)
-	}
-	err := createAndStart(ctx, api, spec.Container, spec.Config, spec.HostConfig, spec.Networking)
-	if err == nil {
-		return nil
-	}
-	if spec.OldImage == "" {
-		return fmt.Errorf("starting the new %s: %w", spec.Container, err)
-	}
-	_ = api.ContainerRemove(ctx, spec.Container, container.RemoveOptions{Force: true})
-	old := spec.Config
-	old.Image = spec.OldImage
-	if rerr := createAndStart(ctx, api, spec.Container, old, spec.HostConfig, spec.Networking); rerr != nil {
-		return fmt.Errorf("starting the new %s: %w; rolling back to the old image also failed: %w", spec.Container, err, rerr)
-	}
-	return fmt.Errorf("starting the new %s: %w (rolled back to the old image)", spec.Container, err)
-}
-
-func createAndStart(ctx context.Context, api swarm.API, name string, cfg container.Config, hc container.HostConfig, nc network.NetworkingConfig) error {
-	if _, err := api.ContainerCreate(ctx, &cfg, &hc, &nc, nil, name); err != nil {
-		return err
-	}
-	return api.ContainerStart(ctx, name, container.StartOptions{})
 }
 
 // WorkerStatus is how upgrade left one worker.
@@ -289,6 +178,7 @@ func (u *Upgrade) Do(ctx context.Context) ([]WorkerResult, error) {
 	workers := slices.DeleteFunc(slices.Clone(nodes), func(n dswarm.Node) bool { return n.Spec.Role != dswarm.NodeRoleWorker })
 	sort.SliceStable(workers, func(a, b int) bool { return workers[a].Description.Hostname < workers[b].Description.Hostname })
 	res := make([]WorkerResult, len(workers))
+	before := make([]AgentID, len(workers))
 	for i := range workers {
 		res[i].Host = workers[i].Description.Hostname
 	}
@@ -302,20 +192,20 @@ func (u *Upgrade) Do(ctx context.Context) ([]WorkerResult, error) {
 			r.Status, r.Detail = WorkerSkipped, "offline (swarm node not ready)"
 			continue
 		}
-		v, err := u.version(ctx, r.Host)
-		if err == nil && want != "" && v == want {
-			r.Status, r.Version = WorkerCurrent, v
+		id, err := u.agentID(ctx, r.Host)
+		if err == nil && want != "" && id.Version == want {
+			r.Status, r.Version = WorkerCurrent, id.Version
 			continue
 		}
 		if err == nil {
-			r.Version = v
+			r.Version, before[i] = id.Version, id
 			_, err = u.Call(ctx, r.Host, pull)
 		}
 		switch {
 		case errors.Is(err, remote.ErrUnreachable):
 			r.Status, r.Detail = WorkerSkipped, "offline (agent unreachable)"
 		case err != nil:
-			r.Status, r.Detail, halted = WorkerFailed, "pulling the image: "+err.Error(), true
+			r.Status, r.Detail, halted = WorkerFailed, "checking it and pulling the image: "+err.Error(), true
 		}
 	}
 	if halted {
@@ -331,7 +221,7 @@ func (u *Upgrade) Do(ctx context.Context) ([]WorkerResult, error) {
 			continue
 		}
 		u.printf("Replacing the agent on %s …\n", r.Host)
-		u.replaceWorker(ctx, r, want)
+		u.replaceWorker(ctx, r, before[i], want)
 		if r.Status == WorkerFailed {
 			u.notReached(res)
 			u.summary(res)
@@ -341,7 +231,7 @@ func (u *Upgrade) Do(ctx context.Context) ([]WorkerResult, error) {
 	u.summary(res)
 
 	// 3. The leader last: this ends the session.
-	u.printf("Replacing the leader agent — agent restarting; this session ends here.\n")
+	u.printf("%s; this session ends here.\n", LeaderReplaceMarker)
 	replace := u.Replace
 	if replace == nil {
 		replace = func(ctx context.Context) error { return SelfReplace(ctx, u.API, u.Image, u.Out) }
@@ -352,14 +242,18 @@ func (u *Upgrade) Do(ctx context.Context) ([]WorkerResult, error) {
 	return res, nil
 }
 
-// version is the version host's agent reports.
-func (u *Upgrade) version(ctx context.Context, host string) (string, error) {
-	out, err := u.Call(ctx, host, []string{"version"})
-	return strings.TrimSpace(out), err
+// agentID is what host's agent reports for VersionArgv.
+func (u *Upgrade) agentID(ctx context.Context, host string) (AgentID, error) {
+	out, err := u.Call(ctx, host, VersionArgv)
+	if err != nil {
+		return AgentID{}, err
+	}
+	return ParseAgentID(out), nil
 }
 
-// replaceWorker replaces host's agent and waits for it to answer on want.
-func (u *Upgrade) replaceWorker(ctx context.Context, r *WorkerResult, want string) {
+// replaceWorker replaces host's agent and waits for a new one to answer on
+// want.
+func (u *Upgrade) replaceWorker(ctx context.Context, r *WorkerResult, before AgentID, want string) {
 	_, err := u.Call(ctx, r.Host, []string{"agent", "self-replace", "--image", u.Image})
 	switch {
 	case errors.Is(err, remote.ErrUnreachable):
@@ -369,31 +263,15 @@ func (u *Upgrade) replaceWorker(ctx context.Context, r *WorkerResult, want strin
 		r.Status, r.Detail = WorkerFailed, "replacing: "+err.Error()
 		return
 	}
-	// The old agent answers until the helper stops it.
-	if !u.sleep(ctx, ReplaceDelay) {
-		r.Status, r.Detail = WorkerFailed, ctx.Err().Error()
+	got, err := WaitReplaced(ctx, func(ctx context.Context) (AgentID, error) { return u.agentID(ctx, r.Host) }, before, want, u.sleep)
+	if got.Version != "" {
+		r.Version = got.Version
+	}
+	if err != nil {
+		r.Status, r.Detail = WorkerFailed, err.Error()
 		return
 	}
-	last := ""
-	for range int(WaitBack / pollEvery) {
-		v, err := u.version(ctx, r.Host)
-		if err == nil {
-			last = v
-			if want == "" || v == want {
-				r.Status, r.Version = WorkerUpgraded, v
-				return
-			}
-		}
-		if !u.sleep(ctx, pollEvery) {
-			break
-		}
-	}
-	if last == "" {
-		r.Status, r.Detail = WorkerFailed, fmt.Sprintf("did not answer within %s of being replaced — see `docker logs %s` there", WaitBack, AgentContainer)
-		return
-	}
-	r.Status, r.Version = WorkerFailed, last
-	r.Detail = fmt.Sprintf("version mismatch: reports %s, expected %s", last, want)
+	r.Status = WorkerUpgraded
 }
 
 func (u *Upgrade) notReached(res []WorkerResult) {

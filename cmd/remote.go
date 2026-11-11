@@ -134,13 +134,19 @@ func forwardToAgent(argv []string) (int, error) {
 // runOnAgent runs argv on the agent c points at, over this process's
 // terminal.
 func runOnAgent(c *remote.Client, argv []string) (int, error) {
+	return runOnAgentTo(c, argv, os.Stdout)
+}
+
+// runOnAgentTo is runOnAgent with the command's output to stdout (the
+// terminal checks still look at this process's own stdin and stdout).
+func runOnAgentTo(c *remote.Client, argv []string, stdout io.Writer) (int, error) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	in, out := int(os.Stdin.Fd()), int(os.Stdout.Fd()) //nolint:gosec // fds fit in int
-	opts := remote.RunOptions{Argv: argv, Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr,
+	opts := remote.RunOptions{Argv: argv, Stdin: os.Stdin, Stdout: stdout, Stderr: os.Stderr,
 		TTY: term.IsTerminal(in) && term.IsTerminal(out)}
 	detached, verb := forwardDetaches(argv)
 	if detached {

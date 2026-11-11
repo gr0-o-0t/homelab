@@ -4,12 +4,12 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
 
@@ -82,8 +82,15 @@ func workerCaller() (bootstrap.AgentCall, error) {
 	if cl.Secret == "" || cl.Tailnet == "" {
 		return nil, errors.New("the cluster secret or tailnet name is missing from the agent's state — rerun `homelab init`")
 	}
+	return newWorkerCall(func(host string) string { return bootstrap.NodeEndpoint(host, cl.Tailnet) }, cl.Secret, nil), nil
+}
+
+// newWorkerCall is the AgentCall to the agents at endpoint(host): stdout on
+// success, the exit status and output otherwise. tlsConfig is nil in
+// production (tests trust their own CA).
+func newWorkerCall(endpoint func(host string) string, secret string, tlsConfig *tls.Config) bootstrap.AgentCall {
 	return func(ctx context.Context, host string, argv []string) (string, error) {
-		c := &remote.Client{Endpoint: bootstrap.NodeEndpoint(host, cl.Tailnet), Secret: cl.Secret, Version: Version}
+		c := &remote.Client{Endpoint: endpoint(host), Secret: secret, Version: Version, TLSConfig: tlsConfig}
 		var out, errb bytes.Buffer
 		code, err := c.Run(ctx, remote.RunOptions{Argv: argv, Stdout: &out, Stderr: &errb})
 		if err != nil {
@@ -94,20 +101,21 @@ func workerCaller() (bootstrap.AgentCall, error) {
 			return out.String(), fmt.Errorf("exit status %d: %s", code, msg)
 		}
 		return out.String(), nil
-	}, nil
+	}
 }
 
-// upgradeRun runs argv on the leader; a var so tests stand in for it.
-var upgradeRun = runOnAgent
+// upgradeRun runs argv on the leader, its output to stdout; a var so tests
+// stand in for it.
+var upgradeRun = runOnAgentTo
 
-// upgradeAsk asks the leader its version; a var for tests.
-var upgradeAsk = func(ctx context.Context, c *remote.Client) (string, error) {
+// upgradeAsk asks the leader its version and boot ID; a var for tests.
+var upgradeAsk = func(ctx context.Context, c *remote.Client) (bootstrap.AgentID, error) {
 	var out bytes.Buffer
-	code, err := c.Run(ctx, remote.RunOptions{Argv: []string{"version"}, Stdout: &out, Stderr: io.Discard})
+	code, err := c.Run(ctx, remote.RunOptions{Argv: bootstrap.VersionArgv, Stdout: &out, Stderr: io.Discard})
 	if err == nil && code != 0 {
 		err = fmt.Errorf("exit status %d", code)
 	}
-	return strings.TrimSpace(out.String()), err
+	return bootstrap.ParseAgentID(out.String()), err
 }
 
 // upgradeClient is the client of the leader agent; a var for tests.
@@ -118,7 +126,8 @@ var upgradeSleep = bootstrap.Sleep
 
 // forwardUpgrade is `homelab upgrade` on a PC: the leader gets the resolved
 // image (it would otherwise default to its own, older version), and once
-// its agent has replaced itself this waits for it and checks its version.
+// its agent has replaced itself this waits for a new agent and checks its
+// version.
 func forwardUpgrade(argv []string) (int, error) {
 	img, err := bootstrap.ResolveImage(upgradeFlags.image, cmp.Or(upgradeFlags.version, Version))
 	if err != nil {
@@ -136,15 +145,49 @@ func forwardUpgrade(argv []string) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	code, err := upgradeRun(c, fwd)
+	ctx := cmdContext()
+	// Who answers now: only a different agent container afterwards is the
+	// replacement. An agent that cannot tell leaves only the version check.
+	before, err := upgradeAsk(ctx, c)
+	if err != nil {
+		before = bootstrap.AgentID{}
+	}
+	mw := &markerWriter{w: os.Stdout, marker: []byte(bootstrap.LeaderReplaceMarker)}
+	code, err := upgradeRun(c, fwd, mw)
 	switch {
 	case code == 130 && err == nil:
 		return code, nil // interrupted here; it goes on on the leader
+	case !mw.seen:
+		if errors.Is(err, remote.ErrConnectionLost) {
+			return code, fmt.Errorf("%w — the upgrade continues on the leader (it is detached); follow it with `homelab logs`", err)
+		}
+		return code, err
 	case err == nil && code == 0, errors.Is(err, remote.ErrConnectionLost):
 	default:
 		return code, err
 	}
-	return verifyLeader(c, want, os.Stderr)
+	return verifyLeader(ctx, c, before, want, os.Stderr)
+}
+
+// markerWriter passes output through and notes whether marker went by
+// (across writes).
+type markerWriter struct {
+	w      io.Writer
+	marker []byte
+	tail   []byte
+	seen   bool
+}
+
+func (m *markerWriter) Write(p []byte) (int, error) {
+	if !m.seen {
+		m.tail = append(m.tail, p...)
+		if bytes.Contains(m.tail, m.marker) {
+			m.seen, m.tail = true, nil
+		} else if keep := len(m.marker); len(m.tail) > keep {
+			m.tail = append([]byte(nil), m.tail[len(m.tail)-keep:]...)
+		}
+	}
+	return m.w.Write(p)
 }
 
 // rootFlagsOf is the root flags before the command name (--no-color).
@@ -159,37 +202,18 @@ func rootFlagsOf(argv []string) []string {
 	return out
 }
 
-// verifyLeader waits up to bootstrap.WaitBack for the leader's new agent to
-// answer and reports its version: matching want (when known), or a mismatch.
-func verifyLeader(c *remote.Client, want string, w io.Writer) (int, error) {
+// verifyLeader waits for a new leader agent (bootstrap.WaitReplaced) and
+// reports its version: matching want (when known), or why not.
+func verifyLeader(ctx context.Context, c *remote.Client, before bootstrap.AgentID, want string, w io.Writer) (int, error) {
 	_, _ = fmt.Fprintf(w, "agent restarting — reconnecting to the leader (up to %s) …\n", bootstrap.WaitBack)
-	ctx := cmdContext()
-	// The old agent answers until its replacement stops it.
-	if !upgradeSleep(ctx, bootstrap.ReplaceDelay+time.Second) {
-		return 1, ctx.Err()
+	got, err := bootstrap.WaitReplaced(ctx, func(ctx context.Context) (bootstrap.AgentID, error) { return upgradeAsk(ctx, c) },
+		before, want, upgradeSleep)
+	if err != nil {
+		return 1, fmt.Errorf("the leader: %w", err)
 	}
-	const every = 2 * time.Second
-	last := ""
-	for range int(bootstrap.WaitBack / every) {
-		v, err := upgradeAsk(ctx, c)
-		if err == nil && v != "" {
-			last = v
-			if want == "" || v == want {
-				_, _ = fmt.Fprintf(w, "The leader agent runs %s.\n", v)
-				if want != "" && v != Version {
-					_, _ = fmt.Fprintf(w, "note: this CLI is %s — install the %s CLI on your PCs to match.\n", Version, v)
-				}
-				return 0, nil
-			}
-		}
-		if !upgradeSleep(ctx, every) {
-			return 1, ctx.Err()
-		}
+	_, _ = fmt.Fprintf(w, "The leader agent runs %s.\n", got.Version)
+	if got.Version != Version {
+		_, _ = fmt.Fprintf(w, "note: this CLI is %s — install the %s CLI on your PCs to match.\n", Version, got.Version)
 	}
-	if last == "" {
-		return 1, fmt.Errorf("the leader agent did not answer within %s — check `docker logs %s` on the leader",
-			bootstrap.WaitBack, bootstrap.AgentContainer)
-	}
-	return 1, fmt.Errorf("version mismatch: the leader agent reports %s, expected %s — check `docker logs %s` on the leader",
-		last, want, bootstrap.AgentContainer)
+	return 0, nil
 }

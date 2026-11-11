@@ -54,6 +54,17 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # :latest only for a final release: a prerelease tag (v1.2.0-rc1, any
+      # "-") gets its own tag and nothing else.
+      - name: Image tags
+        id: tags
+        run: |
+          tags="${IMAGE}:${GITHUB_REF_NAME}"
+          case "${GITHUB_REF_NAME}" in
+            *-*) ;;
+            *) tags="${tags},${IMAGE}:latest" ;;
+          esac
+          echo "tags=${tags}" >> "$GITHUB_OUTPUT"
       - name: Build and push the agent image
         uses: docker/build-push-action@v6
         with:
@@ -61,9 +72,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           build-args: VERSION=${{ github.ref_name }}
           push: true
-          tags: |
-            ${{ env.IMAGE }}:${{ github.ref_name }}
-            ${{ env.IMAGE }}:latest
+          tags: ${{ steps.tags.outputs.tags }}
 
       # Release notes are the CHANGELOG.md section for this tag, followed by
       # install instructions. A tag without a section fails here rather than
