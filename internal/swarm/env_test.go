@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/docker/docker/api/types/container"
 	dswarm "github.com/docker/docker/api/types/swarm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -49,4 +50,26 @@ func TestWithEnv_ComposeCommandBeatsImage(t *testing.T) {
 	s = specWith([]string{"/my-entry"}, nil) // compose entrypoint clears image cmd
 	swarm.WithEnv(s, "n", []string{"/entry"}, []string{"imgcmd"})
 	assert.Equal(t, []string{"/hl/homelab", "envshim", "--", "/my-entry"}, s.TaskTemplate.ContainerSpec.Command)
+}
+
+// Docker runs a healthcheck with the spec's env, which WithEnv keeps empty, so
+// the test must go through the shim too (redis-cli needs REDISCLI_AUTH).
+func TestWithEnv_HealthcheckThroughShim(t *testing.T) {
+	cases := []struct{ in, want []string }{
+		{[]string{"CMD-SHELL", "redis-cli ping | grep -q PONG"},
+			[]string{"CMD", "/hl/homelab", "envshim", "--", "/bin/sh", "-c", "redis-cli ping | grep -q PONG"}},
+		{[]string{"CMD", "pg_isready", "-q"},
+			[]string{"CMD", "/hl/homelab", "envshim", "--", "pg_isready", "-q"}},
+		{[]string{"NONE"}, []string{"NONE"}},
+	}
+	for _, c := range cases {
+		s := specWith(nil, nil)
+		s.TaskTemplate.ContainerSpec.Healthcheck = &container.HealthConfig{Test: c.in}
+		swarm.WithEnv(s, "n", []string{"/entry"}, nil)
+		assert.Equal(t, c.want, s.TaskTemplate.ContainerSpec.Healthcheck.Test)
+	}
+
+	s := specWith(nil, nil) // no healthcheck: the image's applies, left alone
+	swarm.WithEnv(s, "n", []string{"/entry"}, nil)
+	assert.Nil(t, s.TaskTemplate.ContainerSpec.Healthcheck)
 }

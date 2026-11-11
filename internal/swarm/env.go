@@ -25,6 +25,17 @@ func WithEnv(spec *swarm.ServiceSpec, secretName string, origEntrypoint, origCmd
 	argv = append(argv, entry...)
 	argv = append(argv, cmd...)
 	cs.Command, cs.Args = argv, nil
+	// Docker runs the healthcheck with the spec's env (empty), so it goes
+	// through the shim too. An image's own HEALTHCHECK (none here) is not.
+	if hc := cs.Healthcheck; hc != nil && len(hc.Test) > 0 {
+		shim := []string{"CMD", "/hl/homelab", "envshim", "--"}
+		switch hc.Test[0] {
+		case "CMD":
+			hc.Test = append(shim, hc.Test[1:]...)
+		case "CMD-SHELL":
+			hc.Test = append(shim, append([]string{"/bin/sh", "-c"}, hc.Test[1:]...)...)
+		}
+	}
 	cs.Mounts = append(cs.Mounts, mount.Mount{Type: mount.TypeVolume, Source: "homelab-shim", Target: "/hl", ReadOnly: true})
 	cs.Secrets = append(cs.Secrets, &swarm.SecretReference{
 		SecretName: secretName,
