@@ -90,9 +90,16 @@ type fakeDeployer struct {
 	onUp     func(svc string)
 	// upCtx, when set, replaces Up's result: it gets Up's ctx.
 	upCtx func(ctx context.Context, svc string) error
+	// replicasCtx, when set, runs first in Replicas.
+	replicasCtx func(ctx context.Context, svc string) error
 }
 
-func (d *fakeDeployer) Replicas(_ context.Context, svc string) (map[string]uint64, error) {
+func (d *fakeDeployer) Replicas(ctx context.Context, svc string) (map[string]uint64, error) {
+	if d.replicasCtx != nil {
+		if err := d.replicasCtx(ctx, svc); err != nil {
+			return nil, err
+		}
+	}
 	return maps.Clone(d.replicas[svc]), nil
 }
 
@@ -282,6 +289,9 @@ func (h *harness) writeConfig(vars map[string]string) {
 
 func (h *harness) writeDesired(svcs map[string]desired.State) {
 	h.t.Helper()
+	for name := range svcs {
+		require.NoError(h.t, os.MkdirAll(filepath.Join(h.paths.StateDir, "services", name), 0o700))
+	}
 	d := &desired.Desired{Services: svcs}
 	require.NoError(h.t, d.Save(h.paths.StateDir))
 }

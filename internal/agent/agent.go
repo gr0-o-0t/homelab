@@ -664,9 +664,14 @@ func (a *Agent) bringUp(ctx context.Context, p agentstate.Paths, dep Deployer, l
 		a.logf("agent: reading the desired state: %v", err)
 		return
 	}
-	for _, svc := range d.RunningServices() {
+	for i, svc := range d.RunningServices() {
 		if ctx.Err() != nil {
 			return
+		}
+		// A stop or delete may have run in the gap between services.
+		if i > 0 && !a.stillWanted(p, svc) {
+			a.logf("agent: %s is no longer desired running; skipped", svc)
+			continue
 		}
 		a.bringUpOne(ctx, svc, dep)
 		if lock != nil {
@@ -681,11 +686,37 @@ func (a *Agent) bringUp(ctx context.Context, p agentstate.Paths, dep Deployer, l
 	}
 }
 
-// bringUpOne brings up one service; a deploy (which may pull an image) is
-// cut off after BringUpTimeout so a stalled registry cannot hold the lock.
-func (a *Agent) bringUpOne(ctx context.Context, svc string, dep Deployer) {
+// stillWanted reports whether svc is still desired running and still has its
+// service dir: a stop or delete may have run while the lock was released.
+func (a *Agent) stillWanted(p agentstate.Paths, svc string) bool {
+	d, _, err := desired.LoadDesired(p.StateDir)
+	if err != nil || !d.ServiceRunning(svc) {
+		return false
+	}
+	_, err = os.Stat(filepath.Join(p.StateDir, "services", svc))
+	return err == nil
+}
+
+// bringUpOne brings up one service. The whole of it (listing, scale-back and
+// the deploy, which may pull an image) is cut off after BringUpTimeout so a
+// stalled registry or engine cannot hold the lock.
+func (a *Agent) bringUpOne(parent context.Context, svc string, dep Deployer) {
+	timeout := a.BringUpTimeout
+	if timeout <= 0 {
+		timeout = defaultBringUpTimeout
+	}
+	ctx, cancel := context.WithTimeout(parent, timeout)
+	defer cancel()
+	timedOut := func() bool { return ctx.Err() == context.DeadlineExceeded && parent.Err() == nil }
+	left := func() {
+		a.logf("agent: %s left undeployed: timed out after %s — run `homelab up %s` once the registry is reachable", svc, timeout, svc)
+	}
 	reps, err := dep.Replicas(ctx, svc)
 	if err != nil {
+		if timedOut() {
+			left()
+			return
+		}
 		a.logf("agent: checking %s in Swarm: %v — left as it is", svc, err)
 		return
 	}
@@ -700,21 +731,19 @@ func (a *Agent) bringUpOne(ctx context.Context, svc string, dep Deployer) {
 			return
 		}
 		if err := dep.Scale(ctx, svc, zero); err != nil {
+			if timedOut() {
+				left()
+				return
+			}
 			a.logf("agent: scaling %s back up: %v", svc, err)
 			return
 		}
 		a.logf("agent: %s was at zero replicas; scaled back up", svc)
 		return
 	}
-	timeout := a.BringUpTimeout
-	if timeout <= 0 {
-		timeout = defaultBringUpTimeout
-	}
-	uctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	if err := dep.Up(uctx, svc); err != nil {
-		if uctx.Err() == context.DeadlineExceeded && ctx.Err() == nil {
-			a.logf("agent: %s left undeployed: timed out after %s — run `homelab up %s` once the registry is reachable", svc, timeout, svc)
+	if err := dep.Up(ctx, svc); err != nil {
+		if timedOut() {
+			left()
 			return
 		}
 		a.logf("agent: bringing up %s: %v", svc, err)
@@ -723,5 +752,5 @@ func (a *Agent) bringUpOne(ctx context.Context, svc string, dep Deployer) {
 	a.logf("agent: %s is up", svc)
 }
 
-// defaultBringUpTimeout bounds one service's deploy at boot.
+// defaultBringUpTimeout bounds one service's bring-up at boot.
 const defaultBringUpTimeout = 10 * time.Minute

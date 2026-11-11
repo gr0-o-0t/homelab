@@ -74,3 +74,51 @@ func TestAgent_BringUpReleasesTheLockBetweenServices(t *testing.T) {
 	assert.Less(t, idx("up alpha"), idx("command ran"))
 	assert.Less(t, idx("command ran"), idx("up beta"), "the command ran between services: %v", calls)
 }
+
+// A stop recorded in the gap between services must stick: the stopped
+// service is neither scaled back up nor deployed.
+func TestAgent_BringUpSkipsAServiceStoppedInTheGap(t *testing.T) {
+	h := newHarness(t, RoleLeader)
+	h.writeDesired(map[string]desired.State{"alpha": desired.Running, "beta": desired.Running})
+	h.dep.replicas = map[string]map[string]uint64{"beta": {"web": 0}}
+	lock := make(chan struct{}, 1)
+	lock <- struct{}{}
+	h.dep.onUp = func(svc string) {
+		if svc != "alpha" {
+			return
+		}
+		go func() {
+			lock <- struct{}{} // `homelab stop beta`
+			h.writeDesired(map[string]desired.State{"alpha": desired.Running, "beta": desired.Stopped})
+			h.rec.add("stopped beta")
+			<-lock
+		}()
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	h.a.bringUp(context.Background(), h.paths, h.dep, lock)
+	require.True(t, h.rec.waitFor("stopped beta"))
+
+	calls := h.rec.Calls()
+	assert.NotContains(t, calls, "up beta")
+	assert.NotContains(t, calls, "scale beta web=1")
+}
+
+// A listing that stalls is cut off by the per-service timeout too.
+func TestAgent_BringUpBoundsAStalledReplicasCall(t *testing.T) {
+	h := newHarness(t, RoleLeader)
+	h.writeDesired(map[string]desired.State{"alpha": desired.Running, "beta": desired.Running})
+	h.a.BringUpTimeout = 150 * time.Millisecond
+	h.dep.replicasCtx = func(ctx context.Context, svc string) error {
+		if svc == "alpha" {
+			<-ctx.Done()
+			return ctx.Err()
+		}
+		return nil
+	}
+	start := time.Now()
+	h.a.bringUp(context.Background(), h.paths, h.dep, nil)
+	assert.Less(t, time.Since(start), 3*time.Second)
+	assert.Contains(t, h.rec.Calls(), "up beta")
+	assert.Contains(t, h.rec.Logs(), "timed out after")
+}
