@@ -3,6 +3,55 @@
 Notable changes per release. The release workflow publishes the section
 matching the pushed tag as the GitHub release notes.
 
+## v0.5.0-rc.1 — 2026-11-11
+
+Release candidate. The homelab moves from one Docker Compose host to a Docker
+Swarm cluster run by a `homelab agent` container on every PC. Upgrading an
+existing v0.4.x install is a one-time cutover: follow
+`docs/migrating-to-swarm.md` (backup with v0.4.3 first; rollback to v0.4.3 is
+documented from every step and never touches data volumes).
+
+### Added
+
+- `homelab init` (first PC: Swarm on its tailnet IP, the leader agent),
+  `homelab join` (another PC as a worker), `homelab login`/`logout` (a PC as a
+  client only). `init --import` brings a v0.4.x config dir, its exposure and
+  its keyring secrets into the cluster and reuses the named volumes.
+- The leader agent runs Caddy, caddy-l4 and Tailscale (tsnet) in-process: one
+  `*.home.<domain>` for the whole cluster, HTTPS sites and raw TCP/UDP ports
+  (e.g. gitea ssh on 2222) on the tailnet, cloudflared as a Swarm service.
+- Control from any PC: every command except the local ones is forwarded to the
+  leader over the tailnet (cluster-secret auth); the TUI and GUI show the
+  cluster from any PC.
+- Placement per container: data, host paths and shared databases stay on the
+  core node; stateless containers prefer worker PCs while they are on and move
+  back when they leave.
+- `homelab edit <svc> <file>` edits a service's compose file, config.yaml or
+  bind-mounted files from any PC, validated before saving.
+- `homelab upgrade` rolls a new agent image: workers one by one, the leader
+  last, with automatic rollback. The agent image is published as
+  `ghcr.io/gr0-o-0t/homelab:<tag>`.
+- `backup --fetch` copies a backup to the PC; backups live in their own
+  `homelab-backups` volume and keep running if the client disconnects.
+- `exec`/`logs` reach a container on any node; `-c` picks one container of a
+  multi-container stack; `logs` shows the whole stack.
+
+### Changed
+
+- Secrets live in an encrypted vault in the leader agent; a service's
+  environment reaches it as a Swarm secret, never in the service spec.
+- Lifecycle verbs need a service or `-a`/`--all` (there is no core stack).
+  `up` never re-pulls an image it already has; `update` pulls and re-resolves.
+- `restore --config` is now `restore --with-config`.
+- Day-one exposure layers are the tailnet and Cloudflare; `--tor`, `--i2p` and
+  `--ygg` are refused in cluster mode for now.
+
+### Removed
+
+- The Docker Compose backend, the core stack (tailscale/caddy/tor/i2p/ygg
+  containers), session mode, `homelab migrate`, `port`, `ts`, `tor`, `i2p`,
+  `ygg`, `ext start|stop`, `--no-record`, and `--build` on `up`/`restart`.
+
 ## v0.4.3 — 2026-10-17
 
 ### Fixed
