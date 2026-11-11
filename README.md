@@ -177,7 +177,7 @@ homelab caddy logs                 Follow the leader agent's logs
 homelab backup [service]                     Volumes + DB dumps + config, on the leader (--all, --group, --live)
 homelab backup --list                        Existing backups, newest first
 homelab backup --fetch <name> <local-dir>    Copy a backup to this PC
-homelab restore <backup-dir> [service]       Replace volumes + databases (--config, --create-volumes)
+homelab restore <backup-dir> [service]       Replace volumes + databases (--with-config, --create-volumes)
 homelab prune [service...]                   Remove Swarm services, volumes and images (--keep-volumes)
 ```
 

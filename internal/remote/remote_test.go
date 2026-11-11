@@ -63,6 +63,9 @@ func helperMain(args []string) {
 		line, err := bufio.NewReader(os.Stdin).ReadString('\n')
 		_ = os.WriteFile(filepath.Join(dir, id+".answer"), fmt.Appendf(nil, "%q %v", line, err), 0o600)
 		os.Exit(0)
+	case "exec": // prints its argv verbatim
+		fmt.Println("ARGV=" + strings.Join(args, " "))
+		os.Exit(0)
 	case "version", "upgrade", "agent": // prints what ran
 		fmt.Println("RAN=" + strings.Join(args, " "))
 		os.Exit(0)
@@ -133,7 +136,7 @@ func testResolve(argv []string) ([]string, bool) {
 		return []string{"cf", argv[1]}, true
 	}
 	switch name {
-	case "help", "completion", "__complete", "status", "ls", "cat", "up", "delete", "agent", "envshim", "version", "login", "join", "backup", "backup-list", "restore", "upgrade":
+	case "help", "completion", "__complete", "status", "ls", "cat", "up", "delete", "agent", "envshim", "version", "login", "join", "backup", "backup-list", "restore", "upgrade", "exec":
 		if name == "agent" && len(argv) > 1 && !strings.HasPrefix(argv[1], "-") {
 			return []string{"agent", argv[1]}, true
 		}
@@ -267,12 +270,42 @@ func TestRemote_RejectsConfigDirInArgv(t *testing.T) {
 		{"login"},
 		{"--no-color", "join"},
 		{"--gui"}, // the root command renders locally
+		{"up", "--config", "/x"},
+		// exec: before the service name root flags still parse.
+		{"--config-dir", "/x", "exec", "svc", "sh"},
+		{"exec", "--config-dir", "/x", "svc", "sh"},
+		{"exec", "--config=/x", "svc", "sh"},
+		{"exec", "-c", "app", "--config", "/x", "svc", "sh"},
+		{"exec", "-Tc", "app", "--config-dir", "/x", "svc", "sh"},
+		{"exec", "--", "--config", "sh"},
 	} {
 		code, out, _, err := run(t, c, RunOptions{Argv: argv})
 		require.Error(t, err, "%q", argv)
 		assert.NotEqual(t, 0, code, "%q", argv)
 		assert.NotContains(t, out, "ARGV=", "%q ran", argv)
 	}
+}
+
+// After exec's service name the argv is the container command's: a
+// --config there is the command's own flag and reaches the child verbatim.
+// restore's flag is --with-config, which is not refused.
+func TestRemote_AcceptsConfigFlagsThatAreNotTheRoots(t *testing.T) {
+	e := newTestServer(t, nil)
+	c := e.client(testSecret, "1.4.2")
+	for _, argv := range [][]string{
+		{"exec", "svc", "app", "--config", "/x"},
+		{"exec", "-c", "web", "svc", "app", "--config-dir=/x"},
+		{"exec", "-T", "-u", "root", "svc", "app", "--config", "/x"},
+		{"exec", "-cweb", "svc", "app", "--config", "/x"},
+	} {
+		code, out, _, err := run(t, c, RunOptions{Argv: argv})
+		require.NoError(t, err, "%q", argv)
+		assert.Equal(t, 0, code)
+		assert.Contains(t, out, "ARGV="+strings.Join(argv, " "), "%q", argv)
+	}
+	code, _, _, err := run(t, c, RunOptions{Argv: []string{"restore", "--with-config", "bk1"}})
+	require.NoError(t, err)
+	assert.Equal(t, 0, code)
 }
 
 func TestRemote_ChildEnvIsAllowlisted(t *testing.T) {
@@ -436,9 +469,22 @@ func TestRemote_SelfReplaceOnlyWhereAllowed(t *testing.T) {
 		_, _, _, err := run(t, c, RunOptions{Argv: argv})
 		require.Error(t, err, "%q", argv)
 	}
-	// Not across a version mismatch either.
-	_, _, _, err = run(t, worker.client(testSecret, "1.5.0"), RunOptions{Argv: []string{"agent", "self-replace", "--image", "x"}})
+	// Across a version mismatch too: a worker one minor behind must still
+	// take the upgrade (R55). The leader still refuses it.
+	code, out, _, err = run(t, worker.client(testSecret, "1.5.0"), RunOptions{Argv: []string{"agent", "self-replace", "--image", "x"}})
+	require.NoError(t, err)
+	assert.Equal(t, 0, code)
+	assert.Contains(t, out, "RAN=agent self-replace --image x")
+	_, out, _, err = run(t, leader.client(testSecret, "1.5.0"), RunOptions{Argv: []string{"agent", "self-replace", "--image", "x"}})
 	require.Error(t, err)
+	assert.NotContains(t, out, "RAN=")
+	// Only the allowed internal path crosses: the rest are still refused.
+	for _, argv := range [][]string{{"ls"}, {"agent", "replace-helper"}} {
+		_, out, _, err = run(t, worker.client(testSecret, "1.5.0"), RunOptions{Argv: argv})
+		require.Error(t, err, "%q", argv)
+		assert.NotContains(t, out, "ARGV=")
+		assert.NotContains(t, out, "RAN=")
+	}
 }
 
 // A dial failure is ErrUnreachable (an offline PC); a refusal is not.

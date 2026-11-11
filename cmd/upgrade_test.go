@@ -149,17 +149,29 @@ esac
 // CLI's own command tree, AllowInternal): every command upgrade sends a
 // worker must get through.
 func TestUpgrade_AgainstARealWorkerAgentServer(t *testing.T) {
+	upgradeAgainstWorker(t, "v1.4.0")
+}
+
+// A worker one minor behind the leader (it missed an upgrade while offline)
+// is upgraded, not failed: its agent accepts `agent self-replace` across
+// the version difference (R55), else it would block every later upgrade.
+func TestUpgrade_WorkerOneMinorBehindIsUpgraded(t *testing.T) {
+	upgradeAgainstWorker(t, "v1.3.0")
+}
+
+func upgradeAgainstWorker(t *testing.T, workerVersion string) {
+	t.Helper()
 	root := t.TempDir()
 	state := filepath.Join(root, "state")
 	require.NoError(t, os.MkdirAll(state, 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(state, "version"), []byte("v1.4.0\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(state, "version"), []byte(workerVersion+"\n"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(state, "boot"), []byte("old\n"), 0o600))
 	bin := filepath.Join(root, "homelab")
 	require.NoError(t, os.WriteFile(bin, []byte(workerScript), 0o700)) //nolint:gosec // a test script
 
 	const secret = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	srv := httptest.NewTLSServer(remote.NewServer(remote.ServerConfig{
-		StateDir: state, StateRoot: root, Secret: secret, Version: "v1.4.0", Binary: bin,
+		StateDir: state, StateRoot: root, Secret: secret, Version: workerVersion, Binary: bin,
 		Resolve:       agent.WorkerResolver(ResolveCommand),
 		AllowInternal: map[string]bool{agent.SelfReplacePath: true},
 		Logf:          func(string, ...any) {},

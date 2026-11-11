@@ -108,6 +108,12 @@ func TestBuild_FillsDefaultsAndAppendsYes(t *testing.T) {
 	_, ok := ByID("core.up")
 	assert.False(t, ok, "there is no core stack to bring up")
 
+	// --with-config, not --config: the agent refuses the root's --config
+	// anywhere in a forwarded argv.
+	restore, _ := ByID("service.restore")
+	assert.Equal(t, []string{"restore", "bk1", "web", "--with-config", "--yes"},
+		restore.Build(svc, Inputs{"backup": "bk1", "with-config": "true"}))
+
 	exec, _ := ByID("service.exec")
 	assert.Equal(t, []string{"exec", "--no-tty", "--user", "root", "web", "ls", "-la"},
 		exec.Build(svc, Inputs{"command": "ls -la", "user": "root"}))

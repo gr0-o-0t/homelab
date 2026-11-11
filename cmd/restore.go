@@ -18,7 +18,7 @@ var restoreCmd = &cobra.Command{
 
   homelab restore 20260805-101500          # a backup in the leader's backups volume
   homelab restore <dir> vaultwarden        # just one service from the backup
-  homelab restore <dir> --config           # also overwrite config.yaml/compose
+  homelab restore <dir> --with-config      # also overwrite config.yaml/compose
 
 <backup-dir> is a name listed by 'homelab backup --list', or a path inside the
 backups volume (/var/lib/homelab-backups on the leader).
@@ -34,7 +34,7 @@ which is why secrets are not carried in the backup.
 A volume of the service missing on this node is refused, so that data is never
 restored into a volume the service does not use; pass --create-volumes when
 restoring onto a fresh cluster. The backup must hold exactly the volumes and
-databases the service declares (its archived config with --config).
+databases the service declares (its archived config with --with-config).
 
 A failed restore leaves the service stopped rather than start it on
 half-replaced data; a running service is otherwise scaled back to its replica
@@ -50,7 +50,7 @@ var restoreFlags struct {
 }
 
 func init() {
-	restoreCmd.Flags().BoolVar(&restoreFlags.config, "config", false,
+	restoreCmd.Flags().BoolVar(&restoreFlags.config, "with-config", false,
 		"Also restore config.yaml / docker-compose.yml / caddy confs")
 	restoreCmd.Flags().BoolVarP(&restoreFlags.yes, "yes", "y", false,
 		"Skip the confirmation prompt")

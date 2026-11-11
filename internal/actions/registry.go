@@ -24,7 +24,7 @@ var (
 	inLive = Input{Key: "live", Label: "Live (don't stop the service)", Kind: Bool,
 		Help: "Faster, but may capture torn files"}
 	inBackupDir  = Input{Key: "backup", Label: "Backup", Kind: Choice, Source: SourceBackups, Required: true}
-	inRestoreCfg = Input{Key: "config", Label: "Also restore config files", Kind: Bool,
+	inRestoreCfg = Input{Key: "with-config", Label: "Also restore config files", Kind: Bool,
 		Help: "Overwrites config.yaml, docker-compose.yml and Caddy routes"}
 	inCreateVols = Input{Key: "create-volumes", Label: "Create missing volumes", Kind: Bool,
 		Help: "Restoring onto a fresh cluster: create a volume not on the leader instead of refusing"}
@@ -147,7 +147,7 @@ func restoreArgs(t Target, in Inputs) []string {
 	if t.Name != "" {
 		args = append(args, t.Name)
 	}
-	return append(withBools(args, in, "config", "create-volumes"), "--yes")
+	return append(withBools(args, in, "with-config", "create-volumes"), "--yes")
 }
 
 // ── availability ──────────────────────────────────────────────────────────────
@@ -295,13 +295,13 @@ func build() []Action {
 	// ── service maintenance, configuration and destruction ────────────────────
 	add(
 		Action{ID: "service.backup", Multi: true, Label: "Back up", Group: GroupMaintenance, Icon: "backup", Scope: Service,
-			Help:   "Snapshot volumes, databases and config (secrets stay in the keyring)",
+			Help:   "Snapshot volumes, databases and config (secrets stay in the leader's vault)",
 			Inputs: []Input{inOut, inLive}, Args: backupArgs,
 			Commands: []string{"backup", "backup --out", "backup --live"}},
 		Action{ID: "service.restore", Label: "Restore", Group: GroupMaintenance, Icon: "restore", Scope: Service,
 			Danger: Confirm, Help: "Replace the service's volumes and databases with a backup",
 			Inputs: []Input{inBackupDir, inRestoreCfg, inCreateVols}, Args: restoreArgs,
-			Commands: []string{"restore", "restore --config", "restore --create-volumes", "restore --yes"}},
+			Commands: []string{"restore", "restore --with-config", "restore --create-volumes", "restore --yes"}},
 		Action{ID: "service.setup", Label: "Configure", Group: GroupConfigure, Icon: "gear", Scope: Service,
 			Interactive: true, Help: "Set variables and secrets (front ends can also use setup --json/--set/--secrets-stdin)",
 			Args: named("setup"), Commands: []string{"setup", "setup --set", "setup --secrets-stdin"}},

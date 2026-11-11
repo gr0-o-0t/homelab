@@ -55,9 +55,66 @@ func DetachOnDisconnect(path []string) bool {
 	return len(path) > 0 && Detached[path[0]]
 }
 
-// refusedFlags may not appear anywhere in a forwarded argv: they would choose
-// the agent's state.
+// refusedFlags may not appear in a forwarded argv: they would choose the
+// agent's state. They are refused anywhere, except after exec's service
+// name, where the argv is the container command's own (see refusalEnd).
 var refusedFlags = []string{"--config-dir", "--config"}
+
+// ExecValueFlags are exec's flags that take their value as the next
+// argument (the long forms and the shorthand letters), and the root
+// persistent ones that do. refusalEnd skips their values to find the
+// service name; cmd's tests pin this list against exec's flag set.
+var ExecValueFlags = map[string]bool{
+	"--user": true, "--workdir": true, "--env": true, "--container": true,
+	"--config": true, "--config-dir": true,
+	"-u": true, "-w": true, "-e": true, "-c": true,
+}
+
+// refusalEnd is the length of the argv prefix refusedFlags are checked in:
+// all of it, except for exec, whose flags stop at the service name
+// (SetInterspersed(false)) — everything after it is the container command's
+// argv and reaches the child verbatim. Unknown spellings err toward
+// checking more: a value-taking flag this misses would end the prefix at
+// its value, so ExecValueFlags must stay complete.
+func refusalEnd(argv []string) int {
+	i := 0
+	for ; i < len(argv); i++ { // up to the command name
+		if argv[i] == "--" {
+			return len(argv)
+		}
+		if !strings.HasPrefix(argv[i], "-") {
+			break
+		}
+	}
+	if i == len(argv) || argv[i] != "exec" {
+		return len(argv)
+	}
+	for i++; i < len(argv); i++ {
+		a := argv[i]
+		switch {
+		case a == "--":
+			return min(i+2, len(argv)) // the service follows; check it too
+		case !strings.HasPrefix(a, "-") || a == "-":
+			return i + 1 // the service name
+		case strings.Contains(a, "="):
+		case strings.HasPrefix(a, "--"):
+			if ExecValueFlags[a] {
+				i++
+			}
+		default: // a shorthand cluster (-Tu): the first value-taking letter
+			// takes the rest of the cluster, or the next argument
+			for j := 1; j < len(a); j++ {
+				if ExecValueFlags["-"+a[j:j+1]] {
+					if j == len(a)-1 {
+						i++
+					}
+					break
+				}
+			}
+		}
+	}
+	return len(argv)
+}
 
 // Resolver maps argv to the canonical command path it invokes (aliases
 // resolved, e.g. ["rm","x"] → ["delete"]); ok is false for an unknown
@@ -108,7 +165,10 @@ func CommandName(argv []string) string {
 // AcrossVersions are the commands (canonical top-level names) an agent runs
 // for a client whose major.minor differs: upgrade, invoked by a CLI newer
 // than the agent (the normal upgrade path), and version, which is how
-// upgrade checks an agent. Nothing else crosses a version difference.
+// upgrade checks an agent. Besides these, only the Internal paths a server
+// allows (a worker agent's `agent self-replace`, which the leader sends
+// while upgrading a worker still on an older version) cross a version
+// difference.
 var AcrossVersions = map[string]bool{"upgrade": true, "version": true}
 
 // AgentAnswers are LocalOnly commands the agent still runs when a client
@@ -127,13 +187,19 @@ func validate(h Handshake, agentVersion string, resolve Resolver, allowInternal 
 	// The command is only resolved for a mismatched client when it names
 	// one that may cross: the rest are refused before the agent's cobra
 	// tree sees them.
-	if mismatch && !AcrossVersions[CommandName(h.Argv)] {
+	// A server allowing Internal paths (a worker agent) resolves those too:
+	// the leader upgrading a worker one minor behind sends `agent
+	// self-replace` across the difference (R55).
+	mayCross := func(name string) bool {
+		return AcrossVersions[name] || (Internal[name] && len(allowInternal) > 0)
+	}
+	if mismatch && !mayCross(CommandName(h.Argv)) {
 		return refuseMismatch()
 	}
 	if len(h.Argv) == 0 {
 		return nil, 2, fmt.Errorf("no command given")
 	}
-	for _, a := range h.Argv {
+	for _, a := range h.Argv[:refusalEnd(h.Argv)] {
 		for _, f := range refusedFlags {
 			if a == f || strings.HasPrefix(a, f+"=") {
 				return nil, 2, fmt.Errorf("%s cannot be passed to the agent", f)
@@ -150,7 +216,7 @@ func validate(h Handshake, agentVersion string, resolve Resolver, allowInternal 
 	name := path[0]
 	// The resolved name decides, not the first word: an alias must not
 	// smuggle another command across the version check.
-	if mismatch && !AcrossVersions[name] {
+	if mismatch && !AcrossVersions[name] && !allowInternal[strings.Join(path, " ")] {
 		return refuseMismatch()
 	}
 	if allowInternal[strings.Join(path, " ")] {
