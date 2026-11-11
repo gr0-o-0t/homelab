@@ -3,6 +3,22 @@
 Notable changes per release. The release workflow publishes the section
 matching the pushed tag as the GitHub release notes.
 
+## v0.5.0-rc.2 — 2026-11-11
+
+Release candidate. Upgrade an rc.1 cluster with `homelab upgrade` from a PC
+running this CLI; a v0.4.x install follows `docs/migrating-to-swarm.md` as for
+rc.1.
+
+### Fixed
+
+- A healthcheck that needs the service's secret environment never passed: the
+  environment reaches only the main process (through the env shim, never the
+  service spec), and Docker runs healthchecks with the spec's. The shared
+  redis (`redis-cli ping` without its password) was restarted every minute,
+  so immich and searxng could not start. Healthchecks now run through the
+  shim too; `homelab up <svc>` redeploys a running service with the fixed
+  check.
+
 ## v0.5.0-rc.1 — 2026-11-11
 
 Release candidate. The homelab moves from one Docker Compose host to a Docker
