@@ -600,4 +600,5 @@ See `docs/adding-a-service.md`.
 - `docs/tailscale-setup.md` — auth key generation, ACL config
 - `docs/cloudflare-setup.md` — API token scoping, CNAME setup
 - `docs/adding-a-service.md` — step-by-step new service guide
+- `docs/migrating-to-swarm.md` — cutover runbook from the Compose-era v0.4.3 to the Swarm cluster (and rollback)
 - `docs/superpowers/specs/2026-11-04-swarm-cluster-design.md` — the Swarm cluster design

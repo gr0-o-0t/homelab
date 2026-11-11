@@ -72,6 +72,10 @@ homelab status      # the Edge table: caddy running
 PC that should only run the CLI. The leader keeps the `*.home.<domain>` DNS
 record pointed at its tailnet node.
 
+Coming from a Compose-era install (v0.4.3)? Follow
+[docs/migrating-to-swarm.md](docs/migrating-to-swarm.md) instead: `homelab init
+--import ~/.config/homelab` brings its services, exposure and secrets along.
+
 ### 4. Add and start a service
 
 ```bash
@@ -214,7 +218,8 @@ homelab/
     ├── architecture.md
     ├── tailscale-setup.md
     ├── cloudflare-setup.md
-    └── adding-a-service.md
+    ├── adding-a-service.md
+    └── migrating-to-swarm.md   # Compose-era v0.4.3 → Swarm cutover runbook
 ```
 
 > **Note:** `assets/services/` is the embedded catalog — this is the **canonical copy**. The root `services/` directory is gitignored and only populated by running `make catalog` for local browsing. When adding or modifying a service, update **only** `assets/services/<name>/`.
