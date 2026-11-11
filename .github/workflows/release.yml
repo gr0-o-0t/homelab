@@ -128,4 +128,6 @@ jobs:
             dist/*.tar.gz
             dist/SHA256SUMS
           draft: false
-          prerelease: false
+          # A tag with a "-" (v0.5.0-rc.1) is a prerelease, matching the
+          # image step that skips :latest for it.
+          prerelease: ${{ contains(github.ref_name, '-') }}
