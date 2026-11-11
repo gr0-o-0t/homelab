@@ -61,6 +61,7 @@ type Fake struct {
 	execExit   int
 	created    []*CreatedContainer
 	pulls      map[string]string // ref → ImagePull's JSON stream
+	stallPulls map[string]bool   // ref → ImagePull's stream never ends until closed
 	leaves     int
 	copies     []Copy
 	restartErr error
@@ -574,7 +575,37 @@ func (f *Fake) ImagePull(_ context.Context, ref string, _ image.PullOptions) (io
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.rec("ImagePull", ref)
+	if f.stallPulls[ref] {
+		return &stalledBody{closed: make(chan struct{})}, nil
+	}
 	return io.NopCloser(strings.NewReader(f.pulls[ref])), nil
+}
+
+// StallPull makes ImagePull of ref return a stream that delivers nothing and
+// ends only when it is closed: a registry that stopped answering, read by a
+// client that ignores its context.
+func (f *Fake) StallPull(ref string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.stallPulls == nil {
+		f.stallPulls = map[string]bool{}
+	}
+	f.stallPulls[ref] = true
+}
+
+type stalledBody struct {
+	once   sync.Once
+	closed chan struct{}
+}
+
+func (b *stalledBody) Read([]byte) (int, error) {
+	<-b.closed
+	return 0, io.ErrClosedPipe
+}
+
+func (b *stalledBody) Close() error {
+	b.once.Do(func() { close(b.closed) })
+	return nil
 }
 
 // SetPullStream makes ImagePull of ref return stream (the engine's JSON

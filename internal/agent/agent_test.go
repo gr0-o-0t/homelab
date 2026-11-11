@@ -88,6 +88,8 @@ type fakeDeployer struct {
 	// service missing here has none (never deployed).
 	replicas map[string]map[string]uint64
 	onUp     func(svc string)
+	// upCtx, when set, replaces Up's result: it gets Up's ctx.
+	upCtx func(ctx context.Context, svc string) error
 }
 
 func (d *fakeDeployer) Replicas(_ context.Context, svc string) (map[string]uint64, error) {
@@ -110,7 +112,12 @@ func (d *fakeDeployer) RemoveCloudflared(context.Context) error {
 	d.rec.add("remove-cloudflared")
 	return nil
 }
-func (d *fakeDeployer) Up(_ context.Context, svc string) error {
+func (d *fakeDeployer) Up(ctx context.Context, svc string) error {
+	if d.upCtx != nil {
+		if err := d.upCtx(ctx, svc); err != nil {
+			return err
+		}
+	}
 	if d.onUp != nil {
 		d.onUp(svc)
 	}

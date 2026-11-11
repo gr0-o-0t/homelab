@@ -144,6 +144,8 @@ type Agent struct {
 
 	// Sleep waits d or until ctx is done (false); default a timer.
 	Sleep func(ctx context.Context, d time.Duration) bool
+	// BringUpTimeout bounds each service's deploy at boot; default 10 minutes.
+	BringUpTimeout time.Duration
 	// Logf logs progress and recovered failures; default log.Printf.
 	Logf func(format string, args ...any)
 }
@@ -414,7 +416,8 @@ func (a *Agent) runLeader(ctx context.Context, p agentstate.Paths, sm *secrets.M
 	if err != nil {
 		return fmt.Errorf("listening on the tailnet %s: %w", RemoteAddr, err)
 	}
-	// bringUp holds the server's lock: a mutating command waits for it
+	// bringUp holds the server's lock one service at a time: a mutating command
+	// waits for the service in progress, then runs between services
 	// (reads such as status do not take the lock and run meanwhile).
 	lock := make(chan struct{}, 1)
 	lock <- struct{}{}
@@ -440,8 +443,7 @@ func (a *Agent) runLeader(ctx context.Context, p agentstate.Paths, sm *secrets.M
 	go func() { served <- a.serve(ctx, ln, cfg) }()
 
 	// 7. services: shared providers first, then the rest
-	a.bringUp(ctx, p, dep)
-	<-lock
+	a.bringUp(ctx, p, dep, lock)
 	if ctx.Err() != nil {
 		return <-served
 	}
@@ -644,8 +646,19 @@ func (a *Agent) ensureDNS(ctx context.Context, env map[string]string, ip netip.A
 // floating tag, upgrade it — `homelab update` does that, deliberately. The
 // one repair it gets is a container left at zero replicas (a backup cut
 // short by the agent stopping) scaled back to one. A service that fails is
-// logged and the rest still come up.
-func (a *Agent) bringUp(ctx context.Context, p agentstate.Paths, dep Deployer) {
+// logged and the rest still come up. Each service is deployed under its own
+// timeout and its own turn of the lock (see bringUpOne).
+func (a *Agent) bringUp(ctx context.Context, p agentstate.Paths, dep Deployer, lock chan struct{}) {
+	// The caller hands the lock over held. It is released between services so
+	// a waiting mutating command gets a turn, and is not held on return.
+	held := lock != nil
+	release := func() {
+		if held {
+			<-lock
+			held = false
+		}
+	}
+	defer release()
 	d, _, err := desired.LoadDesired(p.StateDir)
 	if err != nil {
 		a.logf("agent: reading the desired state: %v", err)
@@ -655,32 +668,60 @@ func (a *Agent) bringUp(ctx context.Context, p agentstate.Paths, dep Deployer) {
 		if ctx.Err() != nil {
 			return
 		}
-		reps, err := dep.Replicas(ctx, svc)
-		if err != nil {
-			a.logf("agent: checking %s in Swarm: %v — left as it is", svc, err)
-			continue
-		}
-		if len(reps) > 0 {
-			zero := map[string]uint64{}
-			for name, n := range reps {
-				if n == 0 {
-					zero[name] = 1
-				}
+		a.bringUpOne(ctx, svc, dep)
+		if lock != nil {
+			release()
+			select {
+			case lock <- struct{}{}:
+				held = true
+			case <-ctx.Done():
+				return
 			}
-			if len(zero) == 0 {
-				continue
-			}
-			if err := dep.Scale(ctx, svc, zero); err != nil {
-				a.logf("agent: scaling %s back up: %v", svc, err)
-				continue
-			}
-			a.logf("agent: %s was at zero replicas; scaled back up", svc)
-			continue
 		}
-		if err := dep.Up(ctx, svc); err != nil {
-			a.logf("agent: bringing up %s: %v", svc, err)
-			continue
-		}
-		a.logf("agent: %s is up", svc)
 	}
 }
+
+// bringUpOne brings up one service; a deploy (which may pull an image) is
+// cut off after BringUpTimeout so a stalled registry cannot hold the lock.
+func (a *Agent) bringUpOne(ctx context.Context, svc string, dep Deployer) {
+	reps, err := dep.Replicas(ctx, svc)
+	if err != nil {
+		a.logf("agent: checking %s in Swarm: %v — left as it is", svc, err)
+		return
+	}
+	if len(reps) > 0 {
+		zero := map[string]uint64{}
+		for name, n := range reps {
+			if n == 0 {
+				zero[name] = 1
+			}
+		}
+		if len(zero) == 0 {
+			return
+		}
+		if err := dep.Scale(ctx, svc, zero); err != nil {
+			a.logf("agent: scaling %s back up: %v", svc, err)
+			return
+		}
+		a.logf("agent: %s was at zero replicas; scaled back up", svc)
+		return
+	}
+	timeout := a.BringUpTimeout
+	if timeout <= 0 {
+		timeout = defaultBringUpTimeout
+	}
+	uctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	if err := dep.Up(uctx, svc); err != nil {
+		if uctx.Err() == context.DeadlineExceeded && ctx.Err() == nil {
+			a.logf("agent: %s left undeployed: timed out after %s — run `homelab up %s` once the registry is reachable", svc, timeout, svc)
+			return
+		}
+		a.logf("agent: bringing up %s: %v", svc, err)
+		return
+	}
+	a.logf("agent: %s is up", svc)
+}
+
+// defaultBringUpTimeout bounds one service's deploy at boot.
+const defaultBringUpTimeout = 10 * time.Minute

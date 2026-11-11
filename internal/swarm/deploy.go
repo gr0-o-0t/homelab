@@ -505,7 +505,14 @@ func (d *Deployer) pull(ctx context.Context, ref string, done map[string]bool) e
 		return fmt.Errorf("pulling %s: %w", ref, err)
 	}
 	defer func() { _ = rc.Close() }()
+	// Closing the stream is what unblocks a read stuck on a silent registry,
+	// whether or not the client's body honours ctx itself.
+	stop := context.AfterFunc(ctx, func() { _ = rc.Close() })
+	defer stop()
 	if err := jsonmessage.DisplayJSONMessagesStream(rc, io.Discard, 0, false, nil); err != nil {
+		if ctx.Err() != nil {
+			err = ctx.Err()
+		}
 		return fmt.Errorf("pulling %s: %w", ref, err)
 	}
 	done[ref] = true

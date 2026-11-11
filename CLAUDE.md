@@ -292,8 +292,10 @@ The leader, in order: creates the overlay, installs the shim, starts the edge
 A record at the node's tailnet IP via the Cloudflare API, deploys or removes
 cloudflared (by `CF_TUNNEL_TOKEN`), serves the remote CLI on `:7443`, then
 deploys every service recorded as running that has **no** Swarm services yet
-(shared providers first) while holding the remote server's lock (mutating
-commands wait; reads such as `status` run), and starts the rebalancer. A
+(shared providers first), each under a 10-minute timeout (a stalled pull leaves
+it undeployed, logged; `homelab up` retries) and holding the remote server's
+lock one service at a time, so a waiting mutating command runs between services
+(reads such as `status` never wait), and starts the rebalancer. A
 service already in Swarm is left as Swarm keeps it — no pull, no redeploy
 (R53) — except that a container left at zero replicas (a backup cut short) is
 scaled back to one. A worker agent only runs its own tsnet node and serves
