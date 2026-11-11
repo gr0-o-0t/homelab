@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/containerd/errdefs"
+	"github.com/distribution/reference"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/swarm"
@@ -78,12 +80,29 @@ func (d *Deployer) services(ctx context.Context, svc string) ([]swarm.Service, e
 	return d.API.ServiceList(ctx, swarm.ServiceListOptions{Filters: byService(svc)})
 }
 
-// Up pulls the images and creates or updates every container of svc with
-// one replica, its environment in a Swarm secret. Containers no longer in the
-// compose file are removed, as are env secrets and configs nothing uses any
-// more. Volumes are never touched: Swarm creates a missing named volume when
-// a task first starts, on the (pinned) node it runs on.
+// Up creates or updates every container of svc with one replica, its
+// environment in a Swarm secret. Containers no longer in the compose file
+// are removed, as are env secrets and configs nothing uses any more. Volumes
+// are never touched: Swarm creates a missing named volume when a task first
+// starts, on the (pinned) node it runs on.
+//
+// Up never upgrades an image (R53): an image already on this engine is used
+// as it is (one that is missing is pulled), the registry is never asked for
+// a newer digest, a service keeps the digest its last deploy pinned, and a
+// new one is pinned to the local image's digest. Update is the deliberate
+// upgrade.
 func (d *Deployer) Up(ctx context.Context, svc string) error {
+	return d.deploy(ctx, svc, false)
+}
+
+// Update pulls the images and redeploys, each tag resolved to the
+// registry's current digest, so a newer image rolls the tasks.
+func (d *Deployer) Update(ctx context.Context, svc string) error {
+	return d.deploy(ctx, svc, true)
+}
+
+// deploy is Up, or with refresh Update.
+func (d *Deployer) deploy(ctx context.Context, svc string, refresh bool) error {
 	if err := config.ValidServiceName(svc); err != nil {
 		return err
 	}
@@ -122,7 +141,13 @@ func (d *Deployer) Up(ctx context.Context, svc string) error {
 	pulled := map[string]bool{}
 	for i := range st.Services {
 		spec := &st.Services[i]
-		if err := d.pull(ctx, spec.TaskTemplate.ContainerSpec.Image, pulled); err != nil {
+		ref := spec.TaskTemplate.ContainerSpec.Image
+		if refresh {
+			err = d.pull(ctx, ref, pulled)
+		} else {
+			err = d.ensureImage(ctx, ref, pulled)
+		}
+		if err != nil {
 			return err
 		}
 		if err := d.withEnvSecret(ctx, svc, spec, st.Env[spec.Name], keep); err != nil {
@@ -139,10 +164,15 @@ func (d *Deployer) Up(ctx context.Context, svc string) error {
 
 		if cur, ok := existing[spec.Name]; ok {
 			delete(existing, spec.Name)
-			err := d.update(ctx, cur.ID, swarm.ServiceUpdateOptions{QueryRegistry: true},
+			err := d.update(ctx, cur.ID, swarm.ServiceUpdateOptions{QueryRegistry: refresh},
 				func(now *swarm.ServiceSpec) swarm.ServiceSpec {
 					next := *spec
 					next.TaskTemplate.ForceUpdate = now.TaskTemplate.ForceUpdate
+					if !refresh && next.TaskTemplate.ContainerSpec != nil && now.TaskTemplate.ContainerSpec != nil {
+						cs := *next.TaskTemplate.ContainerSpec
+						cs.Image = keepPinned(cs.Image, now.TaskTemplate.ContainerSpec.Image)
+						next.TaskTemplate.ContainerSpec = &cs
+					}
 					return next
 				})
 			if err != nil {
@@ -150,7 +180,10 @@ func (d *Deployer) Up(ctx context.Context, svc string) error {
 			}
 			continue
 		}
-		if _, err := d.API.ServiceCreate(ctx, *spec, swarm.ServiceCreateOptions{QueryRegistry: true}); err != nil {
+		if !refresh {
+			spec.TaskTemplate.ContainerSpec.Image = d.pinLocal(ctx, spec.TaskTemplate.ContainerSpec.Image)
+		}
+		if _, err := d.API.ServiceCreate(ctx, *spec, swarm.ServiceCreateOptions{QueryRegistry: refresh}); err != nil {
 			return fmt.Errorf("creating %s: %w", spec.Name, err)
 		}
 	}
@@ -358,12 +391,6 @@ func (d *Deployer) Pull(ctx context.Context, svc string) error {
 	return nil
 }
 
-// Update pulls the images and redeploys: Up resolves each tag to its current
-// digest, so a newer image rolls the tasks.
-func (d *Deployer) Update(ctx context.Context, svc string) error {
-	return d.Up(ctx, svc)
-}
-
 // Remove deletes svc's services, env secrets and configs. Volumes are kept.
 func (d *Deployer) Remove(ctx context.Context, svc string) error {
 	if err := config.ValidServiceName(svc); err != nil {
@@ -408,6 +435,63 @@ func (d *Deployer) anyWorkerReady(ctx context.Context) (bool, error) {
 			n.Status.State == swarm.NodeStateReady &&
 			n.Spec.Availability == swarm.NodeAvailabilityActive
 	}), nil
+}
+
+// ensureImage pulls ref only when this engine does not have it: up uses
+// the image that is there, never a newer one (R53).
+func (d *Deployer) ensureImage(ctx context.Context, ref string, done map[string]bool) error {
+	if done[ref] {
+		return nil
+	}
+	_, _, err := d.API.ImageInspectWithRaw(ctx, ref)
+	switch {
+	case err == nil:
+		done[ref] = true
+		return nil
+	case errdefs.IsNotFound(err):
+		return d.pull(ctx, ref, done)
+	default:
+		return fmt.Errorf("inspecting %s: %w", ref, err)
+	}
+}
+
+// keepPinned keeps the digest the running service's image is pinned to when
+// next asks for the same reference without one: up must not roll the tasks
+// onto whatever each node's tag now points at.
+func keepPinned(next, now string) string {
+	if base, _, ok := strings.Cut(now, "@"); ok && base == next {
+		return now
+	}
+	return next
+}
+
+// pinLocal pins a new service's image reference to the digest of the image
+// this engine has for it, so its tasks run that image wherever and whenever
+// they start (Swarm pulls a bare tag on every task start). A reference
+// already pinned, or an image with no registry digest (built locally), is
+// left as it is.
+func (d *Deployer) pinLocal(ctx context.Context, ref string) string {
+	if strings.Contains(ref, "@") {
+		return ref
+	}
+	named, err := reference.ParseNormalizedNamed(ref)
+	if err != nil {
+		return ref
+	}
+	img, _, err := d.API.ImageInspectWithRaw(ctx, ref)
+	if err != nil {
+		return ref
+	}
+	for _, rd := range img.RepoDigests {
+		r, err := reference.ParseNormalizedNamed(rd)
+		if err != nil || r.Name() != named.Name() {
+			continue
+		}
+		if c, ok := r.(reference.Canonical); ok {
+			return ref + "@" + c.Digest().String()
+		}
+	}
+	return ref
 }
 
 // pull pulls ref once per deploy, reading the progress stream to its end:

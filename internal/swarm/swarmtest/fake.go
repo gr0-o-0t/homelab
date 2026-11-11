@@ -68,6 +68,7 @@ type Fake struct {
 	removed    []Removed
 	startErr   map[string]error // image → ContainerStart error
 	crash      map[string]bool  // image → crash-looping once started
+	queries    []bool           // QueryRegistry of each ServiceCreate/Update, in order
 }
 
 // New returns an empty Fake.
@@ -85,6 +86,14 @@ func (f *Fake) CallLog() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]string(nil), f.calls...)
+}
+
+// RegistryQueries is the QueryRegistry option of every ServiceCreate and
+// ServiceUpdate so far, in call order.
+func (f *Fake) RegistryQueries() []bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]bool(nil), f.queries...)
 }
 
 // SetNodes replaces the node list.
@@ -241,10 +250,11 @@ func (f *Fake) ServiceInspectWithRaw(_ context.Context, id string, _ swarm.Servi
 	return s, []byte("{}"), nil
 }
 
-func (f *Fake) ServiceCreate(_ context.Context, spec swarm.ServiceSpec, _ swarm.ServiceCreateOptions) (swarm.ServiceCreateResponse, error) {
+func (f *Fake) ServiceCreate(_ context.Context, spec swarm.ServiceSpec, opts swarm.ServiceCreateOptions) (swarm.ServiceCreateResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.rec("ServiceCreate", spec.Name)
+	f.queries = append(f.queries, opts.QueryRegistry)
 	if _, ok := f.find(spec.Name); ok {
 		return swarm.ServiceCreateResponse{}, conflict("service", spec.Name)
 	}
@@ -253,10 +263,11 @@ func (f *Fake) ServiceCreate(_ context.Context, spec swarm.ServiceSpec, _ swarm.
 	return swarm.ServiceCreateResponse{ID: id}, nil
 }
 
-func (f *Fake) ServiceUpdate(_ context.Context, id string, version swarm.Version, spec swarm.ServiceSpec, _ swarm.ServiceUpdateOptions) (swarm.ServiceUpdateResponse, error) {
+func (f *Fake) ServiceUpdate(_ context.Context, id string, version swarm.Version, spec swarm.ServiceSpec, opts swarm.ServiceUpdateOptions) (swarm.ServiceUpdateResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.rec("ServiceUpdate", id)
+	f.queries = append(f.queries, opts.QueryRegistry)
 	s, ok := f.find(id)
 	if !ok {
 		return swarm.ServiceUpdateResponse{}, fmt.Errorf("swarmtest: service %q not found: %w", id, errdefs.ErrNotFound)

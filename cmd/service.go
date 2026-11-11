@@ -122,9 +122,17 @@ func runServiceUp(_ *cobra.Command, args []string) error {
 }
 
 // upOne is `up` for one service: shared databases first, then deploy it on
-// Swarm. `start`, `update` and `restart --build` go through here too, so
-// every path gets the same database provisioning.
+// Swarm with the images on the engine (no pull of a present tag, R53).
+// `start` and `restart --build` go through here too, and `update` through
+// deployOne with Update, so every path gets the same database provisioning.
 func upOne(root, name string) error {
+	return deployOne(root, name, (*swarm.Deployer).Up)
+}
+
+// deployOne is up (verb Up) or update (verb Update) of one service: its
+// databases configured and provisioned first, its shared role bootstrapped
+// after.
+func deployOne(root, name string, verb func(*swarm.Deployer, context.Context, string) error) error {
 	// Auto-configure root databases section for shared DB services.
 	if err := config.EnsureRootDBConfig(rootConfigFile(), name); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: auto-configuring databases: %v\n", err)
@@ -134,7 +142,7 @@ func upOne(root, name string) error {
 		return err
 	}
 	fmt.Printf("%s Starting %s…\n", styles.Primary.Render("→"), styles.Bold.Render(name))
-	if err := deployRunning(root, name, (*swarm.Deployer).Up); err != nil {
+	if err := deployRunning(root, name, verb); err != nil {
 		return err
 	}
 	return bootstrapIfShared(ctx, root, name)

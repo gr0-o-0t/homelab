@@ -41,7 +41,7 @@ const (
 	RoleNone Role = iota
 	// RoleLeader: a manager — runs the cluster.
 	RoleLeader
-	// RoleWorker: serves local exec/logs only.
+	// RoleWorker: serves local exec (and version, agent self-replace) only.
 	RoleWorker
 )
 
@@ -100,6 +100,10 @@ type Deployer interface {
 	EnsureCloudflared(ctx context.Context, token string) error
 	RemoveCloudflared(ctx context.Context) error
 	Up(ctx context.Context, svc string) error
+	// Replicas is the replica count of each Swarm service of svc; empty
+	// when it has none.
+	Replicas(ctx context.Context, svc string) (map[string]uint64, error)
+	Scale(ctx context.Context, svc string, replicas map[string]uint64) error
 }
 
 // DNSFunc makes name an A record (DNS only, not proxied) to ip in zone,
@@ -403,12 +407,45 @@ func (a *Agent) runLeader(ctx context.Context, p agentstate.Paths, sm *secrets.M
 	} else if err := dep.RemoveCloudflared(ctx); err != nil {
 		a.logf("agent: removing cloudflared (no CF_TUNNEL_TOKEN): %v", err)
 	}
-	// 6. services: shared providers first, then the rest
-	a.bringUp(ctx, p, dep)
-	if ctx.Err() != nil {
-		return nil
+	// 6. serve — before the services come up (R53): the remote CLI answers
+	// at once after a boot, and `homelab upgrade`'s check of the new leader
+	// does not wait on deploys.
+	ln, err := ed.ListenTLS("tcp", RemoteAddr)
+	if err != nil {
+		return fmt.Errorf("listening on the tailnet %s: %w", RemoteAddr, err)
 	}
-	// 7. rebalancer
+	// bringUp holds the server's lock: a mutating command waits for it
+	// (reads such as status do not take the lock and run meanwhile).
+	lock := make(chan struct{}, 1)
+	lock <- struct{}{}
+	cfg := remote.ServerConfig{
+		StateDir:   p.StateDir,
+		StateRoot:  a.Root,
+		Secret:     secret,
+		Version:    a.Version,
+		Vault:      p.VaultFile,
+		VaultKey:   p.KeyFile,
+		CaddyAdmin: edge.AdminSocket(p.StateDir),
+		Resolve:    a.Resolve,
+		Lock:       lock,
+	}
+	// The relay of exec to workers dials them through the edge's tailnet
+	// node; without it only local containers are reachable.
+	if addr, cred, err := ed.SOCKS(); err != nil {
+		a.logf("agent: warning: no tailnet proxy for relaying exec to other nodes: %v", err)
+	} else {
+		cfg.TSSocks, cfg.TSSocksCred = addr, cred
+	}
+	served := make(chan error, 1)
+	go func() { served <- a.serve(ctx, ln, cfg) }()
+
+	// 7. services: shared providers first, then the rest
+	a.bringUp(ctx, p, dep)
+	<-lock
+	if ctx.Err() != nil {
+		return <-served
+	}
+	// 8. rebalancer
 	// Stopped explicitly once serving has stopped, not by ctx: shutdown is
 	// serve → rebalancer → edge.
 	rctx, stopRebalance := context.WithCancel(context.WithoutCancel(ctx))
@@ -421,29 +458,7 @@ func (a *Agent) runLeader(ctx context.Context, p agentstate.Paths, sm *secrets.M
 		}
 	}()
 	defer func() { stopRebalance(); wg.Wait() }()
-	// 8. serve
-	ln, err := ed.ListenTLS("tcp", RemoteAddr)
-	if err != nil {
-		return fmt.Errorf("listening on the tailnet %s: %w", RemoteAddr, err)
-	}
-	cfg := remote.ServerConfig{
-		StateDir:   p.StateDir,
-		StateRoot:  a.Root,
-		Secret:     secret,
-		Version:    a.Version,
-		Vault:      p.VaultFile,
-		VaultKey:   p.KeyFile,
-		CaddyAdmin: edge.AdminSocket(p.StateDir),
-		Resolve:    a.Resolve,
-	}
-	// The relay of exec/logs to workers dials them through the edge's
-	// tailnet node; without it only local containers are reachable.
-	if addr, cred, err := ed.SOCKS(); err != nil {
-		a.logf("agent: warning: no tailnet proxy for relaying exec/logs to other nodes: %v", err)
-	} else {
-		cfg.TSSocks, cfg.TSSocksCred = addr, cred
-	}
-	return a.serve(ctx, ln, cfg)
+	return <-served
 }
 
 // startEdge starts the edge, retrying with backoff while the tailnet node or
@@ -517,9 +532,11 @@ func (a *Agent) runWorker(ctx context.Context, p agentstate.Paths, sm *secrets.M
 	return a.serve(ctx, ln, cfg)
 }
 
-// workerCommands are all a worker agent runs: exec and logs act on its own
-// containers, version is how `homelab upgrade` checks it (and that a
-// replaced agent is a new one). Everything else goes to the leader.
+// workerCommands are all a worker agent runs: exec acts on its own
+// containers (logs resolves too, but a service's logs refuse off the leader,
+// R39: they are read there through docker service logs), version is how
+// `homelab upgrade` checks it (and that a replaced agent is a new one).
+// Everything else goes to the leader.
 var workerCommands = map[string]bool{"exec": true, "logs": true, "version": true}
 
 // SelfReplacePath is the hidden command through which the leader's
@@ -621,8 +638,13 @@ func (a *Agent) ensureDNS(ctx context.Context, env map[string]string, ip netip.A
 	a.logf("agent: DNS %s → %s", name, ip)
 }
 
-// bringUp deploys every service recorded as running, shared providers first.
-// A service that fails is logged and the rest still come up.
+// bringUp deploys every service recorded as running that has no Swarm
+// services yet, shared providers first. A service already in Swarm is left
+// as Swarm keeps it (R53): redeploying it would roll its tasks and, for a
+// floating tag, upgrade it — `homelab update` does that, deliberately. The
+// one repair it gets is a container left at zero replicas (a backup cut
+// short by the agent stopping) scaled back to one. A service that fails is
+// logged and the rest still come up.
 func (a *Agent) bringUp(ctx context.Context, p agentstate.Paths, dep Deployer) {
 	d, _, err := desired.LoadDesired(p.StateDir)
 	if err != nil {
@@ -632,6 +654,28 @@ func (a *Agent) bringUp(ctx context.Context, p agentstate.Paths, dep Deployer) {
 	for _, svc := range d.RunningServices() {
 		if ctx.Err() != nil {
 			return
+		}
+		reps, err := dep.Replicas(ctx, svc)
+		if err != nil {
+			a.logf("agent: checking %s in Swarm: %v — left as it is", svc, err)
+			continue
+		}
+		if len(reps) > 0 {
+			zero := map[string]uint64{}
+			for name, n := range reps {
+				if n == 0 {
+					zero[name] = 1
+				}
+			}
+			if len(zero) == 0 {
+				continue
+			}
+			if err := dep.Scale(ctx, svc, zero); err != nil {
+				a.logf("agent: scaling %s back up: %v", svc, err)
+				continue
+			}
+			a.logf("agent: %s was at zero replicas; scaled back up", svc)
+			continue
 		}
 		if err := dep.Up(ctx, svc); err != nil {
 			a.logf("agent: bringing up %s: %v", svc, err)

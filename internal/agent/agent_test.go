@@ -4,16 +4,19 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
 	"testing"
 	"time"
 
+	"github.com/docker/docker/api/types/image"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -22,6 +25,8 @@ import (
 	"github.com/groot/homelab/internal/edge"
 	"github.com/groot/homelab/internal/remote"
 	"github.com/groot/homelab/internal/secrets"
+	"github.com/groot/homelab/internal/swarm"
+	"github.com/groot/homelab/internal/swarm/swarmtest"
 )
 
 func TestMain(m *testing.M) {
@@ -79,6 +84,21 @@ func (r *recorder) Logs() string {
 type fakeDeployer struct {
 	rec  *recorder
 	fail map[string]error
+	// replicas is each service's Swarm services and their counts; a
+	// service missing here has none (never deployed).
+	replicas map[string]map[string]uint64
+	onUp     func(svc string)
+}
+
+func (d *fakeDeployer) Replicas(_ context.Context, svc string) (map[string]uint64, error) {
+	return maps.Clone(d.replicas[svc]), nil
+}
+
+func (d *fakeDeployer) Scale(_ context.Context, svc string, r map[string]uint64) error {
+	for _, k := range slices.Sorted(maps.Keys(r)) {
+		d.rec.add(fmt.Sprintf("scale %s %s=%d", svc, k, r[k]))
+	}
+	return nil
 }
 
 func (d *fakeDeployer) EnsureNetwork(context.Context) error { d.rec.add("network"); return nil }
@@ -91,6 +111,9 @@ func (d *fakeDeployer) RemoveCloudflared(context.Context) error {
 	return nil
 }
 func (d *fakeDeployer) Up(_ context.Context, svc string) error {
+	if d.onUp != nil {
+		d.onUp(svc)
+	}
 	d.rec.add("up " + svc)
 	return d.fail[svc]
 }
@@ -127,10 +150,6 @@ func (e *fakeEdge) SOCKS() (string, string, error) {
 	return "127.0.0.1:1080", "socks-cred-SECRET", nil
 }
 func (e *fakeEdge) ListenTLS(network, addr string) (net.Listener, error) {
-	// The rebalancer must already have been started: serving blocks.
-	if !e.rec.waitFor("rebalance") {
-		return nil, errors.New("serving before the rebalancer was started")
-	}
 	e.rec.add("listen " + addr)
 	return net.Listen("tcp", "127.0.0.1:0")
 }
@@ -156,6 +175,16 @@ type harness struct {
 	serving chan remote.ServerConfig
 	sm      *secrets.Manager
 	paths   agentstate.Paths
+	role    Role
+
+	mu  sync.Mutex
+	cfg remote.ServerConfig // what Serve was given
+}
+
+func (h *harness) served() remote.ServerConfig {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.cfg
 }
 
 func newHarness(t *testing.T, role Role) *harness {
@@ -172,7 +201,7 @@ func newHarness(t *testing.T, role Role) *harness {
 	require.NoError(t, os.Mkdir(shimDir, 0o755)) //nolint:gosec // the mounted volume
 
 	rec := &recorder{}
-	h := &harness{t: t, rec: rec, sm: sm, paths: paths, serving: make(chan remote.ServerConfig, 1)}
+	h := &harness{t: t, rec: rec, sm: sm, paths: paths, role: role, serving: make(chan remote.ServerConfig, 1)}
 	h.dep = &fakeDeployer{rec: rec, fail: map[string]error{}}
 	h.edge = &fakeEdge{rec: rec, shim: filepath.Join(shimDir, ShimName), ip: netip.MustParseAddr("100.101.102.103")}
 	h.a = &Agent{
@@ -210,6 +239,9 @@ func newHarness(t *testing.T, role Role) *harness {
 			return nil
 		},
 		Serve: func(ln net.Listener, cfg remote.ServerConfig) error {
+			h.mu.Lock()
+			h.cfg = cfg
+			h.mu.Unlock()
 			rec.add("serve")
 			h.serving <- cfg
 			for {
@@ -247,8 +279,9 @@ func (h *harness) writeDesired(svcs map[string]desired.State) {
 	require.NoError(h.t, d.Save(h.paths.StateDir))
 }
 
-// start runs the agent until it serves; the returned func cancels it (the
-// SIGTERM path) and waits for Run to return.
+// start runs the agent until it serves — and, on the leader, has brought
+// the services up and started the rebalancer, which follow serving — the
+// returned func cancels it (the SIGTERM path) and waits for Run to return.
 func (h *harness) start() (remote.ServerConfig, func() error) {
 	h.t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -256,6 +289,10 @@ func (h *harness) start() (remote.ServerConfig, func() error) {
 	go func() { done <- h.a.Run(ctx) }()
 	select {
 	case cfg := <-h.serving:
+		if h.role == RoleLeader && !h.rec.waitFor("rebalance") {
+			cancel()
+			h.t.Fatalf("the leader never started its rebalancer; calls %v\n%s", h.rec.Calls(), h.rec.Logs())
+		}
 		return cfg, func() error { cancel(); return <-done }
 	case err := <-done:
 		cancel()
@@ -277,6 +314,15 @@ func TestAgent_LeaderStartupOrder(t *testing.T) {
 		"zeta": desired.Running, "alpha": desired.Running, "redis": desired.Running,
 		"postgres": desired.Running, "off": desired.Stopped,
 	})
+	// The remote CLI answers while services come up (R53): bringUp runs
+	// once serving has begun, holding the server's lock so a mutating
+	// command waits for it while reads (status) go ahead.
+	var lockHeld []bool
+	h.dep.onUp = func(string) {
+		assert.True(t, h.rec.waitFor("serve"), "services are brought up only once the remote CLI serves")
+		cfg := h.served()
+		lockHeld = append(lockHeld, cfg.Lock != nil && len(cfg.Lock) == 1)
+	}
 
 	cfg, stop := h.start()
 	require.NoError(t, stop())
@@ -287,13 +333,16 @@ func TestAgent_LeaderStartupOrder(t *testing.T) {
 		"edge",
 		"dns cftok example.test *.lab.example.test 100.101.102.103",
 		"cloudflared tunneltok",
+		"listen :7443",
+		"serve",
 		"up postgres", "up redis", // shared providers first
 		"up alpha", "up zeta",
 		"rebalance",
-		"listen :7443",
-		"serve",
 		"serve-stopped", "rebalance-stopped", "edge-stop",
 	}, h.rec.Calls())
+	assert.Equal(t, []bool{true, true, true, true}, lockHeld, "bringUp holds the server's lock")
+	require.NotNil(t, cfg.Lock)
+	assert.Empty(t, cfg.Lock, "released once the services are up")
 	assert.Equal(t, "tskey", h.edge.authKey)
 
 	// The remote endpoint runs this binary against the agent's state.
@@ -314,6 +363,72 @@ func TestAgent_LeaderStartupOrder(t *testing.T) {
 	assert.True(t, ok, "the leader serves every command")
 	assert.Equal(t, []string{"up"}, path)
 	assert.Empty(t, cfg.AllowInternal, "the leader replaces itself only as upgrade's last step, never on request")
+}
+
+// R53: a reboot (or an agent restart) does not redeploy what Swarm already
+// runs — that would pull and re-resolve floating tags. Only a service
+// recorded as running with no Swarm services is deployed, and one an
+// interrupted backup left at zero replicas is scaled back, nothing else.
+func TestAgent_BootDeploysOnlyMissingServices(t *testing.T) {
+	h := newHarness(t, RoleLeader)
+	h.writeDesired(map[string]desired.State{
+		"alpha": desired.Running, "beta": desired.Running, "gamma": desired.Running, "off": desired.Stopped,
+	})
+	h.dep.replicas = map[string]map[string]uint64{
+		"alpha": {"alpha_alpha": 1},
+		"gamma": {"gamma_gamma": 1, "gamma_worker": 0},
+		"off":   {"off_off": 0},
+	}
+	_, stop := h.start()
+	require.NoError(t, stop())
+	calls := h.rec.Calls()
+	assert.Contains(t, calls, "up beta")
+	assert.Contains(t, calls, "scale gamma gamma_worker=1")
+	for _, c := range calls {
+		assert.NotEqual(t, "up alpha", c, "alpha is in Swarm: left as Swarm keeps it")
+		assert.NotEqual(t, "up gamma", c)
+		assert.False(t, strings.HasPrefix(c, "scale gamma gamma_gamma"), c)
+		assert.False(t, strings.HasPrefix(c, "scale off") || c == "up off", c)
+	}
+}
+
+// The same against the real Deployer on a fake engine: booting with a
+// service already in Swarm makes no ServiceUpdate and pulls nothing; a
+// missing one is created from the local image.
+func TestAgent_BootLeavesSwarmServicesAlone(t *testing.T) {
+	h := newHarness(t, RoleLeader)
+	f := swarmtest.New()
+	f.SetImage("nginx:1", image.InspectResponse{})
+	dep := &swarm.Deployer{API: f, Root: h.paths.StateDir, SM: h.sm}
+	h.a.NewDeployer = func(*secrets.Manager) Deployer { return dep }
+	for _, svc := range []string{"web", "api"} {
+		dir := filepath.Join(h.paths.StateDir, "services", svc)
+		require.NoError(t, os.MkdirAll(dir, 0o700))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte(fmt.Sprintf(`
+networks:
+  home-services:
+    name: home-services
+    external: true
+services:
+  %s:
+    image: nginx:1
+    container_name: %s
+    networks: [home-services]
+`, svc, svc)), 0o600))
+	}
+	require.NoError(t, dep.Up(context.Background(), "web"))
+	before := len(f.CallLog())
+	h.writeDesired(map[string]desired.State{"web": desired.Running, "api": desired.Running})
+
+	_, stop := h.start()
+	require.NoError(t, stop())
+	log := f.CallLog()[before:]
+	for _, c := range log {
+		assert.False(t, strings.HasPrefix(c, "ServiceUpdate"), "%s: web is already in Swarm", c)
+		assert.False(t, strings.HasPrefix(c, "ImagePull"), "%s: nothing is pulled at boot", c)
+	}
+	assert.Contains(t, log, "ServiceCreate api_api")
+	assert.NotContains(t, f.RegistryQueries(), true)
 }
 
 // Without CF_TUNNEL_TOKEN the tunnel connector is removed, not left running

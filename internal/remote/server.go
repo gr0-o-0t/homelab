@@ -53,8 +53,13 @@ type ServerConfig struct {
 	// PingInterval is how often the client is pinged; a client silent for
 	// twice that (no frame, no pong) is gone (default 20s).
 	PingInterval time.Duration
-	// MaxSessions caps concurrent connections past auth (default 8).
+	// MaxSessions caps concurrent connections past auth (default 32): the
+	// front ends' polling and every `logs -f` hold one each.
 	MaxSessions int
+	// Lock is the server-wide lock Mutating commands take: a channel of
+	// capacity 1, holding a token while taken. Given, its owner can hold it
+	// too (the leader's bring-up of services at boot); nil makes a new one.
+	Lock chan struct{}
 	// Logf logs connection events (default log.Printf). Never secrets.
 	Logf func(format string, args ...any)
 	// DetachLog receives the output of a Detached command once its client
@@ -95,7 +100,7 @@ func NewServer(cfg ServerConfig) *Server {
 		cfg.PingInterval = 20 * time.Second
 	}
 	if cfg.MaxSessions <= 0 {
-		cfg.MaxSessions = 8
+		cfg.MaxSessions = 32
 	}
 	if cfg.Resolve == nil {
 		cfg.Resolve = refuseAll
@@ -106,7 +111,10 @@ func NewServer(cfg ServerConfig) *Server {
 	if cfg.DetachLog == nil {
 		cfg.DetachLog = os.Stderr
 	}
-	return &Server{cfg: cfg, lock: make(chan struct{}, 1), sessions: make(chan struct{}, cfg.MaxSessions),
+	if cfg.Lock == nil {
+		cfg.Lock = make(chan struct{}, 1)
+	}
+	return &Server{cfg: cfg, lock: cfg.Lock, sessions: make(chan struct{}, cfg.MaxSessions),
 		upgrader: websocket.Upgrader{HandshakeTimeout: handshakeTimeout}}
 }
 

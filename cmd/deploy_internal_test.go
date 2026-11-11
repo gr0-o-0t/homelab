@@ -84,7 +84,7 @@ func TestLifecycle_ServiceVerbsRunOnSwarm(t *testing.T) {
 	assert.Equal(t, "alpha_web", svcs[0].Spec.Name)
 	assert.Equal(t, uint64(1), replicasOf(svcs[0]))
 	assert.Equal(t, 1, calls(f, "ServiceCreate alpha_web"))
-	assert.Equal(t, 1, calls(f, "ImagePull nginx:1"))
+	assert.Zero(t, calls(f, "ImagePull nginx:1"), "nginx:1 is on the engine: up uses it (R53)")
 
 	runCLI(t, root, "stop", "alpha")
 	assert.Equal(t, uint64(0), replicasOf(alphaServices(t, f)[0]), "stop scales to zero")
@@ -99,11 +99,15 @@ func TestLifecycle_ServiceVerbsRunOnSwarm(t *testing.T) {
 	assert.Equal(t, uint64(0), replicasOf(alphaServices(t, f)[0]), "down keeps the spec at zero")
 
 	runCLI(t, root, "pull", "alpha")
-	assert.Equal(t, 3, calls(f, "ImagePull nginx:1"), "up, start and pull each pulled")
+	assert.Equal(t, 1, calls(f, "ImagePull nginx:1"), "only pull pulled: up and start use the local image")
+	assert.NotContains(t, f.RegistryQueries(), true, "up, start and restart never ask the registry for a newer digest")
 
 	runCLI(t, root, "update", "alpha")
 	assert.Equal(t, uint64(1), replicasOf(alphaServices(t, f)[0]))
 	assert.Equal(t, 1, calls(f, "ServiceCreate"), "never re-created")
+	assert.Equal(t, 2, calls(f, "ImagePull nginx:1"), "update pulls")
+	q := f.RegistryQueries()
+	assert.True(t, q[len(q)-1], "update resolves the tag to the registry's current digest")
 
 	runCLI(t, root, "delete", "--yes", "alpha")
 	assert.Empty(t, alphaServices(t, f))

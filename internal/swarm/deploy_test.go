@@ -153,7 +153,7 @@ func TestDeploy_UpCreatesThenUpdates(t *testing.T) {
 	require.Len(t, secs, 1)
 	assert.Equal(t, name, secs[0].Spec.Name)
 	assert.Equal(t, content, secs[0].Spec.Data)
-	assert.Contains(t, f.CallLog(), "ImagePull nginx:1")
+	assert.NotContains(t, f.CallLog(), "ImagePull nginx:1", "nginx:1 is on the engine: up uses it (R53)")
 
 	require.NoError(t, d.Up(ctx, "web"))
 	log := f.CallLog()

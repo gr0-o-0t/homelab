@@ -14,7 +14,8 @@ var pullCmd = &cobra.Command{
 	Use:   "pull <service...>",
 	Short: "Pull latest Docker images",
 	Long: `Pull the latest Docker images for services.
-Does NOT redeploy — use 'homelab up' after pulling, or 'homelab update'.
+Does NOT redeploy, and 'homelab up' keeps a running service on the image it
+was deployed with: 'homelab update' pulls and rolls the new images.
 
   homelab pull jellyfin immich  # these services
   homelab pull -a               # every installed service

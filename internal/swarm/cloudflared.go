@@ -40,7 +40,7 @@ func (d *Deployer) EnsureCloudflared(ctx context.Context, token string) error {
 	if err := d.EnsureNetwork(ctx); err != nil {
 		return err
 	}
-	if err := d.pull(ctx, CloudflaredImage, map[string]bool{}); err != nil {
+	if err := d.ensureImage(ctx, CloudflaredImage, map[string]bool{}); err != nil {
 		return err
 	}
 	one := uint64(1)

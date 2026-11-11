@@ -94,6 +94,14 @@ func TestRemote_SilentClientIsDropped(t *testing.T) {
 	assert.Less(t, time.Since(start), 5*time.Second)
 }
 
+// The front ends poll status on every refresh and each `logs -f` holds a
+// session open: 8 ran out with a dashboard, a GUI and a few log viewers.
+func TestNewServer_DefaultSessionCap(t *testing.T) {
+	assert.Equal(t, 32, NewServer(ServerConfig{}).cfg.MaxSessions)
+	lock := make(chan struct{}, 1)
+	assert.Equal(t, lock, NewServer(ServerConfig{Lock: lock}).lock, "a given lock is the server's")
+}
+
 func TestRemote_CapsConcurrentSessions(t *testing.T) {
 	e := newTestServer(t, func(c *ServerConfig) { c.MaxSessions = 1 })
 	c := e.client(testSecret, "1.4.2")

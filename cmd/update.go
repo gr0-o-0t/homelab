@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/groot/homelab/internal/desired"
+	"github.com/groot/homelab/internal/swarm"
 	"github.com/groot/homelab/internal/tui/styles"
 	"github.com/spf13/cobra"
 )
@@ -32,10 +33,11 @@ func runServiceUpdate(_ *cobra.Command, args []string) error {
 	}
 	return forEachService(root, names, func(name string) error {
 		recordService(root, name, desired.Running)
-		// Up pulls, resolves each tag to its current digest and removes
-		// services no longer in the compose file: it is the update.
+		// Update pulls, resolves each tag to its current digest and removes
+		// services no longer in the compose file. up never does the first
+		// two (R53): this is the deliberate upgrade.
 		fmt.Printf("%s Updating %s\n", styles.Primary.Render("→"), styles.Bold.Render(name))
-		return upOne(root, name)
+		return deployOne(root, name, (*swarm.Deployer).Update)
 	})
 }
 
