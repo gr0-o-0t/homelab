@@ -74,7 +74,9 @@ failure, rollback or mismatch halts before the leader; then prints
 session. Only after seeing that marker does the PC print "agent restarting",
 reconnect for up to 60 s and check the leader the same way (a connection lost
 before it is reported; the detached rollout continues on the leader).
-Worker agents serve `exec`, `logs`, `version` and `agent self-replace` only.
+Worker agents serve `exec`, `version` and `agent self-replace` only. `logs`
+resolves there too but refuses a service ("runs on the leader"): service logs
+are read cluster-wide on the leader through `docker service logs` (R39).
 
 Replacement (`bootstrap.SelfReplace`, `RunReplace`): the agent inspects its
 own `homelab-agent` container (spec without what the old image itself sets:
@@ -90,10 +92,15 @@ helper removes itself. On any failure the new container is removed, the old
 one renamed back, started and checked running; the exited helper stays so
 `docker logs homelab-agent-replace` says why, and the next upgrade removes it
 (it refuses while a helper runs or a `homelab-agent-old` exists). No volume
-is ever removed or created. `agent self-replace` runs remotely only on a
-worker agent (`ServerConfig.AllowInternal`) and refuses on the leader. The
-agent accepts `upgrade` and `version` from a CLI of another major.minor
-(`remote.AcrossVersions`); every other command is refused.
+is ever removed or created. A node left with a lone `homelab-agent-old` and
+no `homelab-agent` (the helper killed mid-swap) has no agent: check that no
+`homelab-agent` exists, then `docker rename homelab-agent-old homelab-agent
+&& docker start homelab-agent`, and rerun the upgrade. `agent self-replace`
+runs remotely only on a worker agent (`ServerConfig.AllowInternal`) and
+refuses on the leader. The agent accepts `upgrade` and `version` from a CLI
+of another major.minor (`remote.AcrossVersions`), and a worker agent also
+`agent self-replace` (R55: the leader must be able to upgrade a worker that
+missed an upgrade); every other command is refused.
 
 `EnsureImage` (init, join, upgrade) pulls only when the reference is not
 already on the engine: it never refreshes an existing local tag, so a moving
@@ -124,6 +131,13 @@ or use -a/--all"): there is no core stack to act on. Exposure is configuration,
 not container state: `down` leaves routes in place (they answer 502 while the
 service is down) and `up` brings it back exactly as it was. Only `disable` and
 `delete` remove exposure.
+
+`up` (and `start`, `restart`, `edit`'s apply, a shared provider brought up
+for a consumer) never upgrades an image (R53): it pulls an image only when
+the engine does not have it, never asks the registry for a newer digest, keeps
+a running service on the digest it was deployed with, and pins a new one to
+the local image's digest. `update` is the deliberate upgrade: pull, tags
+resolved to the registry's current digests, tasks rolled.
 
 ### Observation and diagnostics
 
@@ -161,7 +175,7 @@ homelab backup --list [--json]                     # existing backups on the lea
 homelab backup --fetch <name> <local-dir>          # copy a backup from the leader to this PC (<local-dir>/<name>)
 
 homelab restore <backup-dir> [service]             # replace volumes + databases (--create-volumes on a fresh cluster)
-homelab restore <backup-dir> --config              # also overwrite config.yaml / compose
+homelab restore <backup-dir> --with-config         # also overwrite config.yaml / compose
 
 homelab prune [service...]                         # remove Swarm services, then volumes and images
 homelab prune [service] --keep-volumes             # reclaim images only, no data loss
@@ -276,10 +290,15 @@ with nobody logged in.
 The leader, in order: creates the overlay, installs the shim, starts the edge
 (Caddy on the tsnet node; admin API on a unix socket), points the wildcard DNS
 A record at the node's tailnet IP via the Cloudflare API, deploys or removes
-cloudflared (by `CF_TUNNEL_TOKEN`), brings up every service recorded as
-running (shared providers first), starts the rebalancer, and serves the
-remote CLI on `:7443`. A worker agent only runs its own tsnet node and serves
-`exec`/`logs` for the containers on its node.
+cloudflared (by `CF_TUNNEL_TOKEN`), serves the remote CLI on `:7443`, then
+deploys every service recorded as running that has **no** Swarm services yet
+(shared providers first) while holding the remote server's lock (mutating
+commands wait; reads such as `status` run), and starts the rebalancer. A
+service already in Swarm is left as Swarm keeps it — no pull, no redeploy
+(R53) — except that a container left at zero replicas (a backup cut short) is
+scaled back to one. A worker agent only runs its own tsnet node and serves
+`exec` for the containers on its node (plus `version` and `agent
+self-replace`).
 
 ### State (in the agent, not on the PC)
 
@@ -337,10 +356,15 @@ tsnet listener, `https://homelab.<tailnet>:7443`), authenticated with
 HMAC-SHA256 of the cluster secret. The agent runs this same binary against its
 state dir, under a pty when the client has a terminal, and streams output and
 the exit code back. A major.minor version mismatch between CLI and agent is
-refused, except for `upgrade` and `version`. Mutating commands take a server-wide lock; `backup`/`restore`/`upgrade` run on
-to completion if the client disconnects. `--config-dir`/`--config` are refused
-in a forwarded argv. `exec` and `logs` for a task on another node are relayed
-to that node's agent.
+refused, except for `upgrade` and `version` (and `agent self-replace` on a
+worker agent). Mutating commands take a server-wide lock; `backup`/`restore`/`upgrade` run on
+to completion if the client disconnects. At most 32 sessions run at once
+(`MaxSessions`; front-end polling and each `logs -f` hold one).
+`--config-dir`/`--config` are refused in a forwarded argv, except after
+`exec`'s service name, where they belong to the container's command
+(`remote.ExecValueFlags` lets the check find the service name; a cmd test
+pins it to exec's flag set). `exec` for a task on another node is relayed to
+that node's agent; `logs` reads every node's tasks on the leader.
 
 ### Services under Swarm (`internal/swarm`)
 
@@ -495,7 +519,8 @@ commands record intent before acting: `up/start/restart/update` → running,
 `stop/down/disable --stop` → stopped, `delete/prune` → removed; starting a
 service's shared database records that database running too. Recording only
 warns on failure. When the leader agent starts it deploys every service
-recorded as running, shared providers first.
+recorded as running that is not in Swarm yet, shared providers first (see
+The agent).
 
 ### Config Schema — Groups
 

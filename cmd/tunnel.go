@@ -152,6 +152,9 @@ the record by hand. An existing tunnel record is left as it is.`,
 	ValidArgsFunction: completeServiceNames,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := args[0]
+		if err := validName(name); err != nil {
+			return err
+		}
 		root := configDir()
 		env := buildEnv(root, "")
 		if !extEnabled(root, "cf") {
@@ -182,6 +185,9 @@ var tunnelRouteRmCmd = &cobra.Command{
 	ValidArgsFunction: completeServiceNames,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := args[0]
+		if err := validName(name); err != nil {
+			return err
+		}
 		root := configDir()
 		env := buildEnv(root, "")
 		if err := requireTunnelConfig(env); err != nil {

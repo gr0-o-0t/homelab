@@ -43,6 +43,9 @@ func runServiceAdd(_ *cobra.Command, args []string) error {
 	}
 
 	name := args[0]
+	if err := validName(name); err != nil {
+		return err
+	}
 	dir := configDir()
 	destDir := filepath.Join(dir, "services", name)
 

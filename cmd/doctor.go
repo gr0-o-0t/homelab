@@ -77,6 +77,9 @@ func runDoctor(_ *cobra.Command, args []string) error {
 			return nil
 		}
 		// Single service
+		if err := validName(args[0]); err != nil {
+			return err
+		}
 		if !runServiceDoctorFor(dir, args[0], doctorFixFlag) {
 			return fmt.Errorf("%s: some checks failed", args[0])
 		}

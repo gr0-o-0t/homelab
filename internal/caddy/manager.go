@@ -228,22 +228,23 @@ func normalizePorts(root, svc string, selected []string) []string {
 // env placeholders expanded in memory, and hands the JSON to the agent over
 // its admin socket.
 
-func (m *Manager) adapt() ([]byte, error) {
+func (m *Manager) adapt() ([]byte, map[string]string, error) {
 	envFn := m.envFn
 	if envFn == nil {
 		envFn = func() (map[string]string, error) { return edge.DefaultEnv(m.RepoRoot) }
 	}
 	env, err := envFn()
 	if err != nil {
-		return nil, fmt.Errorf("building caddy env: %w", err)
+		return nil, nil, fmt.Errorf("building caddy env: %w", err)
 	}
-	return edge.Adapt(m.RepoRoot, env)
+	cfg, err := edge.Adapt(m.RepoRoot, env)
+	return cfg, env, err
 }
 
 // Validate assembles and adapts the config without loading it. A config that
 // does not adapt is ErrInvalidConfig.
 func (m *Manager) Validate() error {
-	_, err := m.adapt()
+	_, _, err := m.adapt()
 	return err
 }
 
@@ -262,9 +263,9 @@ func (m *Manager) Reload() error {
 	if err := edge.Reachable(sock); err != nil {
 		return err
 	}
-	cfg, err := m.adapt()
+	cfg, env, err := m.adapt()
 	if err != nil {
 		return err
 	}
-	return edge.PostLoad(sock, cfg)
+	return edge.PostLoad(sock, cfg, env)
 }

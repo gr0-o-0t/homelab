@@ -41,9 +41,11 @@ login` makes a PC a client only. There is no HA: minis holds every piece of
 state, by design.
 
 The leader, at start: creates the overlay, starts the edge, points the
-wildcard DNS record at its tailnet node, deploys cloudflared, brings up every
-service recorded as running (shared databases first), and serves the remote
-CLI. A worker agent serves `exec` and `logs` for the containers on its node.
+wildcard DNS record at its tailnet node, deploys cloudflared, serves the remote
+CLI, then deploys every service recorded as running that is not in Swarm yet
+(shared databases first; one already in Swarm is left as it runs, never
+re-pulled). A worker agent serves `exec` for the containers on its node;
+service logs are read on the leader (`docker service logs`).
 
 ### 2. The CLI forwards to the agent
 

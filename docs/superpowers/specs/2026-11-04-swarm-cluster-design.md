@@ -38,8 +38,14 @@ place, TLS everywhere it applies.
 6. **Exposure layers on day one: tailnet and Cloudflare.** Tor, I2P and
    Yggdrasil come later and must slot into the same `enable --<layer>` switch.
 7. **Encryption between machines**: all cross-PC service traffic is encrypted
-   (Swarm overlay with `encrypted` option; Swarm control traffic is TLS by
-   default). Devices → homelab stays HTTPS with the wildcard cert.
+   (Swarm control traffic is TLS by default; the data path rides the tailnet).
+   Devices → homelab stays HTTPS with the wildcard cert.
+   *Amended 2026-11-11 (R11):* not by the overlay's `encrypted` option, as
+   first written. Every node's advertise and data-path address is its
+   tailnet IPv4 (`init`/`join` refuse any other), so all Swarm control,
+   gossip and VXLAN traffic between machines is inside Tailscale's
+   WireGuard. The overlay is not `encrypted`: Docker's IPsec mangle rule
+   fails on iptables-nft (see Spike findings).
 8. **Placement**: stateless services prefer the laptop/desktop and fall back
    to minis; stateful services are pinned to minis.
 
@@ -113,7 +119,7 @@ minis    [docker: swarm manager]                         │
               ├─ tsnet node "homelab"  → owns *.home.gr00t.fun (DNS A → its 100.x)
               ├─ embedded Caddy + caddy-l4 (:443 sites, raw ports, DNS-01 wildcard)
               ├─ Swarm control via /var/run/docker.sock
-              └─ attached to overlay "home-services" (encrypted)
+              └─ attached to overlay "home-services" (not encrypted: the tailnet is; R11)
          └─ cloudflared (swarm service, pinned to minis)
          └─ stateful services (pinned to minis)
 laptop / desktop  [docker: swarm worker, joined over host tailnet IP]
@@ -193,7 +199,10 @@ laptop / desktop  [docker: swarm worker, joined over host tailnet IP]
 
 ### Networking and exposure
 
-- One encrypted overlay `home-services` (`--opt encrypted`, attachable). The
+- One overlay `home-services` (attachable, MTU 1230, **not** `--opt
+  encrypted` — *amended 2026-11-11, R11*: Docker's IPsec mangle rule fails
+  on iptables-nft, and the traffic is already encrypted because every node
+  advertises only its tailnet IPv4 as advertise and data-path address). The
   leader agent attaches to it so Caddy reaches every service by alias, on any
   node.
 - `enable <svc>` (tailnet): renders the service's site blocks and l4 servers

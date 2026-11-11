@@ -273,13 +273,19 @@ func (e *Edge) ListenTLS(network, addr string) (net.Listener, error) {
 }
 
 func (e *Edge) adapt() ([]byte, error) {
+	cfg, _, err := e.adaptEnv()
+	return cfg, err
+}
+
+// adaptEnv is adapt, also returning the env the config was filled from.
+func (e *Edge) adaptEnv() ([]byte, map[string]string, error) {
 	envFn := e.Env
 	if envFn == nil {
 		envFn = func() (map[string]string, error) { return DefaultEnv(e.Root) }
 	}
 	env, err := envFn()
 	if err != nil {
-		return nil, fmt.Errorf("building caddy env: %w", err)
+		return nil, nil, fmt.Errorf("building caddy env: %w", err)
 	}
 	assemble := e.assemble
 	if assemble == nil {
@@ -287,20 +293,28 @@ func (e *Edge) adapt() ([]byte, error) {
 	}
 	text, err := assemble(e.Root)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return adaptText(text, env)
+	cfg, err := adaptText(text, env)
+	return cfg, env, err
 }
 
 // Reload re-assembles and loads the config in-process. A config Caddy
 // rejects is ErrInvalidConfig, and the running config keeps serving.
 func (e *Edge) Reload() error {
-	cfg, err := e.adapt()
+	cfg, env, err := e.adaptEnv()
 	if err != nil {
 		return err
 	}
+	return loadInProcess(cfg, env)
+}
+
+// loadInProcess loads cfg into this process's Caddy. A config it rejects is
+// ErrInvalidConfig, redacted as adapt errors are: provisioning errors may
+// quote a secret (caddy-dns/cloudflare quotes a token it finds malformed).
+func loadInProcess(cfg []byte, env map[string]string) error {
 	if err := caddy.Load(cfg, true); err != nil {
-		return fmt.Errorf("%w: %w", ErrInvalidConfig, err)
+		return fmt.Errorf("%w: %s", ErrInvalidConfig, redact(err.Error(), env))
 	}
 	return nil
 }

@@ -447,7 +447,7 @@ func TestEdge_StartWithBrokenConfigKeepsAdminUp(t *testing.T) {
 	require.NoError(t, os.Remove(siteFile(root, "broken")))
 	cfg, err := e.adapt()
 	require.NoError(t, err)
-	require.NoError(t, PostLoad(sock, cfg), "a fixed config loads over the admin socket")
+	require.NoError(t, PostLoad(sock, cfg, testEnv), "a fixed config loads over the admin socket")
 	assert.Equal(t, "fixed", mustGet(t, fmt.Sprintf("http://127.0.0.1:%d/", port)))
 	require.NoError(t, e.Reload(), "and in-process")
 }
@@ -472,6 +472,33 @@ func TestRedact_SecretValuesNeverInErrors(t *testing.T) {
 	assert.Contains(t, got, "example.test", "non-secret values are kept")
 }
 
+// A config that adapts but fails to load (provisioning: caddy-dns/cloudflare
+// quotes a token it finds malformed) is redacted like an adapt error, both
+// in-process and over the admin socket.
+func TestEdge_LoadErrorsAreRedacted(t *testing.T) {
+	root := t.TempDir()
+	port := freePort(t)
+	writeFile(t, siteFile(root, "one"), httpSite(port, "one"))
+	e := testEdge(t, root)
+	require.NoError(t, e.Start(context.Background()))
+	cfg, err := e.adapt()
+	require.NoError(t, err)
+	token := testEnv["CLOUDFLARE_API_TOKEN"]
+	bad := bytes.Replace(cfg, []byte(`"handler":"static_response"`), []byte(`"handler":"`+token+`"`), 1)
+	require.NotEqual(t, cfg, bad)
+
+	err = loadInProcess(bad, testEnv)
+	require.ErrorIs(t, err, ErrInvalidConfig)
+	assert.NotContains(t, err.Error(), token)
+	assert.Contains(t, err.Error(), "<CLOUDFLARE_API_TOKEN>")
+
+	err = PostLoad(AdminSocket(root), bad, testEnv)
+	require.ErrorIs(t, err, ErrInvalidConfig)
+	assert.NotContains(t, err.Error(), token)
+	assert.Contains(t, err.Error(), "<CLOUDFLARE_API_TOKEN>")
+	assert.Equal(t, "one", mustGet(t, fmt.Sprintf("http://127.0.0.1:%d/", port)))
+}
+
 // The CLI reloads the agent's Caddy over the admin socket.
 func TestEdge_AdminSocketLoad(t *testing.T) {
 	root := t.TempDir()
@@ -484,17 +511,17 @@ func TestEdge_AdminSocketLoad(t *testing.T) {
 	writeFile(t, siteFile(root, "two"), httpSite(p2, "two"))
 	cfg, err := e.adapt()
 	require.NoError(t, err)
-	require.NoError(t, PostLoad(sock, cfg))
+	require.NoError(t, PostLoad(sock, cfg, testEnv))
 	assert.Equal(t, "two", mustGet(t, fmt.Sprintf("http://127.0.0.1:%d/", p2)))
 
 	bad := bytes.Replace(cfg, []byte(`"handler":"static_response"`), []byte(`"handler":"no_such_handler"`), 1)
 	require.NotEqual(t, cfg, bad)
-	err = PostLoad(sock, bad)
+	err = PostLoad(sock, bad, testEnv)
 	require.ErrorIs(t, err, ErrInvalidConfig)
 	assert.Equal(t, "one", mustGet(t, fmt.Sprintf("http://127.0.0.1:%d/", p1)))
 
 	require.NoError(t, e.Stop())
-	err = PostLoad(sock, cfg)
+	err = PostLoad(sock, cfg, testEnv)
 	require.ErrorIs(t, err, ErrAgentDown)
 	assert.False(t, errors.Is(err, ErrInvalidConfig))
 }

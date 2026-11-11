@@ -254,8 +254,10 @@ func Reachable(sock string) error {
 // PostLoad replaces the running config of the Caddy whose admin API listens
 // on sock — the agent's — with cfg, forcing the reload even when unchanged.
 // Caddy keeps its previous config when it rejects cfg; that is
-// ErrInvalidConfig. A socket nobody answers on is ErrAgentDown.
-func PostLoad(sock string, cfg []byte) error {
+// ErrInvalidConfig, its message with env's secret values redacted (a
+// provisioning error, e.g. caddy-dns/cloudflare's, may quote one). A socket
+// nobody answers on is ErrAgentDown.
+func PostLoad(sock string, cfg []byte, env map[string]string) error {
 	client := &http.Client{
 		Timeout: 2 * time.Minute,
 		Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
@@ -286,5 +288,5 @@ func PostLoad(sock string, cfg []byte) error {
 	if json.Unmarshal(body, &apiErr) == nil && apiErr.Error != "" {
 		msg = apiErr.Error
 	}
-	return fmt.Errorf("%w: %s (HTTP %d)", ErrInvalidConfig, msg, resp.StatusCode)
+	return fmt.Errorf("%w: %s (HTTP %d)", ErrInvalidConfig, redact(msg, env), resp.StatusCode)
 }

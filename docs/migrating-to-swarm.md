@@ -92,6 +92,10 @@ prints the exact `sudo ufw allow in on tailscale0 to any port … proto …` lin
 
 ### 0.4 Tailscale [laptop, admin console]
 
+- **MagicDNS** and **HTTPS certificates** are enabled (Admin console → DNS;
+  see [tailscale-setup.md](tailscale-setup.md)). The agent serves the remote
+  CLI with its node's tailnet certificate (`ListenTLS`); without HTTPS
+  certificates it cannot, and every forwarded `homelab` command fails.
 - Create a **reusable** auth key (Settings → Keys; see
   [tailscale-setup.md](tailscale-setup.md)). Every `homelab join` hands the
   leader's key to that PC's agent, so a one-off key breaks the second node.
@@ -372,7 +376,8 @@ Any secret reported missing in step 5: `homelab-new setup <service>` now.
 
 ## 6. Start the services, retire the old binary [minis]
 
-The agent brings up, at start, every service recorded as running — but step 4's
+The agent deploys, at start, every service recorded as running that is not in
+Swarm yet (one already there is left as Swarm keeps it) — but step 4's
 `down -a` recorded every service as **stopped**, so nothing is up yet. Start
 them all (shared databases first, automatically):
 
@@ -380,6 +385,12 @@ them all (shared databases first, automatically):
 homelab-new up -a
 homelab-new status
 ```
+
+`up` (and `up -a`, `start`, `restart`, and the agent at every boot) never
+upgrades an image: a tag already on minis' engine is used as it is, and a
+running service keeps the digest it was deployed with. A floating tag
+(immich `:release`, gitea `:latest-rootless`, vaultwarden `:latest`) moves
+only when you say so: `homelab update <svc>` pulls and rolls it.
 
 Success: every service `running`, each with its URL. A service that was stopped
 on purpose before the cutover (see the `desired.yaml` saved in step 2) can be
@@ -624,6 +635,26 @@ prints "agent restarting" and reconnects. Note that `homelab:dev` is used as it
 is on each node (no re-pull): rebuild/reload it on every node before a real dev
 upgrade.
 
+If an upgrade left a node with **no `homelab-agent` but a lone
+`homelab-agent-old`** (the replacement helper died between renaming the old
+agent and starting the new one — a reboot or an OOM kill at that moment), the
+node has no agent at all. On that node, check first, then put the old agent
+back:
+
+```fish
+docker ps -a --filter name=homelab-agent --format '{{.Names}} {{.Status}}'
+# only if no line reads exactly "homelab-agent …":
+docker rename homelab-agent-old homelab-agent && docker start homelab-agent
+docker logs homelab-agent-replace            # why the helper stopped, if it is still there
+docker rm homelab-agent-replace              # once read; the next upgrade refuses while it exists
+```
+
+Then rerun `homelab upgrade`.
+
+Images of the services are never upgraded behind your back: `up -a` and a
+reboot reuse what each engine has (the digest each service was deployed
+with). `homelab update <svc>` is how to upgrade one deliberately.
+
 ### 8.5 First cluster-era backup [laptop]
 
 ```fish
@@ -637,6 +668,11 @@ homelab backup --list
 
 From any step. Data volumes were never removed, so v0.4.3 reattaches them by
 name; secrets are still in minis' keyring (the import only copied them).
+
+Not every agent trouble needs a rollback: a node left with a lone
+`homelab-agent-old` and no `homelab-agent` after an upgrade is repaired in
+place (see 8.4: `docker rename homelab-agent-old homelab-agent && docker start
+homelab-agent`, after checking that no `homelab-agent` exists).
 
 Rolling back from steps 1–4 (before `init`), most commands below fail with
 "No such container", "not found" or "This node is not part of a swarm": that is
