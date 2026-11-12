@@ -261,3 +261,19 @@ func TestShip_LocalInspectErrorSkipsRef(t *testing.T) {
 	require.Len(t, s.calls, 1)
 	assert.Equal(t, [][]string{{"up", "taash"}}, *fwd)
 }
+
+// up/update warn on a local image whose name has a namespace or registry
+// host, once per ref, whether or not it ships; a bare local name does not.
+func TestShip_WarnsQualifiedLocalImage(t *testing.T) {
+	q := imageInfo{Service: "taash", Container: "worker", Ref: "ghcr.io/me/taash:dev", Local: true, Identity: "x"}
+	s := &shipStub{infos: []imageInfo{taashInfo("x"), q, q, {Service: "taash", Container: "web", Ref: "me/nginx:1"}}}
+	stubShip(t, nil, s)
+
+	var code int
+	out := captureStderr(func() { code = executeArgs([]string{"update", "taash"}) })
+	assert.Equal(t, 0, code)
+	want := "warning: local image ghcr.io/me/taash:dev has a namespace or registry host; a registry image of that name would replace it\n"
+	assert.Equal(t, 1, strings.Count(out, want), "got %q", out)
+	assert.NotContains(t, out, "taash-server:current", "a bare local name is not warned about")
+	assert.NotContains(t, out, "me/nginx", "a registry image is not warned about")
+}

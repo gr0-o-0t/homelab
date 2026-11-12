@@ -238,7 +238,7 @@ services:
 
 - `pull_policy: never` is what makes the image local. Use an unqualified name:
   a reference like `someuser/app:tag` could be replaced at task start by an
-  image of that name on Docker Hub (`add`/`up` warn about it).
+  image of that name on Docker Hub (`add`, `up` and `update` warn about it).
 - A local image runs on the core node unless `config.yaml` sets `placement:`.
   Shared databases are declared under `databases:` as for any service.
 - The folder must not hold symlinks, dotfiles or an `exposure.yaml`; a file over

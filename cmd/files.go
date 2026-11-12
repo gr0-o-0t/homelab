@@ -243,17 +243,22 @@ func warnQualifiedLocal(w io.Writer, root, svc string, sm *secrets.Manager) {
 	}
 	for _, key := range slices.Sorted(maps.Keys(p.Services)) {
 		cs := p.Services[key]
-		if cs.PullPolicy != types.PullPolicyNever {
-			continue
+		if cs.PullPolicy == types.PullPolicyNever {
+			warnIfQualifiedLocal(w, cs.Image)
 		}
-		named, err := reference.ParseNormalizedNamed(cs.Image)
-		if err != nil {
-			continue
-		}
-		if reference.Domain(named) == "docker.io" && strings.Count(reference.Path(named), "/") == 1 &&
-			strings.HasPrefix(reference.Path(named), "library/") {
-			continue
-		}
-		_, _ = fmt.Fprintf(w, "warning: local image %s has a namespace or registry host; a registry image of that name would replace it\n", cs.Image)
 	}
+}
+
+// warnIfQualifiedLocal prints warnQualifiedLocal's warning for the local
+// image ref when its name has a namespace or registry host.
+func warnIfQualifiedLocal(w io.Writer, ref string) {
+	named, err := reference.ParseNormalizedNamed(ref)
+	if err != nil {
+		return
+	}
+	if reference.Domain(named) == "docker.io" && strings.Count(reference.Path(named), "/") == 1 &&
+		strings.HasPrefix(reference.Path(named), "library/") {
+		return
+	}
+	_, _ = fmt.Fprintf(w, "warning: local image %s has a namespace or registry host; a registry image of that name would replace it\n", ref)
 }

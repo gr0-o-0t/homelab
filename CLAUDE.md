@@ -403,7 +403,7 @@ daemon: shipping is skipped silently (a client-only PC), and the leader then
 reports the missing image. A failed image check warns and the command is still
 forwarded. Because the tag is bare, R53 holds for local images only against
 homelab-triggered rolls: a manual `docker build` on the leader retags it and
-goes live at the next task restart or reschedule. `add`/`up` warn on a local
+goes live at the next task restart or reschedule. `add`/`up`/`update` warn on a local
 image with a namespace or registry host (a registry image of that name would
 replace it at task start): give local images an unqualified name.
 

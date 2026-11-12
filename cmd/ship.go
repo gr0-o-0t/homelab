@@ -68,6 +68,13 @@ func forwardDeploy(argv []string) (int, error) {
 		fmt.Fprintf(os.Stderr, "warning: could not check local images (%s); not shipping\n", err)
 		return forwardRun(argv)
 	}
+	warned := map[string]bool{}
+	for _, info := range infos {
+		if info.Local && !warned[info.Ref] {
+			warned[info.Ref] = true
+			warnIfQualifiedLocal(os.Stderr, info.Ref)
+		}
+	}
 	if err := shipLocalImages(ctx, rootFlagsOf(argv), infos, update); err != nil {
 		return 1, err
 	}
