@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
 
 	"github.com/groot/homelab/internal/service"
@@ -14,6 +15,18 @@ import (
 
 // newSwarmAPI connects to the Swarm manager. Tests swap in swarmtest.Fake.
 var newSwarmAPI = func() (swarm.API, error) {
+	return client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+}
+
+// imageSaver is this PC's engine as forwardDeploy uses it: inspect a locally
+// built image and `docker save` it.
+type imageSaver interface {
+	ImageInspectWithRaw(ctx context.Context, ref string) (image.InspectResponse, []byte, error)
+	ImageSave(ctx context.Context, refs []string, opts ...client.ImageSaveOption) (io.ReadCloser, error)
+}
+
+// localImages connects to this PC's engine. Tests swap in a fake.
+var localImages = func() (imageSaver, error) {
 	return client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 }
 

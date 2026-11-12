@@ -52,8 +52,11 @@ func rootPreRun(c *cobra.Command, _ []string) error {
 			argv = os.Args[1:]
 		}
 		run := forwardRun
-		if c == upgradeCmd {
+		switch c {
+		case upgradeCmd:
 			run = forwardUpgrade
+		case upCmd, serviceUpdateCmd:
+			run = forwardDeploy
 		}
 		code, err := run(argv)
 		if err != nil {

@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"context"
 	"errors"
+	"io"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -9,15 +11,20 @@ import (
 )
 
 // fakeAgent replaces forwardRun for one test and records what was forwarded.
+// The leader it stands in for has no local images (up/update ask first).
 func fakeAgent(t *testing.T, code int, err error) *[][]string {
 	t.Helper()
 	var calls [][]string
-	prev := forwardRun
+	prev, prevShip := forwardRun, shipLeader
 	forwardRun = func(argv []string) (int, error) {
 		calls = append(calls, append([]string(nil), argv...))
 		return code, err
 	}
-	t.Cleanup(func() { forwardRun = prev; invokedArgs = nil; resetFlags() })
+	shipLeader = func(_ context.Context, _ []string, _ io.Reader, stdout io.Writer) (int, error) {
+		_, werr := io.WriteString(stdout, "[]\n")
+		return 0, werr
+	}
+	t.Cleanup(func() { forwardRun, shipLeader = prev, prevShip; invokedArgs = nil; resetFlags() })
 	return &calls
 }
 
