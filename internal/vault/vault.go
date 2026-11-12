@@ -92,13 +92,13 @@ func (v *Vault) lock(exclusive bool) (func(), error) {
 		how = syscall.LOCK_EX
 	}
 	if err := syscall.Flock(int(f.Fd()), how); err != nil {
-		f.Close()
+		_ = f.Close()
 		v.mu.Unlock()
 		return nil, err
 	}
 	return func() {
 		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-		f.Close()
+		_ = f.Close()
 		v.mu.Unlock()
 	}, nil
 }
@@ -113,7 +113,7 @@ func loadKey(keyFile string) ([]byte, error) {
 			return nil, err
 		}
 	}
-	key, err := os.ReadFile(keyFile)
+	key, err := os.ReadFile(keyFile) //nolint:gosec // the agent's own key file path
 	if err != nil {
 		return nil, fmt.Errorf("read vault key: %w", err)
 	}
@@ -131,22 +131,22 @@ func createKey(dir, keyFile string) error {
 	if err != nil {
 		return fmt.Errorf("create vault key: %w", err)
 	}
-	defer os.Remove(tmp.Name())
+	defer func() { _ = os.Remove(tmp.Name()) }()
 	key := make([]byte, keySize)
 	if _, err := io.ReadFull(rand.Reader, key); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return err
 	}
 	if _, err := tmp.Write(key); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return err
 	}
 	if err := tmp.Chmod(0o400); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return err
 	}
 	if err := tmp.Sync(); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return err
 	}
 	if err := tmp.Close(); err != nil {
@@ -192,17 +192,17 @@ func (v *Vault) save(m map[string]entry) error {
 	if err != nil {
 		return err
 	}
-	defer os.Remove(tmp.Name())
+	defer func() { _ = os.Remove(tmp.Name()) }()
 	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return err
 	}
 	if _, err := tmp.Write(out); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return err
 	}
 	if err := tmp.Sync(); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return err
 	}
 	if err := tmp.Close(); err != nil {

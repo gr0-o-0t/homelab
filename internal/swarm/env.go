@@ -1,6 +1,8 @@
 package swarm
 
 import (
+	"slices"
+
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/api/types/swarm"
 )
@@ -31,9 +33,9 @@ func WithEnv(spec *swarm.ServiceSpec, secretName string, origEntrypoint, origCmd
 		shim := []string{"CMD", "/hl/homelab", "envshim", "--"}
 		switch hc.Test[0] {
 		case "CMD":
-			hc.Test = append(shim, hc.Test[1:]...)
+			hc.Test = slices.Concat(shim, hc.Test[1:])
 		case "CMD-SHELL":
-			hc.Test = append(shim, append([]string{"/bin/sh", "-c"}, hc.Test[1:]...)...)
+			hc.Test = slices.Concat(shim, []string{"/bin/sh", "-c"}, hc.Test[1:])
 		}
 	}
 	cs.Mounts = append(cs.Mounts, mount.Mount{Type: mount.TypeVolume, Source: "homelab-shim", Target: "/hl", ReadOnly: true})

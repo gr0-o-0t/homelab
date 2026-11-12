@@ -109,18 +109,18 @@ func runEdit(ctx context.Context, svc, rel string, out io.Writer) error {
 	case <-sctx.Done():
 		return fmt.Errorf("interrupted, nothing sent: %w", sctx.Err())
 	}
-	edited, err := os.ReadFile(file)
+	edited, err := os.ReadFile(file) //nolint:gosec // the temp file this command created for the editor
 	if err != nil {
 		return err
 	}
 	if bytes.Equal(edited, orig.Bytes()) {
-		fmt.Fprintln(out, "no changes")
+		_, _ = fmt.Fprintln(out, "no changes")
 		return nil
 	}
 	if code, err := editLeader(ctx, []string{"files", "put", svc, rel}, bytes.NewReader(edited), io.Discard); err != nil || code != 0 {
 		return leaderErr("saving "+rel, code, err)
 	}
-	fmt.Fprintf(out, "%s/%s updated\n", svc, rel)
+	_, _ = fmt.Fprintf(out, "%s/%s updated\n", svc, rel)
 	return nil
 }
 

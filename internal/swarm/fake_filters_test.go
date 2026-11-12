@@ -238,7 +238,7 @@ func TestFake_ConcurrentAccess(t *testing.T) {
 			}
 		}
 	}()
-	for i := 0; i < 200; i++ {
+	for range 200 {
 		f.SetNodes([]swarm.Node{{ID: "n"}})
 		f.AddTask(swarm.Task{ID: "t"})
 		_ = f.CallLog()

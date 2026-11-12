@@ -34,9 +34,14 @@ linters:
       disabled-checks:
         - ifElseChain
         - hugeParam
+        - rangeValCopy
     goconst:
       min-len: 3
       min-occurrences: 10
+      # Command words that recur as icon names, argv and docker subcommands
+      # by coincidence; one shared constant would couple unrelated packages.
+      ignore-string-values:
+        - "^(agent|exec|upgrade)$"
   exclusions:
     rules:
       - path: '(.+)_test\.go'
@@ -51,17 +56,11 @@ linters:
         text: G204
       - path: cmd/helpers.go
         text: G304
-      - path: cmd/tor.go
-        text: G204|G304
-      - path: cmd/i2p.go
-        text: G304|G306|G703
       - path: internal/configgen/configgen.go
         text: G306|QF1012
       - path: internal/tui/logs/model.go
         text: G204
       - path: internal/config/config.go
-        text: G304
-      - path: cmd/yggdrasil.go
         text: G304
       - path: internal/network/i2p/layer.go
         text: G304|G703

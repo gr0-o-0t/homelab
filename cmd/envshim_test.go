@@ -18,13 +18,13 @@ func envshimTestMain() {
 	switch os.Getenv("HL_TEST_ENVSHIM") {
 	case "shim":
 		rootCmd.SetArgs([]string{"envshim", "--env-file", os.Getenv("HL_TEST_ENVFILE"), "--", os.Args[0]})
-		os.Setenv("HL_TEST_ENVSHIM", "child")
+		_ = os.Setenv("HL_TEST_ENVSHIM", "child")
 		if err := rootCmd.Execute(); err != nil {
-			os.Stderr.WriteString(err.Error())
+			_, _ = os.Stderr.WriteString(err.Error())
 		}
 		os.Exit(3) // reached only if exec failed
 	case "child":
-		os.Stdout.WriteString(os.Getenv("HL_A") + "|" + os.Getenv("HL_B") + "|" + os.Getenv("KEEP"))
+		_, _ = os.Stdout.WriteString(os.Getenv("HL_A") + "|" + os.Getenv("HL_B") + "|" + os.Getenv("KEEP"))
 		os.Exit(0)
 	}
 }

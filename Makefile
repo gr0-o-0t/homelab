@@ -15,7 +15,7 @@ endif
 
 LDFLAGS := -ldflags="-X github.com/groot/homelab/cmd.Version=$(VERSION)"
 
-.PHONY: build build-headless build-linux-amd64 build-linux-amd64-headless build-linux-arm64 release image install tidy test test-race lint lint-full ci catalog version
+.PHONY: build build-headless build-linux-amd64 build-linux-amd64-headless build-linux-arm64 release image install tidy test test-race lint ci catalog version
 
 # The default build includes the desktop GUI (`homelab --gui`), which needs
 # cgo plus the OpenGL and X11 development headers
@@ -89,14 +89,14 @@ test:
 test-race:
 	go test -race ./...
 
+# golangci-lint runs govet too (.golangci.yml); the nogui pass lints the
+# headless stubs the default build leaves out.
 lint:
-	go vet ./...
-
-lint-full:
 	golangci-lint run
+	golangci-lint run --build-tags nogui
 
 # The headless build is part of CI so the nogui stub keeps compiling.
-ci: lint lint-full test-race build-headless build
+ci: lint test-race build-headless build
 
 # Export the embedded service catalog to a root services/ directory for local browsing.
 # The canonical copy is assets/services/ — edit there, then run `make catalog`.

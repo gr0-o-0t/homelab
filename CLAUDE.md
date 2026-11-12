@@ -14,6 +14,7 @@ make build-headless  # -tags nogui: pure Go, no GUI — servers, the agent, cros
 make install    # go install .
 make tidy       # go mod tidy
 make test       # go test ./...
+make lint       # golangci-lint (default + nogui build tags)
 make ci         # lint + test-race + build
 make catalog    # export assets/services/ → services/ for local browsing
 make image      # local agent image homelab:dev (+ ghcr.io/gr0-o-0t/homelab:<tag> on a tag) from the static headless binary

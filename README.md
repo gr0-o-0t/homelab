@@ -421,7 +421,7 @@ make catalog
 ### Code style
 
 - Follow existing patterns in the codebase
-- Run `go vet` and `golint` before committing
+- Run `make lint` (golangci-lint) before committing
 - Add tests for new functionality
 - Keep PRs focused and well-described
 

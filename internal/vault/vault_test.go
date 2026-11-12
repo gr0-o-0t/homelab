@@ -123,7 +123,7 @@ func TestVault_ConcurrentSetsAcrossInstancesKeepAll(t *testing.T) {
 	}
 	const n = 20
 	var wg sync.WaitGroup
-	for i := 0; i < n; i++ {
+	for i := range n {
 		for j, v := range []*Vault{a, b} {
 			wg.Add(1)
 			go func() {
@@ -151,7 +151,7 @@ func TestVault_ConcurrentFirstOpenAgreesOnKey(t *testing.T) {
 	const n = 8
 	vs := make([]*Vault, n)
 	var wg sync.WaitGroup
-	for i := 0; i < n; i++ {
+	for i := range n {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

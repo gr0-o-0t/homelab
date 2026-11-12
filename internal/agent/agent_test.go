@@ -338,7 +338,7 @@ func TestAgent_LeaderStartupOrder(t *testing.T) {
 	h.dep.onUp = func(string) {
 		assert.True(t, h.rec.waitFor("serve"), "services are brought up only once the remote CLI serves")
 		cfg := h.served()
-		lockHeld = append(lockHeld, cfg.Lock != nil && len(cfg.Lock) == 1)
+		lockHeld = append(lockHeld, len(cfg.Lock) == 1)
 	}
 
 	cfg, stop := h.start()

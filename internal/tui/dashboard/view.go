@@ -268,7 +268,7 @@ func (m Model) renderRow(i int, sel bool, w int) string {
 			running = 1
 		}
 		if m.enabled[l.Name()] {
-			state = lipgloss.NewStyle().Foreground(styles.StateColor(running, 1)).Render(map[bool]string{true: "running", false: "stopped"}[running == 1])
+			state = lipgloss.NewStyle().Foreground(styles.StateColor(running, 1)).Render(map[bool]string{true: containerStateRunning, false: "stopped"}[running == 1])
 		}
 		return cursorMark(sel) + lipgloss.NewStyle().Foreground(styles.StateColor(running, 1)).Render(styles.Icon(layerIcon(l.Name()))) + " " +
 			nameStyle(sel).Width(max(w-14, 4)).Render(clip(l.Name(), max(w-14, 4))) + state

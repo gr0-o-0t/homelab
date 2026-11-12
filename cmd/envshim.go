@@ -21,7 +21,7 @@ var envshimCmd = &cobra.Command{
 	Hidden: true,
 	Args:   cobra.MinimumNArgs(1),
 	RunE: func(_ *cobra.Command, args []string) error {
-		raw, err := os.ReadFile(envshimFile)
+		raw, err := os.ReadFile(envshimFile) //nolint:gosec // fixed Swarm secret path (flag only for tests)
 		if err != nil {
 			return err
 		}
@@ -38,7 +38,7 @@ var envshimCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if err := syscall.Exec(path, args, os.Environ()); err != nil {
+		if err := syscall.Exec(path, args, os.Environ()); err != nil { //nolint:gosec // exec the service's own argv: the shim's whole job
 			return fmt.Errorf("exec %s: %w", path, err)
 		}
 		return nil

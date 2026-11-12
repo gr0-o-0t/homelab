@@ -170,7 +170,7 @@ func LoadProject(svcDir string, env map[string]string) (*types.Project, error) {
 
 func loadCompose(dir, name string, env map[string]string) (*types.Project, error) {
 	file := filepath.Join(dir, "docker-compose.yml")
-	data, err := os.ReadFile(file)
+	data, err := os.ReadFile(file) //nolint:gosec // the service dir is resolved from the state dir, not user input
 	if err != nil {
 		return nil, err
 	}
