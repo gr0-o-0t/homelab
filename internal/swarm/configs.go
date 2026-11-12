@@ -4,9 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -140,6 +142,40 @@ func (d *Deployer) WriteConfigFile(svc, rel string, data []byte) error {
 // root's own files and the service dir — with clean replaced by data, so
 // the real files never hold content that has not passed.
 func (d *Deployer) checkStaged(svc, clean string, data []byte) error {
+	return d.checkCopy(svc, d.serviceDir(svc), func(dst string) error {
+		return os.WriteFile(filepath.Join(dst, filepath.FromSlash(clean)), data, 0o600)
+	})
+}
+
+// CheckServiceDir validates dir, a complete service directory staged outside
+// services/ (`homelab add <dir>`), as svc's — the checks WriteConfigFile runs
+// on a SpecFile: each present, non-empty and within MaxConfigSize, and the
+// service loading and translating with the current env and secrets.
+func (d *Deployer) CheckServiceDir(svc, dir string) error {
+	if err := config.ValidServiceName(svc); err != nil {
+		return err
+	}
+	for _, f := range slices.Sorted(maps.Keys(SpecFiles)) {
+		i, err := os.Lstat(filepath.Join(dir, f))
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			return fmt.Errorf("%s is missing", f)
+		case err != nil:
+			return err
+		case !i.Mode().IsRegular():
+			return fmt.Errorf("%s is not a regular file", f)
+		case i.Size() == 0:
+			return fmt.Errorf("%s is empty", f)
+		case i.Size() > MaxConfigSize:
+			return fmt.Errorf("%s: %d bytes is over the %d byte limit for a Swarm config", f, i.Size(), MaxConfigSize)
+		}
+	}
+	return d.checkCopy(svc, dir, nil)
+}
+
+// checkCopy runs checkSpec against a copy of the state: the root's own files
+// and src as the service dir of svc, which edit (when not nil) then changes.
+func (d *Deployer) checkCopy(svc, src string, edit func(dst string) error) error {
 	tmp, err := os.MkdirTemp(d.Root, ".spec-check-*")
 	if err != nil {
 		return err
@@ -157,11 +193,13 @@ func (d *Deployer) checkStaged(svc, clean string, data []byte) error {
 		}
 	}
 	dst := filepath.Join(tmp, "services", svc)
-	if err := copyTree(d.serviceDir(svc), dst); err != nil {
+	if err := copyTree(src, dst); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(dst, filepath.FromSlash(clean)), data, 0o600); err != nil {
-		return err
+	if edit != nil {
+		if err := edit(dst); err != nil {
+			return err
+		}
 	}
 	c := *d
 	c.Root = tmp

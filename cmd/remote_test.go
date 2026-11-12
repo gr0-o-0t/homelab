@@ -15,7 +15,7 @@ import (
 func fakeAgent(t *testing.T, code int, err error) *[][]string {
 	t.Helper()
 	var calls [][]string
-	prev, prevShip := forwardRun, shipLeader
+	prev, prevShip, prevAdd := forwardRun, shipLeader, addLeader
 	forwardRun = func(argv []string) (int, error) {
 		calls = append(calls, append([]string(nil), argv...))
 		return code, err
@@ -24,7 +24,16 @@ func fakeAgent(t *testing.T, code int, err error) *[][]string {
 		_, werr := io.WriteString(stdout, "[]\n")
 		return 0, werr
 	}
-	t.Cleanup(func() { forwardRun, shipLeader = prev, prevShip; invokedArgs = nil; resetFlags() })
+	// add <dir> sends its folder this way: recorded like a forwarded argv.
+	addLeader = func(_ context.Context, argv []string, _ io.Reader, _ io.Writer) (int, error) {
+		calls = append(calls, append([]string(nil), argv...))
+		return code, err
+	}
+	t.Cleanup(func() {
+		forwardRun, shipLeader, addLeader = prev, prevShip, prevAdd
+		invokedArgs = nil
+		resetFlags()
+	})
 	return &calls
 }
 

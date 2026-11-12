@@ -45,7 +45,7 @@ func init() {
 	rootCmd.PersistentPreRunE = rootPreRun
 }
 
-func rootPreRun(c *cobra.Command, _ []string) error {
+func rootPreRun(c *cobra.Command, args []string) error {
 	if shouldForward(c) {
 		argv := invokedArgs
 		if argv == nil {
@@ -57,6 +57,10 @@ func rootPreRun(c *cobra.Command, _ []string) error {
 			run = forwardUpgrade
 		case upCmd, serviceUpdateCmd:
 			run = forwardDeploy
+		case serviceAddCmd:
+			if len(args) == 1 && isLocalDirArg(args[0]) {
+				run = forwardAddDir
+			}
 		}
 		code, err := run(argv)
 		if err != nil {

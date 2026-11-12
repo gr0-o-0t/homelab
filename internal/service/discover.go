@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/groot/homelab/internal/docker"
@@ -141,7 +142,8 @@ func discover(repoRoot string) ([]Service, error) {
 
 	var services []Service
 	for _, e := range entries {
-		if !e.IsDir() {
+		// A dot dir is not a service: `files install` stages one there.
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
 		name := e.Name()

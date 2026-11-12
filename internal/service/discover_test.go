@@ -154,6 +154,18 @@ func TestDiscover_SkipsNonDirectories(t *testing.T) {
 	assert.Equal(t, "realservice", svcs[0].Name)
 }
 
+// A dot dir (files install stages a folder as .install-<svc>-*) is no service.
+func TestDiscover_SkipsDotDirectories(t *testing.T) {
+	repo := newRepo(t)
+	addService(t, repo, "realservice")
+	addService(t, repo, ".install-taash-123")
+
+	svcs, err := service.Discover(repo)
+	require.NoError(t, err)
+	require.Len(t, svcs, 1)
+	assert.Equal(t, "realservice", svcs[0].Name)
+}
+
 // Exposure is the state file, not whatever Caddy files exist: a legacy
 // per-layer file (awaiting migration) or a stray sites file does not count.
 func TestDiscover_FilesWithoutStateDoNotCount(t *testing.T) {

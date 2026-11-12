@@ -1,16 +1,24 @@
 package cmd
 
 import (
+	"archive/tar"
 	"bufio"
+	"bytes"
+	"context"
+	"errors"
 	"fmt"
+	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
 	"github.com/groot/homelab/assets"
 	"github.com/groot/homelab/internal/config"
+	"github.com/groot/homelab/internal/swarm"
 	"github.com/groot/homelab/internal/tui/styles"
 	"github.com/spf13/cobra"
 )
@@ -177,4 +185,145 @@ func completeAddNames(cmd *cobra.Command, args []string, toComplete string) ([]s
 		}
 	}
 	return names, cobra.ShellCompDirectiveNoFileComp
+}
+
+// maxAddTree caps the file contents `homelab add <dir>` sends to the leader.
+const maxAddTree = 10 << 20
+
+// addLeader runs argv on the leader agent with stdin (shipLeader's shape);
+// a var so tests can stand in for the agent.
+var addLeader = func(ctx context.Context, argv []string, stdin io.Reader, stdout io.Writer) (int, error) {
+	return shipLeader(ctx, argv, stdin, stdout)
+}
+
+// isLocalDirArg reports whether `homelab add arg` names a folder on this PC
+// rather than a catalog entry: arg contains a slash or is an existing
+// directory.
+func isLocalDirArg(arg string) bool {
+	if strings.Contains(arg, "/") {
+		return true
+	}
+	i, err := os.Stat(arg)
+	return err == nil && i.IsDir()
+}
+
+// forwardAddDir is `homelab add <dir>` on a PC: the folder is a custom
+// service (named after it) the leader does not have. It is checked here,
+// then sent as a tar to the leader's `files install`, which validates it
+// again and installs it.
+func forwardAddDir(argv []string) (int, error) {
+	resolveMu.Lock()
+	c, _, err := rootCmd.Find(argv)
+	resolveMu.Unlock()
+	if err != nil {
+		return 1, err
+	}
+	args := c.Flags().Args()
+	if len(args) != 1 {
+		return forwardRun(argv)
+	}
+	name, data, err := packServiceDir(args[0])
+	if err != nil {
+		return 1, err
+	}
+	return addLeader(cmdContext(), append(rootFlagsOf(argv), "files", "install", name),
+		bytes.NewReader(data), os.Stdout)
+}
+
+// packServiceDir tars the service folder dir: regular files and directories
+// only, at most maxAddTree bytes of content, docker-compose.yml and
+// config.yaml required. It returns the service name (the folder's).
+func packServiceDir(dir string) (string, []byte, error) {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return "", nil, err
+	}
+	name := filepath.Base(abs)
+	if err := validName(name); err != nil {
+		return "", nil, fmt.Errorf("%s: the folder's name is the service's: %w", dir, err)
+	}
+	root, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", nil, err
+	}
+	if i, err := os.Stat(root); err != nil {
+		return "", nil, err
+	} else if !i.IsDir() {
+		return "", nil, fmt.Errorf("%s is not a directory", dir)
+	}
+
+	// Files are read through rt, so a symlink swapped in after the walk saw a
+	// regular file cannot lead outside the folder.
+	rt, err := os.OpenRoot(root)
+	if err != nil {
+		return "", nil, err
+	}
+	defer func() { _ = rt.Close() }()
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	var total int64
+	err = filepath.WalkDir(root, func(p string, e fs.DirEntry, err error) error {
+		if err != nil || p == root {
+			return err
+		}
+		rel, err := filepath.Rel(root, p)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		if err := checkAddPath(rel); err != nil {
+			return err
+		}
+		switch {
+		case e.Type()&fs.ModeSymlink != 0:
+			return fmt.Errorf("%s is a symlink: copy the file into the folder instead", rel)
+		case e.IsDir():
+			return tw.WriteHeader(&tar.Header{Name: rel + "/", Typeflag: tar.TypeDir, Mode: 0o755})
+		case !e.Type().IsRegular():
+			return fmt.Errorf("%s is not a regular file", rel)
+		}
+		data, err := rt.ReadFile(filepath.FromSlash(rel))
+		if err != nil {
+			return err
+		}
+		if total += int64(len(data)); total > maxAddTree {
+			return fmt.Errorf("%s is over the %d MiB limit for a service folder", dir, maxAddTree>>20)
+		}
+		if err := tw.WriteHeader(&tar.Header{Name: rel, Typeflag: tar.TypeReg, Mode: 0o644, Size: int64(len(data))}); err != nil {
+			return err
+		}
+		_, err = tw.Write(data)
+		return err
+	})
+	if err != nil {
+		return "", nil, fmt.Errorf("not sending %s: %w", dir, err)
+	}
+	for _, f := range slices.Sorted(maps.Keys(swarm.SpecFiles)) {
+		if i, err := os.Lstat(filepath.Join(root, f)); err != nil || !i.Mode().IsRegular() {
+			return "", nil, fmt.Errorf("not sending %s: %s is missing", dir, f)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		return "", nil, err
+	}
+	return name, buf.Bytes(), nil
+}
+
+// checkAddPath refuses a path (slash-separated, relative to the service
+// folder) `homelab add <dir>` never installs: absolute or escaping ones, any
+// dot file or directory (.env, .git: secrets and VCS data stay on the PC),
+// and exposure.yaml (enable and disable own it).
+func checkAddPath(rel string) error {
+	if rel == "" || strings.HasPrefix(rel, "/") || strings.ContainsRune(rel, 0) {
+		return fmt.Errorf("%q: path must be relative to the service folder", rel)
+	}
+	for _, part := range strings.Split(rel, "/") {
+		if part == "" || strings.HasPrefix(part, ".") {
+			return fmt.Errorf("%s: dot files and directories are not installed", rel)
+		}
+	}
+	if rel == "exposure.yaml" {
+		return errors.New("exposure.yaml is not installed: homelab enable and disable write it")
+	}
+	return nil
 }
