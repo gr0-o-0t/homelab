@@ -231,3 +231,47 @@ func TestFilesInstall_WarnsQualifiedLocalImage(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, stderr, "warning: local image")
 }
+
+// A shared provider's name is refused on the leader too: the tar can come
+// from any client.
+func TestFilesInstall_RefusesSharedProviderName(t *testing.T) {
+	fakeSwarm(t)
+	root := desiredFixture(t)
+
+	_, _, err := installTar(t, root, "postgres", taashTar(t, ""))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "shared postgres service")
+	assertNoInstall(t, root, "postgres")
+}
+
+// Every file must fit a Swarm config, as `files put` requires: none over
+// MaxConfigSize, none empty.
+func TestFilesInstall_RefusesFileOverConfigLimit(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		e    tarEntry
+	}{
+		{"600 KiB", tarEntry{name: "big.bin", body: strings.Repeat("x", 600<<10)}},
+		{"empty", tarEntry{name: "empty.conf"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fakeSwarm(t)
+			root := desiredFixture(t)
+			dir := taashDir(t)
+			read := func(f string) string {
+				b, err := os.ReadFile(filepath.Join(dir, f))
+				require.NoError(t, err)
+				return string(b)
+			}
+			data := makeTar(t,
+				tarEntry{name: "config.yaml", body: read("config.yaml")},
+				tarEntry{name: "docker-compose.yml", body: read("docker-compose.yml")},
+				tc.e)
+
+			_, _, err := installTar(t, root, "taash", data)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.e.name)
+			assertNoInstall(t, root, "taash")
+		})
+	}
+}

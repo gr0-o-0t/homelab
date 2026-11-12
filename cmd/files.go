@@ -114,7 +114,7 @@ var filesInstallCmd = &cobra.Command{
 	Args:   cobra.ExactArgs(1),
 	RunE: func(c *cobra.Command, args []string) error {
 		svc := args[0]
-		if err := validName(svc); err != nil {
+		if err := checkAddName(svc); err != nil {
 			return err
 		}
 		root := configDir()
@@ -128,9 +128,6 @@ var filesInstallCmd = &cobra.Command{
 			return nil
 		}); err != nil {
 			return err
-		}
-		if err := config.EnsureRootDBConfig(rootConfigFile(), svc); err != nil {
-			_, _ = fmt.Fprintf(c.ErrOrStderr(), "warning: auto-configuring databases: %v\n", err)
 		}
 		_, _ = fmt.Fprintf(c.OutOrStdout(), "installed %s: run homelab setup %s (if it has secrets), homelab up %s, homelab enable %s\n",
 			svc, svc, svc, svc)
@@ -180,7 +177,7 @@ func installService(d *swarm.Deployer, svc string, r io.Reader) error {
 }
 
 // extractTree writes the tar r into dir: directories and regular files only,
-// under checkAddPath's rules, at most maxAddTree bytes of content.
+// under checkAddPath's and checkAddFile's rules, at most maxAddTree bytes of content.
 func extractTree(dir string, r io.Reader) error {
 	// Headers and padding fit easily in the second maxAddTree.
 	tr := tar.NewReader(io.LimitReader(r, 2*maxAddTree))
@@ -204,6 +201,9 @@ func extractTree(dir string, r io.Reader) error {
 				return err
 			}
 		case tar.TypeReg:
+			if err := checkAddFile(rel, h.Size); err != nil {
+				return err
+			}
 			if total += h.Size; h.Size < 0 || total > maxAddTree {
 				return fmt.Errorf("the folder is over the %d MiB limit", maxAddTree>>20)
 			}

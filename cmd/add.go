@@ -198,7 +198,7 @@ var addLeader = func(ctx context.Context, argv []string, stdin io.Reader, stdout
 
 // isLocalDirArg reports whether `homelab add arg` names a folder on this PC
 // rather than a catalog entry: arg contains a slash or is an existing
-// directory.
+// directory. forwardAddDir refuses a bare name that is also a catalog entry.
 func isLocalDirArg(arg string) bool {
 	if strings.Contains(arg, "/") {
 		return true
@@ -222,6 +222,9 @@ func forwardAddDir(argv []string) (int, error) {
 	if len(args) != 1 {
 		return forwardRun(argv)
 	}
+	if arg := args[0]; !strings.Contains(arg, "/") && inCatalog(arg) {
+		return 1, fmt.Errorf("%q is both a catalog service and a folder here — use ./%s to install the folder, or run add elsewhere for the catalog one", arg, arg)
+	}
 	name, data, err := packServiceDir(args[0])
 	if err != nil {
 		return 1, err
@@ -239,7 +242,7 @@ func packServiceDir(dir string) (string, []byte, error) {
 		return "", nil, err
 	}
 	name := filepath.Base(abs)
-	if err := validName(name); err != nil {
+	if err := checkAddName(name); err != nil {
 		return "", nil, fmt.Errorf("%s: the folder's name is the service's: %w", dir, err)
 	}
 	root, err := filepath.EvalSymlinks(abs)
@@ -282,12 +285,22 @@ func packServiceDir(dir string) (string, []byte, error) {
 		case !e.Type().IsRegular():
 			return fmt.Errorf("%s is not a regular file", rel)
 		}
+		info, err := e.Info()
+		if err != nil {
+			return err
+		}
+		if err := checkAddFile(rel, info.Size()); err != nil {
+			return err
+		}
+		if total += info.Size(); total > maxAddTree {
+			return fmt.Errorf("%s is over the %d MiB limit for a service folder", dir, maxAddTree>>20)
+		}
 		data, err := rt.ReadFile(filepath.FromSlash(rel))
 		if err != nil {
 			return err
 		}
-		if total += int64(len(data)); total > maxAddTree {
-			return fmt.Errorf("%s is over the %d MiB limit for a service folder", dir, maxAddTree>>20)
+		if err := checkAddFile(rel, int64(len(data))); err != nil {
+			return err // changed since the walk saw it
 		}
 		if err := tw.WriteHeader(&tar.Header{Name: rel, Typeflag: tar.TypeReg, Mode: 0o644, Size: int64(len(data))}); err != nil {
 			return err
@@ -307,6 +320,38 @@ func packServiceDir(dir string) (string, []byte, error) {
 		return "", nil, err
 	}
 	return name, buf.Bytes(), nil
+}
+
+// inCatalog reports whether name is an entry of the embedded catalog.
+func inCatalog(name string) bool {
+	_, err := fs.Stat(assets.CatalogFS, "services/"+name)
+	return err == nil
+}
+
+// checkAddName refuses a name a folder cannot be installed as: an invalid
+// service name, or a shared provider's (postgres, mariadb, redis, garage),
+// which the leader treats as the one shared instance every service uses.
+func checkAddName(name string) error {
+	if err := validName(name); err != nil {
+		return err
+	}
+	if _, ok := config.IsSharedDBService(name); ok {
+		return fmt.Errorf("%s is the shared %s service: a folder cannot be installed under that name", name, name)
+	}
+	return nil
+}
+
+// checkAddFile refuses a file of a service folder that could not be a Swarm
+// config, the way `files put` (WriteConfigFile) does: empty, or over
+// swarm.MaxConfigSize.
+func checkAddFile(rel string, size int64) error {
+	if size == 0 {
+		return fmt.Errorf("%s is empty: Swarm configs cannot be empty", rel)
+	}
+	if size > swarm.MaxConfigSize {
+		return fmt.Errorf("%s: %d bytes is over the %d byte limit for a Swarm config", rel, size, swarm.MaxConfigSize)
+	}
+	return nil
 }
 
 // checkAddPath refuses a path (slash-separated, relative to the service

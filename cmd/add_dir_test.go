@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -13,6 +14,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/groot/homelab/internal/swarm"
 )
 
 // taashDir copies the taash fixture (compose + config.yaml) to a folder
@@ -101,8 +104,17 @@ func TestAddDir_Refuses(t *testing.T) {
 			require.NoError(t, os.WriteFile(filepath.Join(dir, "exposure.yaml"), []byte("layers: [cf]\n"), 0o600))
 		}, "exposure.yaml"},
 		{"over 10 MiB", func(t *testing.T, dir string) {
-			require.NoError(t, os.WriteFile(filepath.Join(dir, "big.bin"), make([]byte, maxAddTree), 0o600))
-		}, "limit"},
+			chunk := bytes.Repeat([]byte("x"), swarm.MaxConfigSize)
+			for i := 0; i*swarm.MaxConfigSize <= maxAddTree; i++ {
+				require.NoError(t, os.WriteFile(filepath.Join(dir, fmt.Sprintf("part%02d.bin", i)), chunk, 0o600))
+			}
+		}, "MiB limit"},
+		{"file over the Swarm config limit", func(t *testing.T, dir string) {
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "big.bin"), make([]byte, 600<<10), 0o600))
+		}, "big.bin"},
+		{"empty file", func(t *testing.T, dir string) {
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "empty.conf"), nil, 0o600))
+		}, "empty.conf"},
 		{"missing compose", func(t *testing.T, dir string) {
 			require.NoError(t, os.Remove(filepath.Join(dir, "docker-compose.yml")))
 		}, "docker-compose.yml"},
@@ -132,6 +144,52 @@ func TestAddDir_BareNameStaysCatalog(t *testing.T) {
 	assert.Equal(t, 0, executeArgs([]string{"add", "uptime-kuma"}))
 	assert.Empty(t, *calls)
 	assert.Equal(t, [][]string{{"add", "uptime-kuma"}}, *fwd)
+}
+
+// A bare name that is both a catalog entry and a folder here is ambiguous:
+// refused before anything is sent.
+func TestAddDir_CatalogNameAndFolderRefused(t *testing.T) {
+	calls := stubAddLeader(t)
+	here := t.TempDir()
+	t.Chdir(here)
+	require.NoError(t, os.MkdirAll(filepath.Join(here, "uptime-kuma"), 0o750))
+	fwd := fakeAgent(t, 0, nil)
+
+	code, err := forwardAddDirFor(t, []string{"add", "uptime-kuma"})
+	assert.NotEqual(t, 0, code)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `"uptime-kuma" is both a catalog service and a folder here — use ./uptime-kuma`)
+	assert.Empty(t, *calls)
+	assert.Empty(t, *fwd)
+
+	assert.NotEqual(t, 0, executeArgs([]string{"add", "uptime-kuma"}))
+	assert.Empty(t, *calls, "nothing reaches the leader")
+	assert.Empty(t, *fwd, "not forwarded as a catalog add either")
+}
+
+// A bare name with a folder here and no catalog entry is a folder install.
+func TestAddDir_BareNonCatalogFolderInstalls(t *testing.T) {
+	calls := stubAddLeader(t)
+	dir := taashDir(t)
+	t.Chdir(filepath.Dir(dir))
+
+	assert.Equal(t, 0, executeArgs([]string{"add", "taash"}))
+	require.Len(t, *calls, 1)
+	assert.Equal(t, []string{"files", "install", "taash"}, (*calls)[0].argv)
+}
+
+// A folder named like a shared provider is refused on the PC.
+func TestAddDir_SharedProviderNameRefused(t *testing.T) {
+	calls := stubAddLeader(t)
+	src := taashDir(t)
+	dir := filepath.Join(t.TempDir(), "postgres")
+	require.NoError(t, os.Rename(src, dir))
+
+	code, err := forwardAddDirFor(t, []string{"add", dir})
+	assert.NotEqual(t, 0, code)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "shared postgres service")
+	assert.Empty(t, *calls)
 }
 
 // forwardAddDirFor parses argv as Execute would, then runs forwardAddDir on
