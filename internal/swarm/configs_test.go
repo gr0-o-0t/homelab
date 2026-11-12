@@ -294,3 +294,31 @@ func TestDeployer_RefusesInvalidServiceNames(t *testing.T) {
 	_, err := os.Stat(filepath.Join(root, "core", "config", "x"))
 	assert.True(t, os.IsNotExist(err))
 }
+
+const grafanaCompose = `
+services:
+  grafana:
+    image: grafana/grafana:11
+    volumes:
+      - ./provisioning:/etc/grafana/provisioning:ro
+`
+
+func TestWriteConfigFile_NewFileUnderBindDir(t *testing.T) {
+	d, _, root := newDeployer(t)
+	writeService(t, root, "grafana", grafanaCompose)
+	dir := filepath.Join(root, "services", "grafana")
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "provisioning"), 0o755))
+	rel := "provisioning/dashboards/taash/taash-beta.json"
+	require.NoError(t, d.WriteConfigFile("grafana", rel, []byte(`{"a":1}`)))
+	b, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(rel)))
+	require.NoError(t, err)
+	assert.Equal(t, `{"a":1}`, string(b))
+}
+
+func TestWriteConfigFile_OutsideBindDirRefused(t *testing.T) {
+	d, _, root := newDeployer(t)
+	writeService(t, root, "grafana", grafanaCompose)
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "services", "grafana", "provisioning"), 0o755))
+	err := d.WriteConfigFile("grafana", "dashboards/taash-beta.json", []byte("x"))
+	require.ErrorIs(t, err, swarm.ErrNotConfig)
+}

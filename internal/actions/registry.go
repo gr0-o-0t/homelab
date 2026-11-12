@@ -318,7 +318,7 @@ func build() []Action {
 			Args: func(t Target, in Inputs) []string {
 				return []string{"edit", t.Name, in["path"]}
 			},
-			Commands: []string{"edit"}},
+			Commands: []string{"edit", "edit --from"}},
 		Action{ID: "service.exec", Label: "Run command", Group: GroupConfigure, Icon: "terminal", Scope: Service,
 			Help: "Run a command in the container and show its output",
 			Inputs: []Input{

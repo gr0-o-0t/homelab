@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/groot/homelab/internal/remote"
+	"github.com/groot/homelab/internal/swarm"
 )
 
 // editLeader runs argv on the leader agent with stdin, returning its exit
@@ -64,12 +65,20 @@ in a spec. Otherwise the leader refuses them and keeps the previous content.
 exposure.yaml is not editable: homelab enable / disable own it.
 
   homelab edit glance config/glance.yml
-  homelab edit immich docker-compose.yml`,
+  homelab edit immich docker-compose.yml
+
+--from <file> sends a local file instead of opening an editor, for scripts; a
+new file under a bind-mounted directory is created with its subdirectories.
+
+  homelab edit grafana provisioning/dashboards/taash/taash.json --from ./taash.json`,
 	Args:              cobra.ExactArgs(2),
 	ValidArgsFunction: completeServiceNames,
 	RunE: func(c *cobra.Command, args []string) error {
 		if os.Getenv("HOMELAB_AGENT") == "1" {
 			return errors.New("run homelab edit from your PC, not inside the agent")
+		}
+		if from, _ := c.Flags().GetString("from"); from != "" {
+			return runEditFrom(c.Context(), args[0], args[1], from, c.OutOrStdout())
 		}
 		return runEdit(c.Context(), args[0], args[1], c.OutOrStdout())
 	},
@@ -83,7 +92,7 @@ func runEdit(ctx context.Context, svc, rel string, out io.Writer) error {
 		return err
 	}
 	var orig bytes.Buffer
-	if code, err := editLeader(ctx, []string{"files", "get", svc, rel}, nil, &orig); err != nil || code != 0 {
+	if code, err := editLeader(ctx, []string{filesVerb, "get", svc, rel}, nil, &orig); err != nil || code != 0 {
 		return leaderErr("fetching "+rel, code, err)
 	}
 	dir, err := os.MkdirTemp(os.TempDir(), "homelab-edit-*") // 0700
@@ -117,7 +126,7 @@ func runEdit(ctx context.Context, svc, rel string, out io.Writer) error {
 		_, _ = fmt.Fprintln(out, "no changes")
 		return nil
 	}
-	if code, err := editLeader(ctx, []string{"files", "put", svc, rel}, bytes.NewReader(edited), io.Discard); err != nil || code != 0 {
+	if code, err := sendFile(ctx, svc, rel, edited); err != nil || code != 0 {
 		return leaderErr("saving "+rel, code, err)
 	}
 	_, _ = fmt.Fprintf(out, "%s/%s updated\n", svc, rel)
@@ -131,4 +140,41 @@ func leaderErr(what string, code int, err error) error {
 	return fmt.Errorf("%s: the leader exited %d", what, code)
 }
 
-func init() { rootCmd.AddCommand(editCmd) }
+// runEditFrom sends a local file as rel, without fetching or an editor. The
+// file is checked here first (the leader checks again): nothing reaches the
+// leader if it cannot be read, is empty or is over Swarm's config limit.
+func runEditFrom(ctx context.Context, svc, rel, from string, out io.Writer) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := validName(svc); err != nil {
+		return err
+	}
+	data, err := os.ReadFile(from) //nolint:gosec // the file the user named
+	if err != nil {
+		return err
+	}
+	switch {
+	case len(data) == 0:
+		return fmt.Errorf("%s is empty", from)
+	case len(data) > swarm.MaxConfigSize:
+		return fmt.Errorf("%s is %d bytes; Swarm configs are limited to %d", from, len(data), swarm.MaxConfigSize)
+	}
+	if code, err := sendFile(ctx, svc, rel, data); err != nil || code != 0 {
+		return leaderErr("saving "+rel, code, err)
+	}
+	_, _ = fmt.Fprintf(out, "%s/%s updated\n", svc, rel)
+	return nil
+}
+
+func init() {
+	editCmd.Flags().String("from", "", "send this local file instead of opening an editor")
+	rootCmd.AddCommand(editCmd)
+}
+
+const filesVerb = "files"
+
+// sendFile sends data to the leader as svc's rel.
+func sendFile(ctx context.Context, svc, rel string, data []byte) (int, error) {
+	return editLeader(ctx, []string{filesVerb, "put", svc, rel}, bytes.NewReader(data), io.Discard)
+}

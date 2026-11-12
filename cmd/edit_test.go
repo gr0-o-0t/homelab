@@ -11,6 +11,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/groot/homelab/internal/swarm"
 )
 
 type leaderCall struct {
@@ -155,4 +157,38 @@ func TestEdit_CancelRemovesTempDir(t *testing.T) {
 	_, err = os.Stat(dir)
 	assert.True(t, os.IsNotExist(err), "the temp dir is removed")
 	assert.Len(t, *calls, 1)
+}
+
+func TestEdit_FromFileSkipsEditor(t *testing.T) {
+	t.Setenv("HOMELAB_AGENT", "")
+	calls := stubEdit(t, "old", 0, func(string) error { t.Fatal("editor ran"); return nil })
+	src := filepath.Join(t.TempDir(), "taash-beta.json")
+	require.NoError(t, os.WriteFile(src, []byte(`{"a":1}`), 0o600))
+	var out strings.Builder
+	require.NoError(t, runEditFrom(context.Background(), "grafana", "provisioning/dashboards/taash/taash-beta.json", src, &out))
+	require.Len(t, *calls, 1, "no files get")
+	assert.Equal(t, []string{"files", "put", "grafana", "provisioning/dashboards/taash/taash-beta.json"}, (*calls)[0].argv)
+	assert.Equal(t, `{"a":1}`, (*calls)[0].stdin)
+	assert.Equal(t, "grafana/provisioning/dashboards/taash/taash-beta.json updated\n", out.String())
+}
+
+func TestEdit_FromMissingFile(t *testing.T) {
+	t.Setenv("HOMELAB_AGENT", "")
+	calls := stubEdit(t, "old", 0, nil)
+	err := runEditFrom(context.Background(), "grafana", "x.json", filepath.Join(t.TempDir(), "nope"), io.Discard)
+	require.Error(t, err)
+	assert.Empty(t, *calls, "nothing is sent to the leader")
+}
+
+func TestEdit_FromEmptyOrOversizeFile(t *testing.T) {
+	t.Setenv("HOMELAB_AGENT", "")
+	calls := stubEdit(t, "old", 0, nil)
+	dir := t.TempDir()
+	empty := filepath.Join(dir, "empty")
+	big := filepath.Join(dir, "big")
+	require.NoError(t, os.WriteFile(empty, nil, 0o600))
+	require.NoError(t, os.WriteFile(big, make([]byte, swarm.MaxConfigSize+1), 0o600))
+	require.Error(t, runEditFrom(context.Background(), "grafana", "x.json", empty, io.Discard))
+	require.Error(t, runEditFrom(context.Background(), "grafana", "x.json", big, io.Discard))
+	assert.Empty(t, *calls)
 }
