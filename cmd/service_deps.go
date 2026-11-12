@@ -116,6 +116,10 @@ func ensureDBDependencies(ctx context.Context, root, name string) error {
 	for i := range svcDB {
 		entry := &svcDB[i]
 		if err := p.Provision(ctx, entry.Type, name, entry.ServiceDBDecl); err != nil {
+			if errors.Is(err, db.ErrDatabaseMissing) {
+				// Another service's database: setup here cannot create it.
+				return fmt.Errorf("provisioning %s database %q for %s: %w", entry.Type, entry.Database, name, err)
+			}
 			return fmt.Errorf(
 				"provisioning %s database %q for %s: %w\n"+
 					"  Run `homelab setup %s` to configure it interactively",

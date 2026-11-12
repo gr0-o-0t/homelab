@@ -10,6 +10,7 @@ package db
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"slices"
@@ -418,6 +419,72 @@ func (p *Provisioner) execSQLIn(container, database, sql string) error {
 		"exec", "-i", container, "psql", "-U", "postgres", "-d", database, "-v", "ON_ERROR_STOP=1", "-f", "-")
 }
 
+// ErrDatabaseMissing matches the error provisioning a read-only declaration
+// returns when the other service's database does not exist yet: only `up`
+// of that service fixes it, not `setup` of the consumer.
+var ErrDatabaseMissing = errors.New("database does not exist yet")
+
+type missingDatabaseError string
+
+// Catalog and custom services name their database after themselves.
+func (e missingDatabaseError) Error() string {
+	return fmt.Sprintf("database %s does not exist yet — `homelab up %s` first", string(e), string(e))
+}
+
+func (e missingDatabaseError) Is(target error) bool { return target == ErrDatabaseMissing }
+
+// checkReadOnlyRole reports whether user exists, and refuses an existing
+// role that is not a plain login role: one with superuser, createrole,
+// createdb, replication or bypassrls, owning a database, a member of another
+// role, or owning a relation or schema in database (checked when dbExists).
+// Taking such a role over would reset another service's (or the admin's)
+// credential, and dropping it would destroy what it holds.
+func (p *Provisioner) checkReadOnlyRole(container, user, database string, dbExists bool) (bool, error) {
+	out, err := p.execPSQL(container, "postgres", "postgres", "-c", fmt.Sprintf(
+		"SELECT r.rolsuper OR r.rolcreaterole OR r.rolcreatedb OR r.rolreplication OR r.rolbypassrls, "+
+			"EXISTS (SELECT 1 FROM pg_database d WHERE d.datdba = r.oid), "+
+			"EXISTS (SELECT 1 FROM pg_auth_members m WHERE m.member = r.oid) "+
+			"FROM pg_roles r WHERE r.rolname=%s", escLit(user)))
+	if err != nil {
+		return false, fmt.Errorf("checking role %s: %w", user, err)
+	}
+	row := strings.TrimSpace(string(out))
+	if row == "" {
+		return false, nil
+	}
+	cols := strings.Split(row, "|")
+	if len(cols) != 3 {
+		return true, fmt.Errorf("checking role %s: unexpected result %q", user, row)
+	}
+	var why []string
+	if cols[0] != "f" {
+		why = append(why, "has superuser, createrole, createdb, replication or bypassrls")
+	}
+	if cols[1] != "f" {
+		why = append(why, "owns a database")
+	}
+	if cols[2] != "f" {
+		why = append(why, "is a member of another role")
+	}
+	if dbExists {
+		out, err := p.execPSQL(container, database, "postgres", "-c", fmt.Sprintf(
+			"SELECT EXISTS (SELECT 1 FROM pg_class c JOIN pg_roles r ON c.relowner = r.oid WHERE r.rolname=%[1]s) "+
+				"OR EXISTS (SELECT 1 FROM pg_namespace n JOIN pg_roles r ON n.nspowner = r.oid WHERE r.rolname=%[1]s)",
+			escLit(user)))
+		if err != nil {
+			return true, fmt.Errorf("checking what role %s owns in %s: %w", user, database, err)
+		}
+		if strings.TrimSpace(string(out)) != "f" {
+			why = append(why, "owns tables or schemas in "+database)
+		}
+	}
+	if len(why) > 0 {
+		return true, fmt.Errorf("role %s already exists and is not a plain login role (%s); a read-only declaration needs a role of its own",
+			user, strings.Join(why, ", "))
+	}
+	return true, nil
+}
+
 // provisionPostgresReadOnly gives the consumer svcName a login role that can
 // read another service's database and nothing more: no CREATE, no ownership.
 // The database belongs to its own service, so a missing one is an error, not
@@ -433,8 +500,7 @@ func (p *Provisioner) provisionPostgresReadOnly(_ context.Context, svcName strin
 		return err
 	}
 	if !exists {
-		// Catalog and custom services name their database after themselves.
-		return fmt.Errorf("database %s does not exist yet — `homelab up %s` first", decl.Database, decl.Database)
+		return missingDatabaseError(decl.Database)
 	}
 	out, err := p.execPSQL(container, "postgres", "postgres",
 		"-c", fmt.Sprintf("SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname=%s", escLit(decl.Database)))
@@ -445,10 +511,11 @@ func (p *Provisioner) provisionPostgresReadOnly(_ context.Context, svcName strin
 	if owner == "" {
 		return fmt.Errorf("finding the owner of database %s: no result", decl.Database)
 	}
-	// Resetting the owner's password here would hand svcName the owner's
-	// login: read-only access must name a role of its own.
-	if owner == decl.User {
-		return fmt.Errorf("read-only user %s for %s owns database %s; declare a role of its own", decl.User, svcName, decl.Database)
+	// Resetting an existing role's password here would hand svcName that
+	// role's login (the owner's, a superuser's): only a plain role, or a new
+	// one, may become a read-only role.
+	if _, err := p.checkReadOnlyRole(container, decl.User, decl.Database, true); err != nil {
+		return fmt.Errorf("read-only access for %s: %w", svcName, err)
 	}
 
 	if err := p.ensureLoginRole(container, decl.User, password); err != nil {
@@ -472,23 +539,23 @@ func (p *Provisioner) provisionPostgresReadOnly(_ context.Context, svcName strin
 // DROP OWNED BY clears them there first — it owns nothing, so nothing of
 // that database's data goes with it. A database already gone leaves only
 // the role; a role never created (the consumer never got past "up the owner
-// first") leaves nothing, and DROP OWNED BY would fail on it.
+// first") leaves nothing, and DROP OWNED BY would fail on it. A role that is
+// not a plain login role was never ours to drop and is left alone.
 func (p *Provisioner) deprovisionPostgresReadOnly(decl config.ServiceDBDecl) error {
 	container, err := p.Container(config.DBPostgres)
 	if err != nil {
 		return err
 	}
-	out, err := p.execPSQL(container, "postgres", "postgres",
-		"-c", fmt.Sprintf("SELECT 1 FROM pg_roles WHERE rolname=%s", escLit(decl.User)))
-	if err != nil {
-		return fmt.Errorf("checking for user %s: %w", decl.User, err)
-	}
-	if strings.TrimSpace(string(out)) == "" {
-		return nil
-	}
 	exists, err := p.pgDatabaseExists(container, decl.Database)
 	if err != nil {
 		return err
+	}
+	roleExists, err := p.checkReadOnlyRole(container, decl.User, decl.Database, exists)
+	if err != nil {
+		return fmt.Errorf("%w; left alone, not dropped", err)
+	}
+	if !roleExists {
+		return nil
 	}
 	if exists {
 		if err := p.execSQLIn(container, decl.Database, fmt.Sprintf("DROP OWNED BY %s;", escID(decl.User))); err != nil {

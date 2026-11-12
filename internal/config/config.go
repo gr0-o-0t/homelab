@@ -400,10 +400,20 @@ func (cfg *Config) validate() error {
 	// A section that does not decode as declarations (a root config's
 	// endpoints) has no read-only entries; its readers report the error.
 	dbs, _ := cfg.ServiceDatabases()
+	readOnlyUsers := map[string]bool{}
 	for i := range dbs {
 		if err := dbs[i].validateReadOnly(); err != nil {
 			return err
 		}
+		if !dbs[i].ReadOnly {
+			continue
+		}
+		// Deleting the service drops each read-only role: one shared by two
+		// declarations would lose its grants on the other database too.
+		if readOnlyUsers[dbs[i].User] {
+			return fmt.Errorf("databases: readonly user %q is declared twice; give each read-only declaration its own user", dbs[i].User)
+		}
+		readOnlyUsers[dbs[i].User] = true
 	}
 	return nil
 }

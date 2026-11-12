@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -610,11 +611,41 @@ func errFake(s string) error      { return errString(s) }
 
 var roDecl = config.ServiceDBDecl{Database: "taash", User: "taash_ro", ReadOnly: true}
 
-const (
-	roExistsQuery = "docker exec homelab-postgres psql -U postgres -d postgres -t -A -c SELECT 1 FROM pg_database WHERE datname='taash'"
-	roOwnerQuery  = "docker exec homelab-postgres psql -U postgres -d postgres -t -A -c SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname='taash'"
-	roRoleQuery   = "docker exec homelab-postgres psql -U postgres -d postgres -t -A -c SELECT 1 FROM pg_roles WHERE rolname='taash_ro'"
-)
+// pgState answers the read-only provisioner's queries about database taash
+// and the declared role.
+type pgState struct {
+	dbExists bool
+	owner    string // pg_database.datdba of taash
+	role     string // attribute row "privileged|ownsdb|member" ("f|f|f" plain); "" = no such role
+	ownsInDB string // whether the role owns a relation or schema in taash: "f" or "t"
+}
+
+func (s pgState) commander() *fakeCommander {
+	return &fakeCommander{outputFn: func(key string) ([]byte, error, bool) {
+		switch {
+		case strings.Contains(key, "SELECT 1 FROM pg_database WHERE datname='taash'"):
+			if s.dbExists {
+				return []byte("1\n"), nil, true
+			}
+			return []byte(""), nil, true
+		case strings.Contains(key, "pg_get_userbyid(datdba)"):
+			return []byte(s.owner + "\n"), nil, true
+		case strings.Contains(key, "pg_class"):
+			if !strings.Contains(key, "-d taash") {
+				return nil, errFake("ownership must be checked inside taash"), true
+			}
+			return []byte(s.ownsInDB + "\n"), nil, true
+		case strings.Contains(key, "pg_auth_members"):
+			return []byte(s.role + "\n"), nil, true
+		case strings.Contains(key, "SELECT 1 FROM pg_roles WHERE rolname="):
+			if s.role != "" {
+				return []byte("1\n"), nil, true
+			}
+			return []byte(""), nil, true
+		}
+		return nil, nil, false
+	}}
+}
 
 // allSQL joins every command run, argv and stdin, for content assertions.
 func allSQL(fc *fakeCommander) string {
@@ -627,52 +658,60 @@ func allSQL(fc *fakeCommander) string {
 }
 
 func TestProvision_ReadOnlyGrants(t *testing.T) {
-	fc := &fakeCommander{outputData: map[string][]byte{
-		roExistsQuery: []byte("1\n"),
-		roOwnerQuery:  []byte("taash\n"),
-	}}
-	sm := &fakeSM{store: map[string]string{}}
-	p := &Provisioner{ContainerFor: fixedNames, RC: fc, SM: sm}
-
-	if err := p.Provision(context.Background(), config.DBPostgres, "grafana", roDecl); err != nil {
-		t.Fatal(err)
-	}
-	pw := sm.store[config.DBPasswordKey("grafana")]
-	if pw == "" {
-		t.Fatal("the consumer's DB_PASSWORD_GRAFANA was not generated")
-	}
-	sql := allSQL(fc)
-	for _, want := range []string{
-		`CREATE USER "taash_ro" WITH LOGIN PASSWORD`,
-		`GRANT CONNECT ON DATABASE "taash" TO "taash_ro"`,
-		`GRANT USAGE ON SCHEMA public TO "taash_ro"`,
-		`GRANT SELECT ON ALL TABLES IN SCHEMA public TO "taash_ro"`,
-		`GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO "taash_ro"`,
-		`ALTER DEFAULT PRIVILEGES FOR ROLE "taash" IN SCHEMA public GRANT SELECT ON TABLES TO "taash_ro"`,
+	for _, tc := range []struct {
+		name  string
+		state pgState
+		verb  string
+	}{
+		{"new role", pgState{dbExists: true, owner: "taash"}, "CREATE"},
+		{"existing plain role re-synced", pgState{dbExists: true, owner: "taash", role: "f|f|f", ownsInDB: "f"}, "ALTER"},
 	} {
-		if !strings.Contains(sql, want) {
-			t.Errorf("missing %q in:\n%s", want, sql)
-		}
-	}
-	for _, never := range []string{"CREATE DATABASE", "OWNER TO", "SUPERUSER WITH", "CREATE EXTENSION", "GRANT ALL", "GRANT CREATE"} {
-		if strings.Contains(sql, never) {
-			t.Errorf("read-only provisioning must not issue %q:\n%s", never, sql)
-		}
-	}
-	// The grants run inside the target database, and no password reaches argv.
-	for _, c := range fc.runCalls {
-		if strings.Contains(strings.Join(c.Args, " "), pw) {
-			t.Errorf("password in argv: %v", c.Args)
-		}
-		if strings.Contains(c.Stdin, "GRANT SELECT") && !strings.Contains(strings.Join(c.Args, " "), "-d taash") {
-			t.Errorf("grants must run in database taash: %v", c.Args)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			fc := tc.state.commander()
+			sm := &fakeSM{store: map[string]string{}}
+			p := &Provisioner{ContainerFor: fixedNames, RC: fc, SM: sm}
+
+			if err := p.Provision(context.Background(), config.DBPostgres, "grafana", roDecl); err != nil {
+				t.Fatal(err)
+			}
+			pw := sm.store[config.DBPasswordKey("grafana")]
+			if pw == "" {
+				t.Fatal("the consumer's DB_PASSWORD_GRAFANA was not generated")
+			}
+			sql := allSQL(fc)
+			for _, want := range []string{
+				tc.verb + ` USER "taash_ro" WITH LOGIN PASSWORD`,
+				`GRANT CONNECT ON DATABASE "taash" TO "taash_ro"`,
+				`GRANT USAGE ON SCHEMA public TO "taash_ro"`,
+				`GRANT SELECT ON ALL TABLES IN SCHEMA public TO "taash_ro"`,
+				`GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO "taash_ro"`,
+				`ALTER DEFAULT PRIVILEGES FOR ROLE "taash" IN SCHEMA public GRANT SELECT ON TABLES TO "taash_ro"`,
+			} {
+				if !strings.Contains(sql, want) {
+					t.Errorf("missing %q in:\n%s", want, sql)
+				}
+			}
+			for _, never := range []string{"CREATE DATABASE", "OWNER TO", "SUPERUSER", "CREATE EXTENSION", "GRANT ALL", "GRANT CREATE"} {
+				if strings.Contains(sql, never) {
+					t.Errorf("read-only provisioning must not issue %q:\n%s", never, sql)
+				}
+			}
+			// The grants run inside the target database, and no password reaches argv.
+			for _, c := range fc.runCalls {
+				if strings.Contains(strings.Join(c.Args, " "), pw) {
+					t.Errorf("password in argv: %v", c.Args)
+				}
+				if strings.Contains(c.Stdin, "GRANT SELECT") && !strings.Contains(strings.Join(c.Args, " "), "-d taash") {
+					t.Errorf("grants must run in database taash: %v", c.Args)
+				}
+			}
+		})
 	}
 }
 
 // up of the consumer before the owner: a clear error, nothing created.
 func TestProvision_ReadOnlyMissingDatabase(t *testing.T) {
-	fc := &fakeCommander{outputData: map[string][]byte{roExistsQuery: []byte("")}}
+	fc := pgState{}.commander()
 	p := &Provisioner{ContainerFor: fixedNames, RC: fc, SM: &fakeSM{store: map[string]string{}}}
 
 	err := p.Provision(context.Background(), config.DBPostgres, "grafana", roDecl)
@@ -682,29 +721,59 @@ func TestProvision_ReadOnlyMissingDatabase(t *testing.T) {
 	if want := "database taash does not exist yet — `homelab up taash` first"; err.Error() != want {
 		t.Errorf("error = %q, want %q", err.Error(), want)
 	}
+	if !errors.Is(err, ErrDatabaseMissing) {
+		t.Error("the error must match ErrDatabaseMissing")
+	}
 	if len(fc.runCalls) != 0 {
 		t.Errorf("nothing may change in postgres, got %d commands:\n%s", len(fc.runCalls), allSQL(fc))
 	}
 }
 
-// Granting read access never takes over the owner's own role.
-func TestProvision_ReadOnlyRefusesOwnerRole(t *testing.T) {
-	fc := &fakeCommander{outputData: map[string][]byte{
-		roExistsQuery: []byte("1\n"),
-		roOwnerQuery:  []byte("taash_ro\n"),
-	}}
-	p := &Provisioner{ContainerFor: fixedNames, RC: fc, SM: &fakeSM{store: map[string]string{}}}
-	if err := p.Provision(context.Background(), config.DBPostgres, "grafana", roDecl); err == nil {
-		t.Fatal("expected a refusal when the read-only user owns the database")
-	}
-	if len(fc.runCalls) != 0 {
-		t.Errorf("nothing may change in postgres:\n%s", allSQL(fc))
+// Read access never takes over an existing role that is not a plain login
+// role: its password would be reset to the consumer's.
+func TestProvision_ReadOnlyRefusesNonPlainRole(t *testing.T) {
+	for _, tc := range []struct {
+		name, user string
+		state      pgState
+		why        string
+	}{
+		{"superuser", "postgres", pgState{dbExists: true, owner: "taash", role: "t|t|f", ownsInDB: "t"},
+			"role postgres already exists and is not a plain login role (has superuser, createrole, createdb, replication or bypassrls, owns a database, owns tables or schemas in taash)"},
+		{"target database owner", "taash", pgState{dbExists: true, owner: "taash", role: "f|t|f", ownsInDB: "t"},
+			"role taash already exists and is not a plain login role (owns a database, owns tables or schemas in taash)"},
+		{"another service's owner role", "immich", pgState{dbExists: true, owner: "taash", role: "f|t|f", ownsInDB: "f"},
+			"role immich already exists and is not a plain login role (owns a database)"},
+		{"member of a role", "taash_ro", pgState{dbExists: true, owner: "taash", role: "f|f|t", ownsInDB: "f"},
+			"role taash_ro already exists and is not a plain login role (is a member of another role)"},
+		{"owns a table in the database", "taash_ro", pgState{dbExists: true, owner: "taash", role: "f|f|f", ownsInDB: "t"},
+			"role taash_ro already exists and is not a plain login role (owns tables or schemas in taash)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fc := tc.state.commander()
+			sm := &fakeSM{store: map[string]string{}}
+			p := &Provisioner{ContainerFor: fixedNames, RC: fc, SM: sm}
+			decl := roDecl
+			decl.User = tc.user
+			err := p.Provision(context.Background(), config.DBPostgres, "grafana", decl)
+			if err == nil {
+				t.Fatal("expected a refusal")
+			}
+			if !strings.Contains(err.Error(), tc.why) {
+				t.Errorf("error = %q, want it to contain %q", err.Error(), tc.why)
+			}
+			if pw := sm.store[config.DBPasswordKey("grafana")]; pw != "" && strings.Contains(err.Error(), pw) {
+				t.Error("password in the error")
+			}
+			if len(fc.runCalls) != 0 {
+				t.Errorf("no ALTER or GRANT may run:\n%s", allSQL(fc))
+			}
+		})
 	}
 }
 
 func TestDeprovision_ReadOnly(t *testing.T) {
 	t.Run("drops what the role holds in the database, then the role", func(t *testing.T) {
-		fc := &fakeCommander{outputData: map[string][]byte{roExistsQuery: []byte("1\n"), roRoleQuery: []byte("1\n")}}
+		fc := pgState{dbExists: true, role: "f|f|f", ownsInDB: "f"}.commander()
 		p := &Provisioner{ContainerFor: fixedNames, RC: fc}
 		if err := p.Deprovision(context.Background(), config.DBPostgres, "grafana", roDecl); err != nil {
 			t.Fatal(err)
@@ -720,7 +789,7 @@ func TestDeprovision_ReadOnly(t *testing.T) {
 		}
 	})
 	t.Run("database gone: only the role", func(t *testing.T) {
-		fc := &fakeCommander{outputData: map[string][]byte{roExistsQuery: []byte(""), roRoleQuery: []byte("1\n")}}
+		fc := pgState{role: "f|f|f"}.commander()
 		p := &Provisioner{ContainerFor: fixedNames, RC: fc}
 		if err := p.Deprovision(context.Background(), config.DBPostgres, "grafana", roDecl); err != nil {
 			t.Fatal(err)
@@ -731,13 +800,26 @@ func TestDeprovision_ReadOnly(t *testing.T) {
 		}
 	})
 	t.Run("role never created: nothing to drop", func(t *testing.T) {
-		fc := &fakeCommander{outputData: map[string][]byte{roExistsQuery: []byte("1\n"), roRoleQuery: []byte("")}}
+		fc := pgState{dbExists: true}.commander()
 		p := &Provisioner{ContainerFor: fixedNames, RC: fc}
 		if err := p.Deprovision(context.Background(), config.DBPostgres, "grafana", roDecl); err != nil {
 			t.Fatal(err)
 		}
 		if len(fc.runCalls) != 0 {
 			t.Errorf("want no commands, got:\n%s", allSQL(fc))
+		}
+	})
+	t.Run("a role that is not plain is left alone", func(t *testing.T) {
+		fc := pgState{dbExists: true, role: "f|t|f", ownsInDB: "t"}.commander()
+		p := &Provisioner{ContainerFor: fixedNames, RC: fc}
+		decl := roDecl
+		decl.User = "taash"
+		err := p.Deprovision(context.Background(), config.DBPostgres, "grafana", decl)
+		if err == nil || !strings.Contains(err.Error(), "left alone") {
+			t.Fatalf("err = %v, want a left-alone error", err)
+		}
+		if len(fc.runCalls) != 0 {
+			t.Errorf("no DROP may run:\n%s", allSQL(fc))
 		}
 	})
 }

@@ -757,6 +757,7 @@ func TestServiceConfig_ReadOnlyValidation(t *testing.T) {
 		{"no user", "  - postgres:\n      database: taash\n      readonly: true\n", "user"},
 		{"superuser", "  - postgres:\n      database: taash\n      user: ro\n      readonly: true\n      superuser: true\n", "superuser"},
 		{"extensions", "  - postgres:\n      database: taash\n      user: ro\n      readonly: true\n      extensions: [pgcrypto]\n", "extensions"},
+		{"duplicate user", "  - postgres:\n      database: taash\n      user: ro\n      readonly: true\n  - postgres:\n      database: other\n      user: ro\n      readonly: true\n", "user \"ro\" is declared twice"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
