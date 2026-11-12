@@ -514,13 +514,14 @@ func (in *Init) Do(ctx context.Context) (err error) {
 		if err := composeContainers(ctx, in.API, in.Import); err != nil {
 			return err
 		}
-		if _, err := composeBridge(ctx, in.API); err != nil {
-			return err
-		}
 		if imp, err = buildImport(in.Import, in.TempDir, in.Keyring); err != nil {
 			return err
 		}
 		defer imp.remove()
+	}
+	// The Compose-era network must be idle, import or not.
+	if _, err := composeBridge(ctx, in.API); err != nil {
+		return err
 	}
 	vals, err := in.secrets()
 	if err != nil {
@@ -544,10 +545,8 @@ func (in *Init) Do(ctx context.Context) (err error) {
 	if err := labelNode(ctx, in.API, nodeID, string(swarm.RoleCore)); err != nil {
 		return err
 	}
-	if imp != nil {
-		if err := removeComposeBridge(ctx, in.API); err != nil {
-			return err
-		}
+	if err := removeComposeBridge(ctx, in.API); err != nil {
+		return err
 	}
 	if err := (&swarm.Deployer{API: in.API}).EnsureNetwork(ctx); err != nil {
 		return err
@@ -688,6 +687,11 @@ func (j *Join) Do(ctx context.Context) (err error) {
 		endpoint = LeaderEndpoint(suffix)
 	}
 	if err := preflight(ctx, j.API, j.Image, j.Out); err != nil {
+		return err
+	}
+	// A Compose-era PC keeps a local home-services bridge; the overlay's
+	// tasks here would attach to it and be rejected.
+	if err := removeComposeBridge(ctx, j.API); err != nil {
 		return err
 	}
 	out, err := j.Leader(ctx, endpoint, j.Secret, []string{"cluster", "join-token"})

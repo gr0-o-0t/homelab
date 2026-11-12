@@ -14,6 +14,7 @@ import (
 
 	"github.com/99designs/keyring"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/network"
 	dswarm "github.com/docker/docker/api/types/swarm"
 	"github.com/docker/docker/api/types/system"
 	"github.com/stretchr/testify/assert"
@@ -558,4 +559,27 @@ func TestAgentSpec_LeaderMountsBackupsVolume(t *testing.T) {
 	for _, b := range hc.Binds {
 		assert.NotContains(t, b, "homelab-backups", "workers do not mount the backups volume")
 	}
+}
+
+// A PC that ran the Compose-era stack keeps a local bridge named
+// home-services; the overlay's tasks on it would attach to the bridge
+// ("no configured subnet contains IP address 10.0.1.x"). Join removes an
+// idle one before joining, and refuses one still in use.
+func TestJoin_RemovesIdleComposeBridge(t *testing.T) {
+	j, h := newJoin(t)
+	h.fake.AddNetwork(network.Summary{ID: "bridge1", Name: "home-services", Driver: "bridge", Scope: "local"})
+	require.NoError(t, j.Do(context.Background()))
+	log := strings.Join(h.fake.CallLog(), "\n")
+	require.Contains(t, log, "NetworkRemove bridge1")
+	assert.Less(t, strings.Index(log, "NetworkRemove bridge1"), strings.Index(log, "SwarmJoin"))
+}
+
+func TestJoin_RefusesComposeBridgeInUse(t *testing.T) {
+	j, h := newJoin(t)
+	h.fake.AddNetwork(network.Summary{Name: "home-services", Driver: "bridge", Scope: "local",
+		Containers: map[string]network.EndpointResource{"c1": {Name: "gitea"}}})
+	err := j.Do(context.Background())
+	require.ErrorContains(t, err, "gitea")
+	assert.Empty(t, h.calls, "the secret is not sent before the check passes")
+	assert.Empty(t, h.fake.Joins())
 }
