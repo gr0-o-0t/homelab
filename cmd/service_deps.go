@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/groot/homelab/internal/config"
@@ -309,7 +310,8 @@ func readOnlyUserDeclarer(root, name, user string) string {
 		return ""
 	}
 	for _, de := range des { // sorted by name
-		if !de.IsDir() || de.Name() == name {
+		// Dot dirs (`.install-*` staging) are not services, as in Discover.
+		if !de.IsDir() || de.Name() == name || strings.HasPrefix(de.Name(), ".") {
 			continue
 		}
 		cfg, err := config.Load(config.ServiceConfigFile(root, de.Name()))

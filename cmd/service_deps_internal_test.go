@@ -137,3 +137,13 @@ func TestDelete_KeepsReadOnlyRoleAnotherServiceDeclares(t *testing.T) {
 
 	require.Empty(t, releaseDBDependencies(context.Background(), root, "metabase"))
 }
+
+// A `.install-*` staging dir left by a killed `files install` is not a
+// service: its read-only user must not block or keep the real service's role.
+func TestReadOnlyUserDeclarer_SkipsStagingDirs(t *testing.T) {
+	root := t.TempDir()
+	writeROConsumer(t, root, "grafana", "taash_ro")
+	writeROConsumer(t, root, ".install-grafana-123", "taash_ro")
+
+	assert.Empty(t, readOnlyUserDeclarer(root, "grafana", "taash_ro"))
+}
