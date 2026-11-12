@@ -395,7 +395,9 @@ node). Its identity (label `homelab.image-identity`) is a hash of the image's
 RootFS layers + Created time, not its ID (minis runs the containerd image
 store, a PC usually overlay2: the same image has different IDs). `update` rolls
 the tasks when the identity on the leader differs from the one the service was
-deployed with. `up`/`update` run from a PC that has the image ship it first:
+deployed with. A rebuild that changes only image metadata (ENV, CMD, labels:
+same layers, same Created) keeps the identity, so `update` neither ships nor
+rolls it; any code change adds a layer and does. `up`/`update` run from a PC that has the image ship it first:
 the CLI asks the leader `images <svc> --json`, then streams `docker save` to
 the hidden `images load` (a mutating, locked command); `up` ships only when the
 leader lacks the image (R53), `update` when the identity differs. No local Docker
