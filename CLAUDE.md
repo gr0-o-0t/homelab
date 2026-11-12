@@ -551,12 +551,16 @@ overlay); `BuildEnv` injects the connection values through the declaration's
   that database: it must already exist (else "`homelab up <owner>` first");
   the role gets CONNECT, USAGE on public, SELECT on tables and sequences, and
   default SELECT for tables the owner role creates later; never CREATE or
-  ownership. Its password is the consumer's generated database password (its
-  secrets namespace), re-synced by `setup`; `delete` of the consumer drops the
-  role; it is not backed up separately. An existing role of that name must be a
-  plain login role (no superuser/createrole/createdb/replication/bypassrls, owns
-  no database, member of no role, owns nothing in the target db) and not the
-  database owner's own role, else provisioning refuses.
+  ownership. Its password is the consumer's generated `DB_PASSWORD_<SVC>` in
+  the root secrets namespace — the same one as the consumer's own postgres
+  role if it has one — re-synced by `setup`; `delete` of the consumer drops the
+  role (kept when another installed service declares the same read-only user);
+  it is not backed up separately. A `pg_` user is refused (reserved by
+  postgres), as is a read-only user another installed service already
+  declares. An existing role of that name must be a plain login role (no
+  superuser/createrole/createdb/replication/bypassrls, owns no database,
+  member of no role, no members of its own, owns nothing in the target db) and
+  not the database owner's own role, else provisioning refuses.
 - Garage needs a cluster layout before it accepts writes; the provisioner
   applies one on first start (`garage layout assign … && layout apply`).
   `homelab delete` removes the service's key; buckets and data stay.

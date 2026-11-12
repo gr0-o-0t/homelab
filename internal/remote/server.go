@@ -388,21 +388,22 @@ func (s *Server) readLoop(ctx context.Context, conn *websocket.Conn, stdin *stdi
 // client is back-pressured, and its stream is not cut for a wait it cannot
 // help.
 func (s *Server) queueStdin(ctx context.Context, stdin *stdinQueue, b []byte, started <-chan struct{}) bool {
-	var expire <-chan time.Time
-	for {
-		select {
-		case stdin.ch <- b:
-			return true
-		case <-ctx.Done():
-			return false
-		case <-started:
-			started = nil
-			t := time.NewTimer(2 * s.cfg.PingInterval)
-			defer t.Stop()
-			expire = t.C
-		case <-expire:
-			return false
-		}
+	select {
+	case stdin.ch <- b:
+		return true
+	case <-ctx.Done():
+		return false
+	case <-started:
+	}
+	t := time.NewTimer(2 * s.cfg.PingInterval)
+	defer t.Stop()
+	select {
+	case stdin.ch <- b:
+		return true
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return false
 	}
 }
 

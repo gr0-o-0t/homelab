@@ -23,12 +23,15 @@ agent must share major.minor).
 - `homelab edit <svc> <path> --from <file>` updates a file without an editor.
 - `homelab images <svc>... --json` (also `-a`/`--group`).
 - `readonly: true` on a postgres `databases:` entry: a read-only role on another
-  service's database, with the consumer's generated password.
+  service's database, with the consumer's generated password. A postgres
+  restore leaves grants out: run `homelab up <consumer>` afterwards to
+  re-grant its read access.
 
 ### Changed
 
-- `homelab join` removes an idle Compose-era `home-services` bridge network
-  (it refuses one with containers); `init` does the same without `--import`.
+- `homelab join` and `homelab init` (with or without `--import`) remove an
+  idle Compose-era `home-services` bridge network, and refuse one with
+  containers.
 
 ### Fixed
 
