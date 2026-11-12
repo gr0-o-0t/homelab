@@ -434,6 +434,15 @@ func TestTranslate_PullPolicyNeverLabelsLocal(t *testing.T) {
 	_, has := gs.Labels[swarm.LabelImageLocal]
 	assert.False(t, has)
 	assert.False(t, swarm.IsLocalImage(gs))
+
+	// Only pull_policy: never makes an image local, not a compose label.
+	dir := filepath.Join(t.TempDir(), "spoof")
+	require.NoError(t, os.Mkdir(dir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte(
+		"services:\n  app:\n    image: example/app:1\n    labels:\n      homelab.image-local: \"true\"\n"), 0o644))
+	st, err := swarm.Translate(dir, nil, nil, nil, false)
+	require.NoError(t, err)
+	assert.False(t, swarm.IsLocalImage(specByName(t, st, "spoof_app").TaskTemplate.ContainerSpec))
 }
 
 func TestTranslate_TaashHardeningCarried(t *testing.T) {

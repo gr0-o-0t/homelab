@@ -91,6 +91,11 @@ func (d *Deployer) services(ctx context.Context, svc string) ([]swarm.Service, e
 // a newer digest, a service keeps the digest its last deploy pinned, and a
 // new one is pinned to the local image's digest. Update is the deliberate
 // upgrade.
+//
+// A locally built image (pull_policy: never) is never pulled, by either:
+// one this engine lacks fails with ErrLocalImageMissing. Its identity is a
+// container label, which Up keeps and Update refreshes, so a rebuilt image
+// rolls the tasks on Update only.
 func (d *Deployer) Up(ctx context.Context, svc string) error {
 	return d.deploy(ctx, svc, false)
 }
@@ -142,9 +147,13 @@ func (d *Deployer) deploy(ctx context.Context, svc string, refresh bool) error {
 	for i := range st.Services {
 		spec := &st.Services[i]
 		ref := spec.TaskTemplate.ContainerSpec.Image
-		if refresh {
+		local := IsLocalImage(spec.TaskTemplate.ContainerSpec)
+		switch {
+		case local:
+			err = d.withLocalImage(ctx, svc, spec.TaskTemplate.ContainerSpec)
+		case refresh:
 			err = d.pull(ctx, ref, pulled)
-		} else {
+		default:
 			err = d.ensureImage(ctx, ref, pulled)
 		}
 		if err != nil {
@@ -162,15 +171,18 @@ func (d *Deployer) deploy(ctx context.Context, svc string, refresh bool) error {
 		one := uint64(1)
 		spec.Mode = swarm.ServiceMode{Replicated: &swarm.ReplicatedService{Replicas: &one}}
 
+		// No registry has a local image: asking one only fails or warns.
+		queryRegistry := refresh && !local
 		if cur, ok := existing[spec.Name]; ok {
 			delete(existing, spec.Name)
-			err := d.update(ctx, cur.ID, swarm.ServiceUpdateOptions{QueryRegistry: refresh},
+			err := d.update(ctx, cur.ID, swarm.ServiceUpdateOptions{QueryRegistry: queryRegistry},
 				func(now *swarm.ServiceSpec) swarm.ServiceSpec {
 					next := *spec
 					next.TaskTemplate.ForceUpdate = now.TaskTemplate.ForceUpdate
 					if !refresh && next.TaskTemplate.ContainerSpec != nil && now.TaskTemplate.ContainerSpec != nil {
 						cs := *next.TaskTemplate.ContainerSpec
 						cs.Image = keepPinned(cs.Image, now.TaskTemplate.ContainerSpec.Image)
+						cs.Labels = keepIdentity(cs.Labels, now.TaskTemplate.ContainerSpec.Labels)
 						next.TaskTemplate.ContainerSpec = &cs
 					}
 					return next
@@ -180,10 +192,10 @@ func (d *Deployer) deploy(ctx context.Context, svc string, refresh bool) error {
 			}
 			continue
 		}
-		if !refresh {
+		if !refresh && !local {
 			spec.TaskTemplate.ContainerSpec.Image = d.pinLocal(ctx, spec.TaskTemplate.ContainerSpec.Image)
 		}
-		if _, err := d.API.ServiceCreate(ctx, *spec, swarm.ServiceCreateOptions{QueryRegistry: refresh}); err != nil {
+		if _, err := d.API.ServiceCreate(ctx, *spec, swarm.ServiceCreateOptions{QueryRegistry: queryRegistry}); err != nil {
 			return fmt.Errorf("creating %s: %w", spec.Name, err)
 		}
 	}
@@ -373,22 +385,28 @@ func (d *Deployer) update(ctx context.Context, id string, opts swarm.ServiceUpda
 }
 
 // Pull pulls every image svc uses onto this node. Nodes running its tasks
-// pull for themselves when the service is updated.
-func (d *Deployer) Pull(ctx context.Context, svc string) error {
+// pull for themselves when the service is updated. A local image
+// (pull_policy: never) is not pulled: its reference is returned in skipped.
+func (d *Deployer) Pull(ctx context.Context, svc string) (skipped []string, err error) {
 	if err := config.ValidServiceName(svc); err != nil {
-		return err
+		return nil, err
 	}
 	st, err := d.stack(svc)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	pulled := map[string]bool{}
 	for i := range st.Services {
-		if err := d.pull(ctx, st.Services[i].TaskTemplate.ContainerSpec.Image, pulled); err != nil {
-			return err
+		cs := st.Services[i].TaskTemplate.ContainerSpec
+		if IsLocalImage(cs) {
+			skipped = append(skipped, cs.Image)
+			continue
+		}
+		if err := d.pull(ctx, cs.Image, pulled); err != nil {
+			return skipped, err
 		}
 	}
-	return nil
+	return skipped, nil
 }
 
 // Remove deletes svc's services, env secrets and configs. Volumes are kept.

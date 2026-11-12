@@ -231,8 +231,11 @@ func translateService(stack, dir string, proj *types.Project, svc types.ServiceC
 	if svc.ContainerName != "" {
 		clabels[LabelContainerName] = svc.ContainerName
 	}
+	// Only pull_policy: never makes an image local, never a compose label.
 	if svc.PullPolicy == types.PullPolicyNever {
 		clabels[LabelImageLocal] = "true"
+	} else {
+		delete(clabels, LabelImageLocal)
 	}
 	cs := &swarm.ContainerSpec{
 		Image:           svc.Image,

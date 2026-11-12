@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/groot/homelab/internal/swarm"
@@ -34,7 +35,13 @@ was deployed with: 'homelab update' pulls and rolls the new images.
 
 func pullOneService(root, name string) error {
 	fmt.Printf("%s Pulling images for %s\n", styles.Primary.Render("→"), styles.Bold.Render(name))
-	return deploy(root, name, (*swarm.Deployer).Pull)
+	return deploy(root, name, func(d *swarm.Deployer, ctx context.Context, svc string) error {
+		skipped, err := d.Pull(ctx, svc)
+		for _, ref := range skipped {
+			fmt.Printf("  %s %s skipped (local image)\n", styles.Muted.Render("·"), ref)
+		}
+		return err
+	})
 }
 
 func init() {

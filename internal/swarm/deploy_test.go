@@ -328,7 +328,8 @@ func TestDeploy_RefusesWithoutSecretsManager(t *testing.T) {
 	assert.Contains(t, swarm.ErrNoSecrets.Error(), "keyring")
 
 	require.NoError(t, d.Down(ctx, "web"))
-	require.NoError(t, d.Pull(ctx, "web"))
+	_, err := d.Pull(ctx, "web")
+	require.NoError(t, err)
 	require.NoError(t, d.Remove(ctx, "web"))
 }
 
@@ -420,7 +421,9 @@ func TestDeploy_PullPullsEveryImage(t *testing.T) {
 	ctx := context.Background()
 	d, f, root := newDeployer(t)
 	writeService(t, root, "gitea", giteaCompose)
-	require.NoError(t, d.Pull(ctx, "gitea"))
+	skipped, err := d.Pull(ctx, "gitea")
+	require.NoError(t, err)
+	assert.Empty(t, skipped)
 	assert.Equal(t, []string{"ImagePull gitea/gitea:1"}, f.CallLog())
 }
 
@@ -574,4 +577,116 @@ func TestDeploy_ReplicasRefusesGlobalMode(t *testing.T) {
 	require.NoError(t, err)
 	_, err = d.Replicas(ctx, "agentish")
 	assert.ErrorContains(t, err, "agentish_agent is not a replicated Swarm service")
+}
+
+// taashCompose is a service whose image is built locally (pull_policy:
+// never): no registry has it.
+const taashCompose = `
+networks:
+  home-services:
+    name: home-services
+    external: true
+services:
+  taash:
+    image: taash-server:current
+    pull_policy: never
+    container_name: taash
+    environment:
+      TAASH_PORT: "8080"
+    networks: [home-services]
+`
+
+const taashRef = "taash-server:current"
+
+// localImage is a locally built image as the engine reports it: no repo
+// digest, and an identity made of its layers and creation time.
+func localImage(created string, layers ...string) image.InspectResponse {
+	return image.InspectResponse{
+		ID:      "sha256:" + created,
+		Created: created,
+		RootFS:  image.RootFS{Type: "layers", Layers: layers},
+		Config:  &dockerspec.DockerOCIImageConfig{ImageConfig: ocispec.ImageConfig{Entrypoint: []string{"/app/taash-server"}}},
+	}
+}
+
+func taashContainer(t *testing.T, f *swarmtest.Fake) *dswarm.ContainerSpec {
+	t.Helper()
+	svcs := services(t, f, "taash")
+	require.Len(t, svcs, 1)
+	return svcs[0].Spec.TaskTemplate.ContainerSpec
+}
+
+func TestDeploy_LocalImageNeverPulled(t *testing.T) {
+	ctx := context.Background()
+	d, f, root := newDeployer(t)
+	img := localImage("2026-11-12T10:00:00Z", "sha256:l1")
+	f.SetImage(taashRef, img)
+	writeService(t, root, "taash", taashCompose)
+
+	require.NoError(t, d.Up(ctx, "taash"))
+	cs := taashContainer(t, f)
+	assert.Equal(t, swarm.ImageIdentity(img), cs.Labels[swarm.LabelImageIdentity])
+	assert.Equal(t, taashRef, cs.Image, "a local image is never pinned to a digest")
+
+	require.NoError(t, d.Update(ctx, "taash"))
+	cs = taashContainer(t, f)
+	assert.Equal(t, swarm.ImageIdentity(img), cs.Labels[swarm.LabelImageIdentity])
+	assert.Equal(t, taashRef, cs.Image)
+	assert.Zero(t, count(f.CallLog(), "ImagePull"))
+	assert.Equal(t, []bool{false, false}, f.RegistryQueries(), "no registry is asked about a local image")
+}
+
+func TestDeploy_LocalImageMissingFails(t *testing.T) {
+	ctx := context.Background()
+	d, f, root := newDeployer(t)
+	writeService(t, root, "taash", taashCompose)
+
+	for _, verb := range []func(context.Context, string) error{d.Up, d.Update} {
+		err := verb(ctx, "taash")
+		require.ErrorIs(t, err, swarm.ErrLocalImageMissing)
+		assert.ErrorContains(t, err, "image taash-server:current is local: run `homelab up|update taash` from the PC that built it")
+	}
+	assert.Zero(t, count(f.CallLog(), "ImagePull"))
+	assert.Zero(t, count(f.CallLog(), "ServiceCreate"))
+	assert.Empty(t, services(t, f, "taash"))
+}
+
+func TestUpdate_LocalImageRollsOnNewIdentity(t *testing.T) {
+	ctx := context.Background()
+	d, f, root := newDeployer(t)
+	f.SetImage(taashRef, localImage("2026-11-12T10:00:00Z", "sha256:l1"))
+	writeService(t, root, "taash", taashCompose)
+	require.NoError(t, d.Up(ctx, "taash"))
+
+	rebuilt := localImage("2026-11-12T11:00:00Z", "sha256:l1", "sha256:l2")
+	f.SetImage(taashRef, rebuilt)
+	require.NoError(t, d.Update(ctx, "taash"))
+	cs := taashContainer(t, f)
+	assert.Equal(t, swarm.ImageIdentity(rebuilt), cs.Labels[swarm.LabelImageIdentity],
+		"the changed container label is what rolls the tasks")
+	assert.Zero(t, count(f.CallLog(), "ImagePull"))
+}
+
+func TestUp_LocalImageKeepsDeployedIdentity(t *testing.T) {
+	ctx := context.Background()
+	d, f, root := newDeployer(t)
+	first := localImage("2026-11-12T10:00:00Z", "sha256:l1")
+	f.SetImage(taashRef, first)
+	writeService(t, root, "taash", taashCompose)
+	require.NoError(t, d.Up(ctx, "taash"))
+
+	f.SetImage(taashRef, localImage("2026-11-12T11:00:00Z", "sha256:l1", "sha256:l2"))
+	require.NoError(t, d.Up(ctx, "taash"))
+	assert.Equal(t, swarm.ImageIdentity(first), taashContainer(t, f).Labels[swarm.LabelImageIdentity],
+		"up keeps the image the service was deployed with (R53)")
+}
+
+func TestPull_SkipsLocalImage(t *testing.T) {
+	ctx := context.Background()
+	d, f, root := newDeployer(t)
+	writeService(t, root, "taash", taashCompose)
+	skipped, err := d.Pull(ctx, "taash")
+	require.NoError(t, err)
+	assert.Equal(t, []string{taashRef}, skipped)
+	assert.Empty(t, f.CallLog())
 }
