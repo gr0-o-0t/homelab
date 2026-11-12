@@ -186,17 +186,39 @@ func (w frameWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// chanReader reads the stdin frames the connection's reader queues.
+// stdinQueue carries the client's stdin frames from the connection's reader
+// to the child.
+type stdinQueue struct {
+	ch chan []byte
+	// clean is set, before ch is closed, when the client said its stdin
+	// ended (its EOF frame); otherwise the server stopped delivering it.
+	clean bool
+}
+
+func newStdinQueue() *stdinQueue { return &stdinQueue{ch: make(chan []byte, stdinFrames)} }
+
+// end closes the queue; clean says whether the client ended it.
+func (q *stdinQueue) end(clean bool) {
+	q.clean = clean
+	close(q.ch)
+}
+
+// chanReader reads the stdin frames the connection's reader queues. It ends
+// with io.EOF when the client ended its stdin, and io.ErrUnexpectedEOF when
+// the stream was cut (client gone, or the child stalled on it too long).
 type chanReader struct {
-	ch  <-chan []byte
+	q   *stdinQueue
 	buf []byte
 }
 
 func (r *chanReader) Read(p []byte) (int, error) {
 	if len(r.buf) == 0 {
-		b, ok := <-r.ch
+		b, ok := <-r.q.ch
 		if !ok {
-			return 0, io.EOF
+			if r.q.clean { // the close happened before this receive: no race
+				return 0, io.EOF
+			}
+			return 0, io.ErrUnexpectedEOF
 		}
 		r.buf = b
 	}
@@ -269,9 +291,12 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	stdin := make(chan []byte, stdinFrames)
+	stdin := newStdinQueue()
 	ch := &child{rows: h.Rows, cls: h.Cols}
-	go s.readLoop(ctx, conn, stdin, ch, cancel, alive)
+	// Closed once the command runs: until then (a wait for the lock) its
+	// stdin is not read, and the client is held back rather than cut off.
+	started := make(chan struct{})
+	go s.readLoop(ctx, conn, stdin, started, ch, cancel, alive)
 	go keepAlive(ctx, ss, s.cfg.PingInterval, cancel)
 
 	if Locks(path) {
@@ -289,7 +314,8 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	detach := DetachOnDisconnect(path)
-	code, err = s.runChild(ctx, ss, h, ch, &chanReader{ch: stdin}, detach)
+	close(started)
+	code, err = s.runChild(ctx, ss, h, ch, &chanReader{q: stdin}, detach)
 	if ctx.Err() != nil {
 		if detach {
 			s.cfg.Logf("remote: %s disconnected; %q ran to completion (exit %d)", r.RemoteAddr, name, code)
@@ -307,13 +333,13 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 
 // readLoop handles client frames until the connection fails or the client
 // falls silent (read deadline), then cancels — which stops the child.
-func (s *Server) readLoop(ctx context.Context, conn *websocket.Conn, stdin chan<- []byte, ch *child,
-	cancel context.CancelFunc, alive func()) {
+func (s *Server) readLoop(ctx context.Context, conn *websocket.Conn, stdin *stdinQueue, started <-chan struct{},
+	ch *child, cancel context.CancelFunc, alive func()) {
 	defer cancel()
 	open := true
 	defer func() {
 		if open {
-			close(stdin)
+			stdin.end(false) // the connection failed or fell silent: cut
 		}
 	}()
 	for {
@@ -329,16 +355,15 @@ func (s *Server) readLoop(ctx context.Context, conn *websocket.Conn, stdin chan<
 			if !open {
 				continue // stdin was closed: discarded
 			}
-			select {
-			case stdin <- b:
-			case <-ctx.Done():
-				return
-			case <-time.After(2 * s.cfg.PingInterval):
+			if !s.queueStdin(ctx, stdin, b, started) {
+				if ctx.Err() != nil {
+					return
+				}
 				// The child is not reading its stdin. Waiting longer would
 				// stop this loop noticing a vanished client (deadlines and
 				// pongs are only seen while reading) and so hold the lock:
-				// end its stdin instead, and drop what follows.
-				close(stdin)
+				// cut its stdin instead, and drop what follows.
+				stdin.end(false)
 				open = false
 			}
 		case websocket.TextMessage:
@@ -350,9 +375,33 @@ func (s *Server) readLoop(ctx context.Context, conn *websocket.Conn, stdin chan<
 				ch.resize(c.Resize[0], c.Resize[1])
 			}
 			if c.EOF && open {
-				close(stdin)
+				stdin.end(true)
 				open = false
 			}
+		}
+	}
+}
+
+// queueStdin queues b for the child, reporting false when ctx ended or the
+// child, once running, left a full queue unread for two ping intervals.
+// Before the command runs (a wait for the lock) it waits without limit: the
+// client is back-pressured, and its stream is not cut for a wait it cannot
+// help.
+func (s *Server) queueStdin(ctx context.Context, stdin *stdinQueue, b []byte, started <-chan struct{}) bool {
+	var expire <-chan time.Time
+	for {
+		select {
+		case stdin.ch <- b:
+			return true
+		case <-ctx.Done():
+			return false
+		case <-started:
+			started = nil
+			t := time.NewTimer(2 * s.cfg.PingInterval)
+			defer t.Stop()
+			expire = t.C
+		case <-expire:
+			return false
 		}
 	}
 }
@@ -451,6 +500,12 @@ func (s *Server) runChild(ctx context.Context, ss *session, h Handshake, ch *chi
 	cmd.Env = s.childEnv(h)
 	cmd.Dir = s.cfg.StateRoot
 
+	// cut records a stdin stream cut short (pipe path): the command was
+	// stopped for it, unless it had already been reaped.
+	var cut struct {
+		sync.Mutex
+		happened, reaped bool
+	}
 	// outDone closes once the output is drained; closeOut stops the drain.
 	outDone := make(chan struct{})
 	var closeOut func()
@@ -522,7 +577,19 @@ func (s *Server) runChild(ctx context.Context, ss *session, h Handshake, ch *chi
 			return 1, err
 		}
 		go func() {
-			_, _ = io.Copy(in, stdin)
+			_, err := io.Copy(in, stdin)
+			if errors.Is(err, io.ErrUnexpectedEOF) && !detach {
+				// A cut stream must not reach the command as a clean EOF
+				// (a short tar would install, a short image load): stop
+				// it before its stdin closes. Wait closes the pipe.
+				cut.Lock()
+				if !cut.reaped {
+					cut.happened = true
+					_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+				}
+				cut.Unlock()
+				return
+			}
 			_ = in.Close()
 		}()
 		errDone := make(chan struct{})
@@ -556,6 +623,10 @@ func (s *Server) runChild(ctx context.Context, ss *session, h Handshake, ch *chi
 	}()
 	err := cmd.Wait()
 	close(exited)
+	cut.Lock()
+	cut.reaped = true
+	stdinCut := cut.happened
+	cut.Unlock()
 	// Nothing the command started outlives it, nor keeps running once the
 	// lock it held is released.
 	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
@@ -568,6 +639,8 @@ func (s *Server) runChild(ctx context.Context, ss *session, h Handshake, ch *chi
 	}
 	var ee *exec.ExitError
 	switch {
+	case stdinCut:
+		return 1, errors.New("the command's input was cut off before its end (the connection was lost, or the command stalled reading it); the command was stopped")
 	case err == nil:
 		return 0, nil
 	case errors.As(err, &ee):

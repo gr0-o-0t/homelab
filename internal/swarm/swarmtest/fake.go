@@ -49,6 +49,7 @@ type Fake struct {
 	images      map[string]image.InspectResponse
 	loadResults map[string]image.InspectResponse // applied to images by ImageLoad
 	loaded      []byte
+	loadStream  string // ImageLoad's answer instead of a successful load
 	containers  []container.Summary
 	swarm       swarm.Swarm
 	services    map[string]swarm.Service
@@ -600,8 +601,19 @@ func (f *Fake) ImageLoad(_ context.Context, input io.Reader, _ ...client.ImageLo
 		return image.LoadResponse{}, err
 	}
 	f.loaded = append(f.loaded, data...)
+	if f.loadStream != "" {
+		return image.LoadResponse{Body: io.NopCloser(strings.NewReader(f.loadStream)), JSON: true}, nil
+	}
 	maps.Copy(f.images, f.loadResults)
 	return image.LoadResponse{Body: io.NopCloser(strings.NewReader(`{"stream":"Loaded"}`)), JSON: true}, nil
+}
+
+// SetLoadStream makes ImageLoad answer with stream (the engine's JSON
+// messages, possibly carrying an error) and load nothing.
+func (f *Fake) SetLoadStream(stream string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.loadStream = stream
 }
 
 func (f *Fake) ImagePull(_ context.Context, ref string, _ image.PullOptions) (io.ReadCloser, error) {

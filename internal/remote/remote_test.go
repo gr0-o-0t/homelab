@@ -69,6 +69,15 @@ func helperMain(args []string) {
 	case "version", "upgrade", "agent": // prints what ran
 		fmt.Println("RAN=" + strings.Join(args, " "))
 		os.Exit(0)
+	case "images": // images load <id> <sleep-ms>: waits, then counts its stdin; prints and records the count
+		id := args[len(args)-2]
+		ms, _ := strconv.Atoi(args[len(args)-1])
+		_ = os.WriteFile(filepath.Join(dir, id+".pid"), []byte(strconv.Itoa(os.Getpid())), 0o600)
+		time.Sleep(time.Duration(ms) * time.Millisecond)
+		n, err := io.Copy(io.Discard, os.Stdin)
+		_ = os.WriteFile(filepath.Join(dir, id+".count"), fmt.Appendf(nil, "%d %v", n, err), 0o600)
+		fmt.Printf("loaded %d\n", n)
+		os.Exit(0)
 	case "cat": // echoes stdin
 		var buf bytes.Buffer
 		_, _ = buf.ReadFrom(os.Stdin)
@@ -128,6 +137,9 @@ func testResolve(argv []string) ([]string, bool) {
 	}
 	if name == "rm" {
 		name = "delete"
+	}
+	if name == "images" && len(argv) > 1 && argv[1] == "load" {
+		return []string{"images", "load"}, true
 	}
 	if name == "cf" { // cf logs|status <…>, cf route add|rm <…>
 		if len(argv) > 2 && argv[1] == "route" {

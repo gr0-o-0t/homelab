@@ -13,6 +13,7 @@ import (
 
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/containerd/errdefs"
+	"github.com/docker/docker/pkg/jsonmessage"
 	"github.com/spf13/cobra"
 
 	"github.com/groot/homelab/internal/swarm"
@@ -157,9 +158,14 @@ var imagesLoadCmd = &cobra.Command{
 			if err != nil {
 				return fmt.Errorf("loading image: %w", err)
 			}
-			_, _ = io.Copy(io.Discard, res.Body)
-			if err := res.Body.Close(); err != nil {
-				return err
+			// A failed load (a cut or corrupt tar) is reported in the
+			// stream, not by the call.
+			streamErr := jsonmessage.DisplayJSONMessagesStream(res.Body, io.Discard, 0, false, nil)
+			if err := res.Body.Close(); err != nil && streamErr == nil {
+				streamErr = err
+			}
+			if streamErr != nil {
+				return fmt.Errorf("loading image: %w", streamErr)
 			}
 			enc := json.NewEncoder(c.OutOrStdout())
 			for _, ref := range args {

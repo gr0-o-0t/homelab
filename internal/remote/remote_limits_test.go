@@ -3,6 +3,8 @@ package remote
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -275,4 +277,71 @@ func TestRemote_StalledStdinStillDropsSilentClient(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, code)
 	assert.Less(t, time.Since(start), 5*time.Second)
+}
+
+// The child's stdin ends with io.EOF only when the client said so (its EOF
+// frame); a stream the server stopped delivering ends with
+// io.ErrUnexpectedEOF, so a reader never takes a cut stream for all of it.
+func TestChanReader_EndsByHowStdinStopped(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		clean bool
+		want  error
+	}{
+		{"client EOF frame", true, io.EOF},
+		{"dropped by the server", false, io.ErrUnexpectedEOF},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			q := newStdinQueue()
+			q.ch <- []byte("ab")
+			q.end(tc.clean)
+			r := &chanReader{q: q}
+			buf := make([]byte, 8)
+			n, err := r.Read(buf)
+			require.NoError(t, err)
+			assert.Equal(t, "ab", string(buf[:n]))
+			_, err = r.Read(buf)
+			assert.ErrorIs(t, err, tc.want)
+			_, err = r.Read(buf)
+			assert.ErrorIs(t, err, tc.want, "the end is sticky")
+		})
+	}
+}
+
+// stdinPayload is well past the 16-frame stdin queue.
+var stdinPayload = bytes.Repeat([]byte("y"), 2<<20)
+
+// A command waiting for the lock is not reading its stdin yet: the client is
+// back-pressured until it runs, never cut off — however long the wait.
+func TestRemote_LockWaitBackPressuresStdin(t *testing.T) {
+	e := newTestServer(t, func(c *ServerConfig) { c.PingInterval = 100 * time.Millisecond })
+	c := e.client(testSecret, "1.4.2")
+
+	held := make(chan struct{})
+	go func() {
+		defer close(held)
+		_, _, _, _ = run(t, c, RunOptions{Argv: []string{"up", "hold", "1500"}})
+	}()
+	waitPid(t, e.stateDir, "hold")
+
+	code, out, errOut, err := run(t, c, RunOptions{Argv: []string{"images", "load", "big", "0"}, Stdin: bytes.NewReader(stdinPayload)})
+	require.NoError(t, err, errOut)
+	assert.Equal(t, 0, code)
+	assert.Equal(t, fmt.Sprintf("loaded %d\n", len(stdinPayload)), out)
+	<-held
+}
+
+// A running child that stalls on its stdin past the queue's patience loses
+// it — and is stopped rather than handed a short stream as if complete.
+func TestRemote_DroppedStdinStopsTheChild(t *testing.T) {
+	e := newTestServer(t, func(c *ServerConfig) { c.PingInterval = 100 * time.Millisecond })
+	c := e.client(testSecret, "1.4.2")
+
+	code, out, errOut, err := run(t, c, RunOptions{Argv: []string{"images", "load", "slow", "1000"}, Stdin: bytes.NewReader(stdinPayload)})
+	assert.NotEqual(t, 0, code)
+	assert.NotContains(t, out, "loaded")
+	require.Error(t, err, errOut)
+	assert.Contains(t, err.Error(), "input was cut off")
+	_, statErr := os.Stat(filepath.Join(e.stateDir, "slow.count"))
+	assert.True(t, os.IsNotExist(statErr), "the child read a cut stream to its end")
 }

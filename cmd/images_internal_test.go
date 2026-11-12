@@ -107,3 +107,19 @@ func TestImagesLoad_RefNotLoaded(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ghost:1")
 }
+
+// The engine reports a failed load in its JSON stream, not as an error from
+// the call: it fails the command with the engine's message, even when an
+// older image of that ref is still there.
+func TestImagesLoad_EngineErrorInStream(t *testing.T) {
+	f := fakeSwarm(t)
+	f.SetImage("taash-server:current", taashImage())
+	f.SetLoadStream(`{"stream":"Loading layer"}` + "\n" +
+		`{"errorDetail":{"message":"unexpected EOF"},"error":"unexpected EOF"}` + "\n")
+	root := localFixture(t)
+
+	out, err := runCaptured(t, root, "TARBY", "images", "load", "taash-server:current")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unexpected EOF")
+	assert.Empty(t, out, "no identity reported for a failed load")
+}

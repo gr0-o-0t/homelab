@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -274,4 +275,34 @@ func TestFilesInstall_RefusesFileOverConfigLimit(t *testing.T) {
 			assertNoInstall(t, root, "taash")
 		})
 	}
+}
+
+// cutReader yields data, then fails as a stdin the agent stopped delivering.
+type cutReader struct{ r io.Reader }
+
+func (c cutReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	if err == io.EOF {
+		return n, io.ErrUnexpectedEOF
+	}
+	return n, err
+}
+
+// A stream cut after the spec files (no end-of-archive blocks, then
+// io.ErrUnexpectedEOF) is an error, never a short install.
+func TestFilesInstall_CutStreamLeavesNothing(t *testing.T) {
+	fakeSwarm(t)
+	root := desiredFixture(t)
+	full := taashTar(t, "")
+	resetFlags()
+	t.Cleanup(resetFlags)
+	rootCmd.SetIn(cutReader{bytes.NewReader(full[:len(full)-1024])})
+	rootCmd.SetOut(io.Discard)
+	rootCmd.SetErr(io.Discard)
+	t.Cleanup(func() { rootCmd.SetIn(nil); rootCmd.SetOut(nil); rootCmd.SetErr(nil) })
+	rootCmd.SetArgs([]string{"--config-dir", root, "files", "install", "taash"})
+	err := rootCmd.Execute()
+	require.Error(t, err)
+	assert.ErrorIs(t, err, io.ErrUnexpectedEOF)
+	assertNoInstall(t, root, "taash")
 }

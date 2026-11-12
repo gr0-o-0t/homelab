@@ -363,7 +363,10 @@ state dir, under a pty when the client has a terminal, and streams output and
 the exit code back. A major.minor version mismatch between CLI and agent is
 refused, except for `upgrade` and `version` (and `agent self-replace` on a
 worker agent). Mutating commands take a server-wide lock; `backup`/`restore`/`upgrade` run on
-to completion if the client disconnects. At most 32 sessions run at once
+to completion if the client disconnects. A command waiting for the lock
+holds its client's stdin back (back-pressure), never cuts it; a stdin cut
+short once it runs (client gone, or left unread for two ping intervals)
+stops a non-detached command instead of ending its input. At most 32 sessions run at once
 (`MaxSessions`; front-end polling and each `logs -f` hold one).
 `--config-dir`/`--config` are refused in a forwarded argv, except after
 `exec`'s service name, where they belong to the container's command
