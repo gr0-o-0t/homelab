@@ -3,6 +3,44 @@
 Notable changes per release. The release workflow publishes the section
 matching the pushed tag as the GitHub release notes.
 
+## v0.5.0-rc.3 — 2026-11-12
+
+Release candidate. Run `homelab upgrade` from a PC running this CLI (CLI and
+agent must share major.minor).
+
+### Added
+
+- Custom services from a folder: `homelab add <dir>` installs one from a folder
+  on the PC (refuses an existing service, symlinks, dotfiles, files over
+  500 KiB, folders over 10 MiB, and the shared provider names).
+- Locally built images: a compose service with `pull_policy: never` is never
+  pulled, runs on the core node by default, and `homelab up`/`update` from the PC
+  that built the image ship it to the leader (`up` only when the leader lacks it,
+  `update` when it differs). `update` rolls the tasks onto a rebuilt image under
+  the same tag. `homelab pull` says "skipped (local image)". Use an
+  unqualified image name; a manual `docker build` on the leader goes live at
+  the next task restart.
+- `homelab edit <svc> <path> --from <file>` updates a file without an editor.
+- `homelab images <svc>... --json` (also `-a`/`--group`).
+- `readonly: true` on a postgres `databases:` entry: a read-only role on another
+  service's database, with the consumer's generated password.
+
+### Changed
+
+- `homelab join` removes an idle Compose-era `home-services` bridge network
+  (it refuses one with containers); `init` does the same without `--import`.
+
+### Fixed
+
+- After `join` on a PC that had run the v0.4.x Compose stack, tasks scheduled
+  there attached to its leftover `home-services` bridge instead of the overlay
+  and were rejected (immich-machine-learning never ran on the laptop).
+
+### Build
+
+- `make lint` runs golangci-lint (default and `nogui` builds); `make ci` uses it.
+- CI no longer runs on tag pushes (it ran once on main already).
+
 ## v0.5.0-rc.2 — 2026-11-11
 
 Release candidate. Upgrade an rc.1 cluster with `homelab upgrade` from a PC

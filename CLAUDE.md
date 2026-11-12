@@ -112,6 +112,7 @@ yourself, or upgrade to an immutable version tag.
 
 ```bash
 homelab add [name]                                 # install a bundled service from the catalog (no name → list catalog)
+homelab add <dir>                                  # install a custom service from a folder on this PC (a path, or a bare name that is no catalog service; `./<name>` forces the folder)
 homelab new [name]                                 # scaffold wizard (TUI) or --container/--port flags
 homelab setup [service]                            # configure vars and secrets interactively (no arg → root wizard)
 homelab up <service...>                            # deploy on Swarm, shared databases first (-a/--all, --group)
@@ -123,6 +124,7 @@ homelab pull <service...>                          # pull images only (-a, --gro
 homelab update <service...>                        # pull + redeploy, tags resolved to digests (-a, --group)
 homelab reload [service]                           # load the routes into the agent's Caddy, or re-render one service's
 homelab edit <service> <path>                      # edit docker-compose.yml, config.yaml or a bind-mounted file in $EDITOR; validated, saved on the leader, applied as `up` does if the service runs
+homelab edit <service> <path> --from <file>        # same without an editor: the file's content replaces/creates <path> (scripts; max 500 KiB)
 homelab delete <service>... (alias: rm)            # Swarm services + exposure + config; type the name or -y
 ```
 
@@ -153,7 +155,7 @@ homelab caddy logs                                 # follow the leader agent's l
 homelab doctor [service] [--fix] [--all]           # health checks (a service: its tasks running, newest task's image and health); --fix creates the overlay network, sites dir
 homelab validate                                   # assemble and adapt the Caddy config without loading it
 homelab config <service>                           # the compose file as resolved to deploy (contains secrets)
-homelab images <service> [-q]                      # images the stack deploys
+homelab images <service>... [-q] [--json]          # images the stack deploys (--json: ref, local, identity; -a/--group; the identity only for local images)
 homelab version                                    # print the homelab version
 ```
 
@@ -378,6 +380,39 @@ secret, named volumes reused by name, bind-mounted files under the service
 dir delivered as Swarm configs. Privileged containers, devices, `network_mode`
 and `env_file` are unsupported (e.g. `minero`).
 
+**Local images.** A compose service with `pull_policy: never` has a local image
+(label `homelab.image-local`), built on a PC and in no registry. It is never
+pulled (`up`/`update`/`pull` and the boot bring-up skip it; `pull` prints
+"<ref> skipped (local image)"), must exist in the leader's engine, and stays
+a bare tag in the spec. Placement: `core` unless the service's `config.yaml`
+`placement:` says otherwise (the image is then the owner's business on that
+node). Its identity (label `homelab.image-identity`) is a hash of the image's
+RootFS layers + Created time, not its ID (minis runs the containerd image
+store, a PC usually overlay2: the same image has different IDs). `update` rolls
+the tasks when the identity on the leader differs from the one the service was
+deployed with. `up`/`update` run from a PC that has the image ship it first:
+the CLI asks the leader `images <svc> --json`, then streams `docker save` to
+the hidden `images load` (a mutating, locked command); `up` ships only when the
+leader lacks the image (R53), `update` when the identity differs. No local Docker
+daemon: shipping is skipped silently (a client-only PC), and the leader then
+reports the missing image. A failed image check warns and the command is still
+forwarded. Because the tag is bare, R53 holds for local images only against
+homelab-triggered rolls: a manual `docker build` on the leader retags it and
+goes live at the next task restart or reschedule. `add`/`up` warn on a local
+image with a namespace or registry host (a registry image of that name would
+replace it at task start): give local images an unqualified name.
+
+`homelab add <dir>` (local half) reads the folder: `docker-compose.yml` and
+`config.yaml` required; regular files and directories (bind-mounted config)
+come along; refused: symlinks, dotfiles, a top-level `exposure.yaml`, a file over
+500 KiB (`swarm.MaxConfigSize`), a folder over 10 MiB, and the names
+postgres/mariadb/redis/garage (a custom service must not act as a shared
+provider). The service name is the folder's base name. It streams a tar to the
+hidden leader command `files install <svc>`, which refuses an existing service
+(changes go through `edit`), validates as `edit` does and writes atomically.
+A bare name that is both a catalog service and a local folder is refused as
+ambiguous (use `./<name>`).
+
 Placement is per container: a container with a data volume, a host bind path,
 the docker socket, or a shared-database provider role is pinned to
 `node.labels.homelab.role == core`. Stateless containers prefer workers: the
@@ -506,6 +541,17 @@ overlay); `BuildEnv` injects the connection values through the declaration's
   by `homelab delete`. A service needing several databases declares several
   `redis` entries with distinct `name:` (netbox: `tasks`, `cache`). `db`/`dsn`
   are only injected once a number is allocated.
+- `readonly: true` on a `postgres` entry (with `database:` naming another
+  service's database and `user:`) gives the consumer a read-only login role on
+  that database: it must already exist (else "`homelab up <owner>` first");
+  the role gets CONNECT, USAGE on public, SELECT on tables and sequences, and
+  default SELECT for tables the owner role creates later; never CREATE or
+  ownership. Its password is the consumer's generated database password (its
+  secrets namespace), re-synced by `setup`; `delete` of the consumer drops the
+  role; it is not backed up separately. An existing role of that name must be a
+  plain login role (no superuser/createrole/createdb/replication/bypassrls, owns
+  no database, member of no role, owns nothing in the target db) and not the
+  database owner's own role, else provisioning refuses.
 - Garage needs a cluster layout before it accepts writes; the provisioner
   applies one on first start (`garage layout assign … && layout apply`).
   `homelab delete` removes the service's key; buckets and data stay.

@@ -212,6 +212,89 @@ https://paperless.<HOME_SUBDOMAIN>.<DOMAIN>
 
 ---
 
+## A custom service with a locally built image
+
+For a service that is not in the catalog, with an image you build yourself and
+push to no registry (a game server, your own app). Keep it in a folder on the
+PC where you build:
+
+```
+taash/
+├── docker-compose.yml
+├── config.yaml
+└── conf/app.toml        # optional bind-mounted files
+```
+
+The folder's base name is the service name. In `docker-compose.yml`:
+
+```yaml
+services:
+  taash:
+    image: taash-server:current   # unqualified: no namespace, no registry host
+    pull_policy: never            # marks the image local: never pulled
+    container_name: homelab-taash
+    networks: [home-services]
+```
+
+- `pull_policy: never` is what makes the image local. Use an unqualified name:
+  a reference like `someuser/app:tag` could be replaced at task start by an
+  image of that name on Docker Hub (`add`/`up` warn about it).
+- A local image runs on the core node unless `config.yaml` sets `placement:`.
+  Shared databases are declared under `databases:` as for any service.
+- The folder must not hold symlinks, dotfiles or an `exposure.yaml`; a file over
+  500 KiB or a folder over 10 MiB is refused; postgres, mariadb, redis and
+  garage are reserved names.
+
+Install, deploy, expose (from the PC with the image):
+
+```bash
+homelab add ./taash       # a bare name works unless it is also a catalog service
+homelab setup taash       # if it declares secrets
+homelab up taash          # ships the image to the leader if it lacks it
+homelab enable taash
+```
+
+`add` refuses a service that already exists; change its files with `homelab edit`
+(`homelab edit taash docker-compose.yml --from docker-compose.yml` in a script).
+
+After a rebuild under the same tag:
+
+```bash
+docker build -t taash-server:current .
+homelab update taash      # ships the image if it differs, rolls the tasks
+```
+
+`homelab up` never replaces an image the leader already has, and a plain
+`docker build` on the leader itself goes live only at the next task restart; use
+`update` to roll deliberately. If the PC has no Docker daemon, nothing is shipped
+and the leader reports the missing image.
+
+### Read-only access to another service's database
+
+To let a consumer (e.g. grafana) read another service's Postgres database, add
+to the consumer's `config.yaml` (`homelab edit grafana config.yaml`):
+
+```yaml
+databases:
+  - postgres:
+      database: taash        # the owner's database; must exist (up taash first)
+      user: taash_ro
+      readonly: true
+      env:
+        host: TAASH_PG_HOST
+        port: TAASH_PG_PORT
+        user: TAASH_RO_USER
+        password: TAASH_RO_PASSWORD
+        database: TAASH_PG_DB
+```
+
+Pass those variables on in the consumer's compose file, then `homelab up grafana`.
+The role is SELECT-only (also on tables created later), and is dropped when
+the consumer is deleted. A pre-existing role of that name must be a plain login
+role.
+
+---
+
 ## Contributing to the catalog
 
 Once your service is tested and working, contribute it to the embedded catalog:
