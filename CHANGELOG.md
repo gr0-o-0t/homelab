@@ -3,6 +3,41 @@
 Notable changes per release. The release workflow publishes the section
 matching the pushed tag as the GitHub release notes.
 
+## v0.5.0 — 2026-11-12
+
+The homelab moves from one Docker Compose host to a Docker Swarm cluster run
+by a `homelab agent` container on every PC: one `*.home.<domain>` for the
+whole cluster, control from any PC, stateless work on worker PCs while they
+are on. Upgrading a v0.4.x install is a one-time cutover:
+`docs/migrating-to-swarm.md` (backup with v0.4.3 first; the rollback never
+touches data volumes). From a v0.5.0 release candidate: install this CLI and
+run `homelab upgrade`.
+
+This is the three release candidates below, verified on a live two-PC
+cluster, plus:
+
+### Fixed
+
+- The desktop (GUI) amd64 build needed glibc 2.43 and did not start on
+  Linux Mint or other distributions older than the CI runner. It is built on
+  Ubuntu 22.04 again, and the release fails if it ever needs more than
+  glibc 2.35.
+
+### Highlights (details in the release candidates)
+
+- `homelab init` / `join` / `login` / `upgrade`: the leader agent runs Caddy
+  (with raw TCP/UDP ports, e.g. gitea ssh on 2222) and Tailscale in-process;
+  every other command is forwarded to it over the tailnet.
+- Secrets live in an encrypted vault in the leader agent and reach a service
+  as a Swarm secret, never in its spec.
+- Placement per container: data and shared databases stay on the core node,
+  stateless containers move to worker PCs and back.
+- Custom services from a folder (`homelab add <dir>`) with locally built
+  images shipped from the PC that built them; `homelab edit --from`;
+  read-only access to another service's database (`readonly: true`).
+- Removed: the Compose backend, the core stack, session mode; Tor, I2P and
+  Yggdrasil are not served in cluster mode yet.
+
 ## v0.5.0-rc.3 — 2026-11-12
 
 Release candidate. Run `homelab upgrade` from a PC running this CLI (CLI and
