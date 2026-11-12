@@ -9,6 +9,8 @@ import (
 	"io"
 	"os"
 
+	"github.com/containerd/errdefs"
+	"github.com/docker/docker/client"
 	"github.com/docker/go-units"
 
 	"github.com/groot/homelab/internal/remote"
@@ -58,20 +60,46 @@ func forwardDeploy(argv []string) (int, error) {
 	ask = append(ask, "--json")
 
 	ctx := cmdContext()
+	infos, err := leaderImages(ctx, ask)
+	if err != nil {
+		// The command itself still runs: it reports a bad service and goes on
+		// with the others, and an older agent without `images --json` must
+		// not block every up/update.
+		fmt.Fprintf(os.Stderr, "warning: could not check local images (%s); not shipping\n", err)
+		return forwardRun(argv)
+	}
+	if err := shipLocalImages(ctx, rootFlagsOf(argv), infos, update); err != nil {
+		return 1, err
+	}
+	return forwardRun(argv)
+}
+
+// leaderImages is the leader's `images --json` answer to ask.
+func leaderImages(ctx context.Context, ask []string) ([]imageInfo, error) {
 	var out bytes.Buffer
 	code, err := shipLeader(ctx, ask, nil, &out)
 	if err == nil && code != 0 {
-		err = fmt.Errorf("asking the leader for the services' images: exit status %d", code)
+		err = fmt.Errorf("exit status %d", code)
 	}
 	if err != nil {
-		return code, err
+		return nil, err
 	}
 	var infos []imageInfo
 	if err := json.Unmarshal(out.Bytes(), &infos); err != nil {
-		return 1, fmt.Errorf("reading the leader's images: %w", err)
+		return nil, fmt.Errorf("reading the leader's answer: %w", err)
 	}
+	return infos, nil
+}
 
-	var pc imageSaver
+// shipLocalImages ships each distinct local ref in infos that this PC has
+// and the leader needs (see forwardDeploy).
+func shipLocalImages(ctx context.Context, rootFlags []string, infos []imageInfo, update bool) error {
+	var pc imageSaver // connected on the first local image
+	defer func() {
+		if c, ok := pc.(io.Closer); ok {
+			_ = c.Close()
+		}
+	}()
 	seen := map[string]bool{}
 	for _, info := range infos {
 		if !info.Local || seen[info.Ref] {
@@ -79,24 +107,29 @@ func forwardDeploy(argv []string) (int, error) {
 		}
 		seen[info.Ref] = true
 		if pc == nil {
+			var err error
 			if pc, err = localImages(); err != nil {
-				break // no Docker on this PC: it has no image to ship
+				return nil // no Docker on this PC: it has no image to ship
 			}
 		}
 		img, _, err := pc.ImageInspectWithRaw(ctx, info.Ref)
-		if err != nil {
-			continue // not built here (or no reachable engine)
+		switch {
+		case errdefs.IsNotFound(err), client.IsErrConnectionFailed(err):
+			continue // not built here, or no Docker running on this PC
+		case err != nil:
+			fmt.Fprintf(os.Stderr, "warning: inspecting %s on this PC: %s; not shipping it\n", info.Ref, err)
+			continue
 		}
 		id := swarm.ImageIdentity(img)
 		if info.Identity == id || (!update && info.Identity != "") {
 			continue
 		}
 		fmt.Printf("shipping %s (%s) to the leader…\n", info.Ref, units.HumanSize(float64(img.Size)))
-		if err := shipImage(ctx, pc, rootFlagsOf(argv), info.Ref, id); err != nil {
-			return 1, err
+		if err := shipImage(ctx, pc, rootFlags, info.Ref, id); err != nil {
+			return err
 		}
 	}
-	return forwardRun(argv)
+	return nil
 }
 
 // shipImage streams `docker save ref` from this PC into `images load` on the

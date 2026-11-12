@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -18,9 +19,16 @@ import (
 )
 
 // fakeSaver is this PC's engine: the images it has, by ref.
-type fakeSaver struct{ images map[string]image.InspectResponse }
+// inspectErr, when set, fails every inspect.
+type fakeSaver struct {
+	images     map[string]image.InspectResponse
+	inspectErr error
+}
 
 func (f fakeSaver) ImageInspectWithRaw(_ context.Context, ref string) (image.InspectResponse, []byte, error) {
+	if f.inspectErr != nil {
+		return image.InspectResponse{}, nil, f.inspectErr
+	}
 	img, ok := f.images[ref]
 	if !ok {
 		return image.InspectResponse{}, nil, fmt.Errorf("no such image %s: %w", ref, errdefs.ErrNotFound)
@@ -41,12 +49,15 @@ func localImage(layer string) image.InspectResponse {
 }
 
 // stubShip stands in for the leader (images --json answers infos; images
-// load answers loaded, or loadCode) and this PC's engine.
+// load answers loaded, or loadCode) and this PC's engine. imagesCode or
+// imagesOut make the images --json call fail or answer something else.
 type shipStub struct {
-	infos    []imageInfo
-	loaded   map[string]string // ref → identity the leader reports after a load
-	loadCode int
-	calls    []leaderCall
+	infos      []imageInfo
+	imagesCode int
+	imagesOut  string
+	loaded     map[string]string // ref → identity the leader reports after a load
+	loadCode   int
+	calls      []leaderCall
 }
 
 func stubShip(t *testing.T, pc map[string]image.InspectResponse, s *shipStub) *[][]string {
@@ -62,6 +73,13 @@ func stubShip(t *testing.T, pc map[string]image.InspectResponse, s *shipStub) *[
 		}
 		s.calls = append(s.calls, c)
 		if argv[len(argv)-1] == "--json" {
+			switch {
+			case s.imagesCode != 0:
+				return s.imagesCode, nil
+			case s.imagesOut != "":
+				_, err := io.WriteString(stdout, s.imagesOut)
+				return 0, err
+			}
 			return 0, json.NewEncoder(stdout).Encode(s.infos)
 		}
 		if s.loadCode != 0 {
@@ -213,3 +231,33 @@ func forwardDeployFor(t *testing.T, argv []string) (int, error) {
 
 // flagNoColor is a root flag: the leader calls carry it as the argv did.
 const flagNoColor = "--no-color"
+
+func TestShip_ImagesQueryFailsStillForwards(t *testing.T) {
+	s := &shipStub{imagesCode: 1}
+	fwd := stubShip(t, map[string]image.InspectResponse{"taash-server:current": localImage("a")}, s)
+
+	assert.Equal(t, 0, executeArgs([]string{"up", "taash", "bogus"}))
+	require.Len(t, s.calls, 1, "no load")
+	assert.Equal(t, [][]string{{"up", "taash", "bogus"}}, *fwd, "up still reports each service itself")
+}
+
+func TestShip_ImagesNotJSONStillForwards(t *testing.T) {
+	s := &shipStub{imagesOut: "CONTAINER  IMAGE\nserver     taash-server:current\n"}
+	fwd := stubShip(t, map[string]image.InspectResponse{"taash-server:current": localImage("a")}, s)
+
+	assert.Equal(t, 0, executeArgs([]string{"update", "taash"}))
+	require.Len(t, s.calls, 1, "an older agent's table: no load")
+	assert.Equal(t, [][]string{{"update", "taash"}}, *fwd)
+}
+
+func TestShip_LocalInspectErrorSkipsRef(t *testing.T) {
+	s := &shipStub{infos: []imageInfo{taashInfo("")}}
+	fwd := stubShip(t, nil, s)
+	localImages = func() (imageSaver, error) {
+		return fakeSaver{inspectErr: errors.New("permission denied")}, nil
+	}
+
+	assert.Equal(t, 0, executeArgs([]string{"up", "taash"}))
+	require.Len(t, s.calls, 1)
+	assert.Equal(t, [][]string{{"up", "taash"}}, *fwd)
+}
