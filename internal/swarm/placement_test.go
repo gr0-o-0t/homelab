@@ -71,3 +71,20 @@ func TestConstraints(t *testing.T) {
 		}
 	}
 }
+
+func TestPlace_LocalImageCore(t *testing.T) {
+	svc := types.ServiceConfig{Name: "taash"}
+	svc.PullPolicy = types.PullPolicyNever
+	for placement, want := range map[string]Role{"": RoleCore, "worker": RoleWorker, "any": RoleAny, "core": RoleCore} {
+		cfg := &config.Config{Placement: map[string]string{}}
+		if placement != "" {
+			cfg.Placement["taash"] = placement
+		}
+		if got := Place(svc, cfg, false); got != want {
+			t.Errorf("placement %q: got %s, want %s", placement, got, want)
+		}
+	}
+	if got := Place(svc, nil, false); got != RoleCore {
+		t.Errorf("nil cfg: got %s, want core", got)
+	}
+}

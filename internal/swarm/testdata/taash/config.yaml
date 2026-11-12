@@ -1,0 +1,26 @@
+vars:
+    TAASH_MAX_CONNECTIONS:
+        value: "500"
+        required: false
+    TAASH_MAX_TABLES:
+        value: "100"
+        required: false
+    RANKED_BOTS:
+        value: "1"
+        required: false
+    # Google sign-in: the Web OAuth client ID (public, not a secret).
+    TAASH_GOOGLE_CLIENT_ID:
+        value: "769070219374-hg80mqlsuh6vrj8h16560figjnr8crup.apps.googleusercontent.com"
+        required: true
+databases:
+    - postgres:
+        database: taash
+        user: taash
+        env:
+            host: TAASH_PG_HOST
+            port: TAASH_PG_PORT
+            user: TAASH_PG_USER
+            password: TAASH_PG_PASSWORD
+            database: TAASH_PG_DB
+ports:
+    - 8080

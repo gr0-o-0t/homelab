@@ -1,0 +1,42 @@
+# ─────────────────────────────────────────────────────────────────
+# Service: taash (Taash online card-game server; image built locally
+# by `make deploy-server` in the cards repo, never pulled)
+# ─────────────────────────────────────────────────────────────────
+
+networks:
+  home-services:
+    name: home-services
+    external: true
+
+services:
+  taash:
+    image: taash-server:current
+    pull_policy: never
+    container_name: taash
+    restart: always
+    read_only: true
+    user: "65532:65532"
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      TAASH_PG_HOST: ${TAASH_PG_HOST}
+      TAASH_PG_PORT: ${TAASH_PG_PORT}
+      TAASH_PG_USER: ${TAASH_PG_USER}
+      TAASH_PG_PASSWORD: ${TAASH_PG_PASSWORD}
+      TAASH_PG_DB: ${TAASH_PG_DB}
+      TAASH_MAX_CONNECTIONS: ${TAASH_MAX_CONNECTIONS}
+      TAASH_MAX_TABLES: ${TAASH_MAX_TABLES}
+      TAASH_PORT: "8080"
+      # Beta only: bots fill ranked seats after 30 s. Off at launch.
+      RANKED_BOTS: ${RANKED_BOTS}
+      # Google sign-in: the Web OAuth client ID (public). Unset, sign-in answers 503.
+      TAASH_GOOGLE_CLIENT_ID: ${TAASH_GOOGLE_CLIENT_ID}
+    networks:
+      home-services:
+    healthcheck:
+      test: ["CMD", "/app/taash-server", "--healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s

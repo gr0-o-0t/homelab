@@ -422,3 +422,25 @@ func TestLoadProject_InterpolatesAndNamesStack(t *testing.T) {
 	assert.Equal(t, "web", p.Name)
 	assert.Equal(t, "nginx:1.27", p.Services["app"].Image)
 }
+
+// pull_policy: never marks an image built locally, so deploy and update
+// know no registry has it.
+func TestTranslate_PullPolicyNeverLabelsLocal(t *testing.T) {
+	cs := specByName(t, translate(t, "taash"), "taash_taash").TaskTemplate.ContainerSpec
+	assert.Equal(t, "true", cs.Labels[swarm.LabelImageLocal])
+	assert.True(t, swarm.IsLocalImage(cs))
+
+	gs := specByName(t, translate(t, "glance"), "glance_glance").TaskTemplate.ContainerSpec
+	_, has := gs.Labels[swarm.LabelImageLocal]
+	assert.False(t, has)
+	assert.False(t, swarm.IsLocalImage(gs))
+}
+
+func TestTranslate_TaashHardeningCarried(t *testing.T) {
+	cs := specByName(t, translate(t, "taash"), "taash_taash").TaskTemplate.ContainerSpec
+	assert.True(t, cs.ReadOnly)
+	assert.Equal(t, "65532:65532", cs.User)
+	assert.Equal(t, []string{"ALL"}, cs.CapabilityDrop)
+	require.NotNil(t, cs.Privileges)
+	assert.True(t, cs.Privileges.NoNewPrivileges)
+}

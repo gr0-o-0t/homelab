@@ -74,6 +74,9 @@ const (
 	// LabelContainerName is the compose container_name, when it has one:
 	// exec/logs -c accept it as well as the compose key.
 	LabelContainerName = "homelab.container_name"
+	// LabelImageLocal marks a task container whose image is built locally
+	// (compose pull_policy: never) and exists on no registry.
+	LabelImageLocal = "homelab.image-local"
 )
 
 func serviceLabels(stack string, role Role, containerName string) map[string]string {
@@ -228,6 +231,9 @@ func translateService(stack, dir string, proj *types.Project, svc types.ServiceC
 	if svc.ContainerName != "" {
 		clabels[LabelContainerName] = svc.ContainerName
 	}
+	if svc.PullPolicy == types.PullPolicyNever {
+		clabels[LabelImageLocal] = "true"
+	}
 	cs := &swarm.ContainerSpec{
 		Image:           svc.Image,
 		Labels:          clabels,
@@ -350,4 +356,10 @@ func ulimits(u map[string]*types.UlimitsConfig) []*container.Ulimit {
 		out = append(out, &container.Ulimit{Name: name, Soft: int64(soft), Hard: int64(hard)})
 	}
 	return out
+}
+
+// IsLocalImage reports whether a container spec's image is built locally
+// (carries LabelImageLocal), so no registry can supply it.
+func IsLocalImage(cs *swarm.ContainerSpec) bool {
+	return cs != nil && cs.Labels[LabelImageLocal] == "true"
 }

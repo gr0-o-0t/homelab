@@ -23,6 +23,8 @@ const dockerSock = "/var/run/docker.sock"
 // Place decides where a compose service may run. Anything holding data, host
 // paths, the docker socket or a shared database pins to core, and that wins
 // over a placement override of worker.
+// A pull_policy: never image (built locally) pins to core too, unless the
+// service config names a placement.
 func Place(svc types.ServiceConfig, cfg *config.Config, isDBProvider bool) Role {
 	if isDBProvider {
 		return RoleCore
@@ -40,6 +42,9 @@ func Place(svc types.ServiceConfig, cfg *config.Config, isDBProvider bool) Role 
 			v.Type == types.VolumeTypeVolume && v.Source != "" && !slices.Contains(cache, v.Source):
 			return RoleCore
 		}
+	}
+	if svc.PullPolicy == types.PullPolicyNever && override == "" {
+		return RoleCore // a locally built image exists on the leader only
 	}
 	switch override {
 	case "core":
