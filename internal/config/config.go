@@ -268,6 +268,9 @@ type DatabaseConfig struct {
 // for services that manage extensions themselves at runtime (Immich checks and
 // upgrades its vector extension on every start, and its backup path shells out
 // to pg_dumpall) — pre-creating extensions via Extensions is otherwise enough.
+// ReadOnly: postgres only — User is a login role with SELECT on Database,
+// another service's database that must already exist; it is never created
+// or owned here (Grafana reading taash's tables).
 type ServiceDBDecl struct {
 	Name        string            `yaml:"name,omitempty"`
 	Database    string            `yaml:"database,omitempty"`
@@ -278,6 +281,7 @@ type ServiceDBDecl struct {
 	DSNTemplate string            `yaml:"dsn_template,omitempty"`
 	Extensions  []string          `yaml:"extensions,omitempty"`
 	Superuser   bool              `yaml:"superuser,omitempty"`
+	ReadOnly    bool              `yaml:"readonly,omitempty"`
 	Env         map[string]string `yaml:"env"`
 }
 
@@ -383,7 +387,8 @@ type Config struct {
 	CacheVolumes []string `yaml:"cache_volumes,omitempty"`
 }
 
-// validate checks the values yaml cannot: placement roles.
+// validate checks the values yaml cannot: placement roles and read-only
+// database declarations.
 func (cfg *Config) validate() error {
 	for svc, role := range cfg.Placement {
 		switch role {
@@ -391,6 +396,36 @@ func (cfg *Config) validate() error {
 		default:
 			return fmt.Errorf("placement for %q: unknown role %q (want core, worker or any)", svc, role)
 		}
+	}
+	// A section that does not decode as declarations (a root config's
+	// endpoints) has no read-only entries; its readers report the error.
+	dbs, _ := cfg.ServiceDatabases()
+	for i := range dbs {
+		if err := dbs[i].validateReadOnly(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateReadOnly checks a `readonly: true` declaration: SELECT on an
+// existing postgres database for a named login role, nothing more.
+func (d *TypedDBDecl) validateReadOnly() error {
+	if !d.ReadOnly {
+		return nil
+	}
+	where := fmt.Sprintf("databases: %s declaration for database %q", d.Type, d.Database)
+	switch {
+	case d.Type != DBPostgres:
+		return fmt.Errorf("%s: readonly is only supported for postgres", where)
+	case d.Database == "":
+		return fmt.Errorf("%s: readonly needs database (the other service's database)", where)
+	case d.User == "":
+		return fmt.Errorf("%s: readonly needs user (the read-only role to create)", where)
+	case d.Superuser:
+		return fmt.Errorf("%s: readonly cannot be combined with superuser", where)
+	case len(d.Extensions) > 0:
+		return fmt.Errorf("%s: readonly cannot be combined with extensions", where)
 	}
 	return nil
 }

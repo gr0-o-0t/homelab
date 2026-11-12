@@ -109,6 +109,9 @@ func PlanFor(configDir, svcName string) (Plan, error) {
 		}
 		for i := range dbs {
 			d := &dbs[i]
+			if d.ReadOnly {
+				continue // another service's database; its own backup dumps it
+			}
 			switch d.Type {
 			case config.DBPostgres, config.DBMariaDB:
 				p.Databases = append(p.Databases, DatabaseTarget{

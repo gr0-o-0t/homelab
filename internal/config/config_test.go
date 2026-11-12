@@ -731,3 +731,69 @@ func TestSecretEntry_GenerateRoundTrips(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "password", cfg.Secrets["REDIS_PASSWORD"].Generate, "setup rewrites config.yaml; generate: must survive")
 }
+
+// ── read-only access to another service's database ───────────────────────────
+
+const grafanaReadOnlyDecl = `
+databases:
+  - postgres:
+      database: taash
+      user: taash_ro
+      readonly: true
+      env:
+        host: TAASH_PG_HOST
+        port: TAASH_PG_PORT
+        user: TAASH_RO_USER
+        password: TAASH_RO_PASSWORD
+        database: TAASH_PG_DB
+`
+
+func TestServiceConfig_ReadOnlyValidation(t *testing.T) {
+	cases := []struct {
+		name, decl, field string
+	}{
+		{"not postgres", "  - mariadb:\n      database: taash\n      user: ro\n      readonly: true\n", "readonly"},
+		{"no database", "  - postgres:\n      user: ro\n      readonly: true\n", "database"},
+		{"no user", "  - postgres:\n      database: taash\n      readonly: true\n", "user"},
+		{"superuser", "  - postgres:\n      database: taash\n      user: ro\n      readonly: true\n      superuser: true\n", "superuser"},
+		{"extensions", "  - postgres:\n      database: taash\n      user: ro\n      readonly: true\n      extensions: [pgcrypto]\n", "extensions"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeFile(t, dir, "services/grafana/config.yaml", "databases:\n"+tc.decl)
+			_, err := config.Load(config.ServiceConfigFile(dir, "grafana"))
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "grafana")
+			assert.Contains(t, err.Error(), tc.field)
+		})
+	}
+
+	dir := t.TempDir()
+	writeFile(t, dir, "services/grafana/config.yaml", grafanaReadOnlyDecl)
+	cfg, err := config.Load(config.ServiceConfigFile(dir, "grafana"))
+	require.NoError(t, err)
+	dbs, err := cfg.ServiceDatabases()
+	require.NoError(t, err)
+	require.Len(t, dbs, 1)
+	assert.True(t, dbs[0].ReadOnly)
+}
+
+// The read-only role's password is the consumer's own generated database
+// password, injected like any other declaration's.
+func TestBuildEnv_ReadOnlyInjects(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "services/grafana/config.yaml", grafanaReadOnlyDecl)
+	sm := memSecrets(t, map[[2]string]string{
+		{"", config.DBPasswordKey("grafana")}: "ropw",
+	})
+	env, keys, err := config.BuildEnvWithSecrets(filepath.Join(dir, "config.yaml"), dir, "grafana", sm)
+	require.NoError(t, err)
+	assert.Equal(t, "ropw", env["TAASH_RO_PASSWORD"])
+	assert.Contains(t, keys, "TAASH_RO_PASSWORD")
+	assert.Equal(t, "taash_ro", env["TAASH_RO_USER"])
+	assert.Equal(t, "taash", env["TAASH_PG_DB"])
+	assert.Equal(t, "homelab-postgres", env["TAASH_PG_HOST"])
+	assert.Equal(t, "5432", env["TAASH_PG_PORT"])
+	assert.NotContains(t, keys, "TAASH_RO_USER")
+}

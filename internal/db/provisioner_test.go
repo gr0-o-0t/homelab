@@ -605,3 +605,139 @@ type errString string
 
 func (e errString) Error() string { return string(e) }
 func errFake(s string) error      { return errString(s) }
+
+// ── read-only access to another service's database ──────────────────────────
+
+var roDecl = config.ServiceDBDecl{Database: "taash", User: "taash_ro", ReadOnly: true}
+
+const (
+	roExistsQuery = "docker exec homelab-postgres psql -U postgres -d postgres -t -A -c SELECT 1 FROM pg_database WHERE datname='taash'"
+	roOwnerQuery  = "docker exec homelab-postgres psql -U postgres -d postgres -t -A -c SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname='taash'"
+	roRoleQuery   = "docker exec homelab-postgres psql -U postgres -d postgres -t -A -c SELECT 1 FROM pg_roles WHERE rolname='taash_ro'"
+)
+
+// allSQL joins every command run, argv and stdin, for content assertions.
+func allSQL(fc *fakeCommander) string {
+	var b strings.Builder
+	for _, c := range fc.runCalls {
+		b.WriteString(c.line())
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+func TestProvision_ReadOnlyGrants(t *testing.T) {
+	fc := &fakeCommander{outputData: map[string][]byte{
+		roExistsQuery: []byte("1\n"),
+		roOwnerQuery:  []byte("taash\n"),
+	}}
+	sm := &fakeSM{store: map[string]string{}}
+	p := &Provisioner{ContainerFor: fixedNames, RC: fc, SM: sm}
+
+	if err := p.Provision(context.Background(), config.DBPostgres, "grafana", roDecl); err != nil {
+		t.Fatal(err)
+	}
+	pw := sm.store[config.DBPasswordKey("grafana")]
+	if pw == "" {
+		t.Fatal("the consumer's DB_PASSWORD_GRAFANA was not generated")
+	}
+	sql := allSQL(fc)
+	for _, want := range []string{
+		`CREATE USER "taash_ro" WITH LOGIN PASSWORD`,
+		`GRANT CONNECT ON DATABASE "taash" TO "taash_ro"`,
+		`GRANT USAGE ON SCHEMA public TO "taash_ro"`,
+		`GRANT SELECT ON ALL TABLES IN SCHEMA public TO "taash_ro"`,
+		`GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO "taash_ro"`,
+		`ALTER DEFAULT PRIVILEGES FOR ROLE "taash" IN SCHEMA public GRANT SELECT ON TABLES TO "taash_ro"`,
+	} {
+		if !strings.Contains(sql, want) {
+			t.Errorf("missing %q in:\n%s", want, sql)
+		}
+	}
+	for _, never := range []string{"CREATE DATABASE", "OWNER TO", "SUPERUSER WITH", "CREATE EXTENSION", "GRANT ALL", "GRANT CREATE"} {
+		if strings.Contains(sql, never) {
+			t.Errorf("read-only provisioning must not issue %q:\n%s", never, sql)
+		}
+	}
+	// The grants run inside the target database, and no password reaches argv.
+	for _, c := range fc.runCalls {
+		if strings.Contains(strings.Join(c.Args, " "), pw) {
+			t.Errorf("password in argv: %v", c.Args)
+		}
+		if strings.Contains(c.Stdin, "GRANT SELECT") && !strings.Contains(strings.Join(c.Args, " "), "-d taash") {
+			t.Errorf("grants must run in database taash: %v", c.Args)
+		}
+	}
+}
+
+// up of the consumer before the owner: a clear error, nothing created.
+func TestProvision_ReadOnlyMissingDatabase(t *testing.T) {
+	fc := &fakeCommander{outputData: map[string][]byte{roExistsQuery: []byte("")}}
+	p := &Provisioner{ContainerFor: fixedNames, RC: fc, SM: &fakeSM{store: map[string]string{}}}
+
+	err := p.Provision(context.Background(), config.DBPostgres, "grafana", roDecl)
+	if err == nil {
+		t.Fatal("expected an error for a missing database")
+	}
+	if want := "database taash does not exist yet — `homelab up taash` first"; err.Error() != want {
+		t.Errorf("error = %q, want %q", err.Error(), want)
+	}
+	if len(fc.runCalls) != 0 {
+		t.Errorf("nothing may change in postgres, got %d commands:\n%s", len(fc.runCalls), allSQL(fc))
+	}
+}
+
+// Granting read access never takes over the owner's own role.
+func TestProvision_ReadOnlyRefusesOwnerRole(t *testing.T) {
+	fc := &fakeCommander{outputData: map[string][]byte{
+		roExistsQuery: []byte("1\n"),
+		roOwnerQuery:  []byte("taash_ro\n"),
+	}}
+	p := &Provisioner{ContainerFor: fixedNames, RC: fc, SM: &fakeSM{store: map[string]string{}}}
+	if err := p.Provision(context.Background(), config.DBPostgres, "grafana", roDecl); err == nil {
+		t.Fatal("expected a refusal when the read-only user owns the database")
+	}
+	if len(fc.runCalls) != 0 {
+		t.Errorf("nothing may change in postgres:\n%s", allSQL(fc))
+	}
+}
+
+func TestDeprovision_ReadOnly(t *testing.T) {
+	t.Run("drops what the role holds in the database, then the role", func(t *testing.T) {
+		fc := &fakeCommander{outputData: map[string][]byte{roExistsQuery: []byte("1\n"), roRoleQuery: []byte("1\n")}}
+		p := &Provisioner{ContainerFor: fixedNames, RC: fc}
+		if err := p.Deprovision(context.Background(), config.DBPostgres, "grafana", roDecl); err != nil {
+			t.Fatal(err)
+		}
+		if len(fc.runCalls) != 2 {
+			t.Fatalf("want 2 commands, got:\n%s", allSQL(fc))
+		}
+		if l := fc.runCalls[0].line(); !strings.Contains(l, "-d taash") || !strings.Contains(l, `DROP OWNED BY "taash_ro"`) {
+			t.Errorf("first command = %q", l)
+		}
+		if l := fc.runCalls[1].line(); !strings.Contains(l, `DROP ROLE IF EXISTS "taash_ro"`) {
+			t.Errorf("second command = %q", l)
+		}
+	})
+	t.Run("database gone: only the role", func(t *testing.T) {
+		fc := &fakeCommander{outputData: map[string][]byte{roExistsQuery: []byte(""), roRoleQuery: []byte("1\n")}}
+		p := &Provisioner{ContainerFor: fixedNames, RC: fc}
+		if err := p.Deprovision(context.Background(), config.DBPostgres, "grafana", roDecl); err != nil {
+			t.Fatal(err)
+		}
+		sql := allSQL(fc)
+		if strings.Contains(sql, "DROP OWNED") || !strings.Contains(sql, `DROP ROLE IF EXISTS "taash_ro"`) {
+			t.Errorf("got:\n%s", sql)
+		}
+	})
+	t.Run("role never created: nothing to drop", func(t *testing.T) {
+		fc := &fakeCommander{outputData: map[string][]byte{roExistsQuery: []byte("1\n"), roRoleQuery: []byte("")}}
+		p := &Provisioner{ContainerFor: fixedNames, RC: fc}
+		if err := p.Deprovision(context.Background(), config.DBPostgres, "grafana", roDecl); err != nil {
+			t.Fatal(err)
+		}
+		if len(fc.runCalls) != 0 {
+			t.Errorf("want no commands, got:\n%s", allSQL(fc))
+		}
+	})
+}

@@ -87,6 +87,9 @@ func (p *Provisioner) Provision(ctx context.Context, dbType config.DBType, svcNa
 		if err != nil {
 			return fmt.Errorf("generating password for %s: %w", svcName, err)
 		}
+		if dbType == config.DBPostgres && decl.ReadOnly {
+			return p.provisionPostgresReadOnly(ctx, svcName, decl, password)
+		}
 		if dbType == config.DBPostgres {
 			return p.provisionPostgres(ctx, svcName, decl, password)
 		}
@@ -106,6 +109,9 @@ func (p *Provisioner) Provision(ctx context.Context, dbType config.DBType, svcNa
 func (p *Provisioner) Deprovision(ctx context.Context, dbType config.DBType, svcName string, decl config.ServiceDBDecl) error {
 	switch dbType {
 	case config.DBPostgres:
+		if decl.ReadOnly {
+			return p.deprovisionPostgresReadOnly(decl)
+		}
 		return p.deprovisionPostgres(ctx, decl)
 	case config.DBMariaDB:
 		return p.deprovisionMariaDB(ctx, decl)
@@ -317,24 +323,8 @@ func (p *Provisioner) provisionPostgres(ctx context.Context, svcName string, dec
 	// database, so CREATE DATABASE can name it as OWNER.
 
 	// 1. Create the role, or reset its password if it is already there.
-	// PostgreSQL has no CREATE USER IF NOT EXISTS — unlike MySQL, that spelling
-	// is a plain syntax error (see the CREATE ROLE grammar), so the role has to
-	// be looked up first. ALTER on the existing-role path also re-syncs the
-	// password with the keyring, making a repeated `homelab setup` idempotent.
-	// A failed probe must not be read as "absent": the CREATE that follows would
-	// fail, and postgres logs the failing statement, password included.
-	out, err := p.execPSQL(container, "postgres", "postgres",
-		"-c", fmt.Sprintf("SELECT 1 FROM pg_roles WHERE rolname=%s", escLit(decl.User)))
-	if err != nil {
-		return fmt.Errorf("checking for user %s: %w", decl.User, err)
-	}
-	verb := "CREATE"
-	if strings.TrimSpace(string(out)) != "" {
-		verb = "ALTER"
-	}
-	if err := p.execSQL(config.DBPostgres, container, "postgres", fmt.Sprintf("%s USER %s WITH LOGIN PASSWORD %s;",
-		verb, escID(decl.User), escLit(password))); err != nil {
-		return fmt.Errorf("creating user %s: %w", decl.User, err)
+	if err := p.ensureLoginRole(container, decl.User, password); err != nil {
+		return err
 	}
 
 	// 2. Optionally promote to superuser. Ownership covers schema and extension
@@ -348,7 +338,7 @@ func (p *Provisioner) provisionPostgres(ctx context.Context, svcName string, dec
 	}
 
 	// 3. Create the database owned by that role, or transfer an existing one.
-	out, err = p.execPSQL(container, "postgres", "postgres",
+	out, err := p.execPSQL(container, "postgres", "postgres",
 		"-c", fmt.Sprintf("SELECT 1 FROM pg_database WHERE datname=%s", escLit(decl.Database)))
 	if err != nil {
 		return fmt.Errorf("checking for database %s: %w", decl.Database, err)
@@ -384,6 +374,130 @@ func (p *Provisioner) provisionPostgres(ctx context.Context, svcName string, dec
 		}
 	}
 
+	return nil
+}
+
+// ensureLoginRole creates user as a login role with password, or resets the
+// password of an existing one.
+// PostgreSQL has no CREATE USER IF NOT EXISTS — unlike MySQL, that spelling
+// is a plain syntax error (see the CREATE ROLE grammar), so the role has to
+// be looked up first. ALTER on the existing-role path also re-syncs the
+// password with the keyring, making a repeated `homelab setup` idempotent.
+// A failed probe must not be read as "absent": the CREATE that follows would
+// fail, and postgres logs the failing statement, password included.
+func (p *Provisioner) ensureLoginRole(container, user, password string) error {
+	out, err := p.execPSQL(container, "postgres", "postgres",
+		"-c", fmt.Sprintf("SELECT 1 FROM pg_roles WHERE rolname=%s", escLit(user)))
+	if err != nil {
+		return fmt.Errorf("checking for user %s: %w", user, err)
+	}
+	verb := "CREATE"
+	if strings.TrimSpace(string(out)) != "" {
+		verb = "ALTER"
+	}
+	if err := p.execSQL(config.DBPostgres, container, "postgres", fmt.Sprintf("%s USER %s WITH LOGIN PASSWORD %s;",
+		verb, escID(user), escLit(password))); err != nil {
+		return fmt.Errorf("creating user %s: %w", user, err)
+	}
+	return nil
+}
+
+// pgDatabaseExists reports whether database exists on the shared instance.
+func (p *Provisioner) pgDatabaseExists(container, database string) (bool, error) {
+	out, err := p.execPSQL(container, "postgres", "postgres",
+		"-c", fmt.Sprintf("SELECT 1 FROM pg_database WHERE datname=%s", escLit(database)))
+	if err != nil {
+		return false, fmt.Errorf("checking for database %s: %w", database, err)
+	}
+	return strings.TrimSpace(string(out)) != "", nil
+}
+
+// execSQLIn runs sql as postgres inside database, over stdin like execSQL.
+func (p *Provisioner) execSQLIn(container, database, sql string) error {
+	return p.RC.RunFrom(strings.NewReader(sql), "docker",
+		"exec", "-i", container, "psql", "-U", "postgres", "-d", database, "-v", "ON_ERROR_STOP=1", "-f", "-")
+}
+
+// provisionPostgresReadOnly gives the consumer svcName a login role that can
+// read another service's database and nothing more: no CREATE, no ownership.
+// The database belongs to its own service, so a missing one is an error, not
+// something to create. Tables the owner creates later are covered by default
+// privileges.
+func (p *Provisioner) provisionPostgresReadOnly(_ context.Context, svcName string, decl config.ServiceDBDecl, password string) error {
+	container, err := p.Container(config.DBPostgres)
+	if err != nil {
+		return err
+	}
+	exists, err := p.pgDatabaseExists(container, decl.Database)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		// Catalog and custom services name their database after themselves.
+		return fmt.Errorf("database %s does not exist yet — `homelab up %s` first", decl.Database, decl.Database)
+	}
+	out, err := p.execPSQL(container, "postgres", "postgres",
+		"-c", fmt.Sprintf("SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname=%s", escLit(decl.Database)))
+	if err != nil {
+		return fmt.Errorf("finding the owner of database %s: %w", decl.Database, err)
+	}
+	owner := strings.TrimSpace(string(out))
+	if owner == "" {
+		return fmt.Errorf("finding the owner of database %s: no result", decl.Database)
+	}
+	// Resetting the owner's password here would hand svcName the owner's
+	// login: read-only access must name a role of its own.
+	if owner == decl.User {
+		return fmt.Errorf("read-only user %s for %s owns database %s; declare a role of its own", decl.User, svcName, decl.Database)
+	}
+
+	if err := p.ensureLoginRole(container, decl.User, password); err != nil {
+		return err
+	}
+	ro, db := escID(decl.User), escID(decl.Database)
+	sql := fmt.Sprintf("GRANT CONNECT ON DATABASE %s TO %s;\n"+
+		"GRANT USAGE ON SCHEMA public TO %s;\n"+
+		"GRANT SELECT ON ALL TABLES IN SCHEMA public TO %s;\n"+
+		"GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO %s;\n"+
+		"ALTER DEFAULT PRIVILEGES FOR ROLE %s IN SCHEMA public GRANT SELECT ON TABLES TO %s;\n",
+		db, ro, ro, ro, ro, escID(owner), ro)
+	if err := p.execSQLIn(container, decl.Database, sql); err != nil {
+		return fmt.Errorf("granting read-only access on %s to %s: %w", decl.Database, decl.User, err)
+	}
+	return nil
+}
+
+// deprovisionPostgresReadOnly drops a read-only role. Its grants and default
+// privileges live in the other service's database and block DROP ROLE, so
+// DROP OWNED BY clears them there first — it owns nothing, so nothing of
+// that database's data goes with it. A database already gone leaves only
+// the role; a role never created (the consumer never got past "up the owner
+// first") leaves nothing, and DROP OWNED BY would fail on it.
+func (p *Provisioner) deprovisionPostgresReadOnly(decl config.ServiceDBDecl) error {
+	container, err := p.Container(config.DBPostgres)
+	if err != nil {
+		return err
+	}
+	out, err := p.execPSQL(container, "postgres", "postgres",
+		"-c", fmt.Sprintf("SELECT 1 FROM pg_roles WHERE rolname=%s", escLit(decl.User)))
+	if err != nil {
+		return fmt.Errorf("checking for user %s: %w", decl.User, err)
+	}
+	if strings.TrimSpace(string(out)) == "" {
+		return nil
+	}
+	exists, err := p.pgDatabaseExists(container, decl.Database)
+	if err != nil {
+		return err
+	}
+	if exists {
+		if err := p.execSQLIn(container, decl.Database, fmt.Sprintf("DROP OWNED BY %s;", escID(decl.User))); err != nil {
+			return fmt.Errorf("revoking %s's access to %s: %w", decl.User, decl.Database, err)
+		}
+	}
+	if err := p.execSQL(config.DBPostgres, container, "postgres", fmt.Sprintf("DROP ROLE IF EXISTS %s;", escID(decl.User))); err != nil {
+		return fmt.Errorf("dropping role %s: %w", decl.User, err)
+	}
 	return nil
 }
 

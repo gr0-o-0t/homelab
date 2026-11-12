@@ -220,9 +220,11 @@ func bootstrapIfShared(ctx context.Context, root, name string) error {
 }
 
 // releaseDBDependencies gives back what a deleted service held on the shared
-// instances that would otherwise leak: its redis database numbers and its
-// Garage access key. Data stays — the bucket, like a postgres database, is
-// only removed by hand. Best effort: a stopped garage only means the key
+// instances that would otherwise leak: its redis database numbers, its
+// Garage access key and its read-only postgres roles on other services'
+// databases. Data stays — the bucket, like a postgres database, is only
+// removed by hand; the service's own postgres role is kept too, as before.
+// Best effort: a stopped garage or postgres only means the key or role
 // outlives the service, which is reported, not fatal.
 func releaseDBDependencies(ctx context.Context, root, name string) []error {
 	svcCfg, err := config.Load(config.ServiceConfigFile(root, name))
@@ -236,13 +238,14 @@ func releaseDBDependencies(ctx context.Context, root, name string) []error {
 	// Only the garage key needs the keyring and Docker; the redis numbers
 	// are a file here, released even when neither is available.
 	p := db.New(root, nil)
-	var garageErr error
+	var garageErr, dockerErr error
 	if sm, err := openSecrets(); err != nil {
 		garageErr = fmt.Errorf("opening keyring: %w", err)
 	} else {
 		p.SM = sm
 	}
 	if closeAPI, err := attachDocker(p); err != nil { // no Deployer: deleting never starts garage
+		dockerErr = err
 		garageErr = errors.Join(garageErr, err)
 	} else {
 		defer closeAPI()
@@ -252,6 +255,14 @@ func releaseDBDependencies(ctx context.Context, root, name string) []error {
 		entry := &svcDB[i]
 		switch entry.Type {
 		case config.DBRedis:
+		case config.DBPostgres:
+			if !entry.ReadOnly {
+				continue
+			}
+			if dockerErr != nil {
+				errs = append(errs, fmt.Errorf("read-only role %s for %s not dropped: %w", entry.User, name, dockerErr))
+				continue
+			}
 		case config.DBS3:
 			if garageErr == nil {
 				garageErr = p.EnsureRunning(ctx, entry.Type)
@@ -263,9 +274,13 @@ func releaseDBDependencies(ctx context.Context, root, name string) []error {
 		default:
 			continue
 		}
-		if err := p.Deprovision(ctx, entry.Type, name, entry.ServiceDBDecl); err != nil {
+		if err := deprovisionDB(p, ctx, entry.Type, name, entry.ServiceDBDecl); err != nil {
 			errs = append(errs, err)
 		}
 	}
 	return errs
 }
+
+// deprovisionDB is (*db.Provisioner).Deprovision; a var so tests can observe
+// what a delete releases without a database to run it against.
+var deprovisionDB = (*db.Provisioner).Deprovision
