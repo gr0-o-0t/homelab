@@ -436,14 +436,17 @@ func (e missingDatabaseError) Is(target error) bool { return target == ErrDataba
 // checkReadOnlyRole reports whether user exists, and refuses an existing
 // role that is not a plain login role: one with superuser, createrole,
 // createdb, replication or bypassrls, owning a database, a member of another
-// role, or owning a relation or schema in database (checked when dbExists).
-// Taking such a role over would reset another service's (or the admin's)
-// credential, and dropping it would destroy what it holds.
+// role, a role other roles are members of (a group role: granting it SELECT
+// would hand that read access to every member), or owning a relation or
+// schema in database (checked when dbExists). Taking such a role over would
+// reset another service's (or the admin's) credential, and dropping it would
+// destroy what it holds.
 func (p *Provisioner) checkReadOnlyRole(container, user, database string, dbExists bool) (bool, error) {
 	out, err := p.execPSQL(container, "postgres", "postgres", "-c", fmt.Sprintf(
 		"SELECT r.rolsuper OR r.rolcreaterole OR r.rolcreatedb OR r.rolreplication OR r.rolbypassrls, "+
 			"EXISTS (SELECT 1 FROM pg_database d WHERE d.datdba = r.oid), "+
-			"EXISTS (SELECT 1 FROM pg_auth_members m WHERE m.member = r.oid) "+
+			"EXISTS (SELECT 1 FROM pg_auth_members m WHERE m.member = r.oid), "+
+			"EXISTS (SELECT 1 FROM pg_auth_members m WHERE m.roleid = r.oid) "+
 			"FROM pg_roles r WHERE r.rolname=%s", escLit(user)))
 	if err != nil {
 		return false, fmt.Errorf("checking role %s: %w", user, err)
@@ -453,7 +456,7 @@ func (p *Provisioner) checkReadOnlyRole(container, user, database string, dbExis
 		return false, nil
 	}
 	cols := strings.Split(row, "|")
-	if len(cols) != 3 {
+	if len(cols) != 4 {
 		return true, fmt.Errorf("checking role %s: unexpected result %q", user, row)
 	}
 	var why []string
@@ -465,6 +468,9 @@ func (p *Provisioner) checkReadOnlyRole(container, user, database string, dbExis
 	}
 	if cols[2] != "f" {
 		why = append(why, "is a member of another role")
+	}
+	if cols[3] != "f" {
+		why = append(why, "has members: it is a group role")
 	}
 	if dbExists {
 		out, err := p.execPSQL(container, database, "postgres", "-c", fmt.Sprintf(

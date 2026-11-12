@@ -432,6 +432,8 @@ func (d *TypedDBDecl) validateReadOnly() error {
 		return fmt.Errorf("%s: readonly needs database (the other service's database)", where)
 	case d.User == "":
 		return fmt.Errorf("%s: readonly needs user (the read-only role to create)", where)
+	case strings.HasPrefix(d.User, "pg_"):
+		return fmt.Errorf("%s: readonly user %q starts with pg_, which postgres reserves for its predefined roles", where, d.User)
 	case d.Superuser:
 		return fmt.Errorf("%s: readonly cannot be combined with superuser", where)
 	case len(d.Extensions) > 0:

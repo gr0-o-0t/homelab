@@ -616,7 +616,7 @@ var roDecl = config.ServiceDBDecl{Database: "taash", User: "taash_ro", ReadOnly:
 type pgState struct {
 	dbExists bool
 	owner    string // pg_database.datdba of taash
-	role     string // attribute row "privileged|ownsdb|member" ("f|f|f" plain); "" = no such role
+	role     string // attribute row "privileged|ownsdb|member|hasmembers" ("f|f|f|f" plain); "" = no such role
 	ownsInDB string // whether the role owns a relation or schema in taash: "f" or "t"
 }
 
@@ -664,7 +664,7 @@ func TestProvision_ReadOnlyGrants(t *testing.T) {
 		verb  string
 	}{
 		{"new role", pgState{dbExists: true, owner: "taash"}, "CREATE"},
-		{"existing plain role re-synced", pgState{dbExists: true, owner: "taash", role: "f|f|f", ownsInDB: "f"}, "ALTER"},
+		{"existing plain role re-synced", pgState{dbExists: true, owner: "taash", role: "f|f|f|f", ownsInDB: "f"}, "ALTER"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fc := tc.state.commander()
@@ -737,15 +737,17 @@ func TestProvision_ReadOnlyRefusesNonPlainRole(t *testing.T) {
 		state      pgState
 		why        string
 	}{
-		{"superuser", "postgres", pgState{dbExists: true, owner: "taash", role: "t|t|f", ownsInDB: "t"},
+		{"superuser", "postgres", pgState{dbExists: true, owner: "taash", role: "t|t|f|f", ownsInDB: "t"},
 			"role postgres already exists and is not a plain login role (has superuser, createrole, createdb, replication or bypassrls, owns a database, owns tables or schemas in taash)"},
-		{"target database owner", "taash", pgState{dbExists: true, owner: "taash", role: "f|t|f", ownsInDB: "t"},
+		{"target database owner", "taash", pgState{dbExists: true, owner: "taash", role: "f|t|f|f", ownsInDB: "t"},
 			"role taash already exists and is not a plain login role (owns a database, owns tables or schemas in taash)"},
-		{"another service's owner role", "immich", pgState{dbExists: true, owner: "taash", role: "f|t|f", ownsInDB: "f"},
+		{"another service's owner role", "immich", pgState{dbExists: true, owner: "taash", role: "f|t|f|f", ownsInDB: "f"},
 			"role immich already exists and is not a plain login role (owns a database)"},
-		{"member of a role", "taash_ro", pgState{dbExists: true, owner: "taash", role: "f|f|t", ownsInDB: "f"},
+		{"member of a role", "taash_ro", pgState{dbExists: true, owner: "taash", role: "f|f|t|f", ownsInDB: "f"},
 			"role taash_ro already exists and is not a plain login role (is a member of another role)"},
-		{"owns a table in the database", "taash_ro", pgState{dbExists: true, owner: "taash", role: "f|f|f", ownsInDB: "t"},
+		{"group role", "taash_ro", pgState{dbExists: true, owner: "taash", role: "f|f|f|t", ownsInDB: "f"},
+			"role taash_ro already exists and is not a plain login role (has members: it is a group role)"},
+		{"owns a table in the database", "taash_ro", pgState{dbExists: true, owner: "taash", role: "f|f|f|f", ownsInDB: "t"},
 			"role taash_ro already exists and is not a plain login role (owns tables or schemas in taash)"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -773,7 +775,7 @@ func TestProvision_ReadOnlyRefusesNonPlainRole(t *testing.T) {
 
 func TestDeprovision_ReadOnly(t *testing.T) {
 	t.Run("drops what the role holds in the database, then the role", func(t *testing.T) {
-		fc := pgState{dbExists: true, role: "f|f|f", ownsInDB: "f"}.commander()
+		fc := pgState{dbExists: true, role: "f|f|f|f", ownsInDB: "f"}.commander()
 		p := &Provisioner{ContainerFor: fixedNames, RC: fc}
 		if err := p.Deprovision(context.Background(), config.DBPostgres, "grafana", roDecl); err != nil {
 			t.Fatal(err)
@@ -789,7 +791,7 @@ func TestDeprovision_ReadOnly(t *testing.T) {
 		}
 	})
 	t.Run("database gone: only the role", func(t *testing.T) {
-		fc := pgState{role: "f|f|f"}.commander()
+		fc := pgState{role: "f|f|f|f"}.commander()
 		p := &Provisioner{ContainerFor: fixedNames, RC: fc}
 		if err := p.Deprovision(context.Background(), config.DBPostgres, "grafana", roDecl); err != nil {
 			t.Fatal(err)
@@ -810,13 +812,24 @@ func TestDeprovision_ReadOnly(t *testing.T) {
 		}
 	})
 	t.Run("a role that is not plain is left alone", func(t *testing.T) {
-		fc := pgState{dbExists: true, role: "f|t|f", ownsInDB: "t"}.commander()
+		fc := pgState{dbExists: true, role: "f|t|f|f", ownsInDB: "t"}.commander()
 		p := &Provisioner{ContainerFor: fixedNames, RC: fc}
 		decl := roDecl
 		decl.User = "taash"
 		err := p.Deprovision(context.Background(), config.DBPostgres, "grafana", decl)
 		if err == nil || !strings.Contains(err.Error(), "left alone") {
 			t.Fatalf("err = %v, want a left-alone error", err)
+		}
+		if len(fc.runCalls) != 0 {
+			t.Errorf("no DROP may run:\n%s", allSQL(fc))
+		}
+	})
+	t.Run("a group role is left alone", func(t *testing.T) {
+		fc := pgState{dbExists: true, role: "f|f|f|t", ownsInDB: "f"}.commander()
+		p := &Provisioner{ContainerFor: fixedNames, RC: fc}
+		err := p.Deprovision(context.Background(), config.DBPostgres, "grafana", roDecl)
+		if err == nil || !strings.Contains(err.Error(), "group role") || !strings.Contains(err.Error(), "left alone") {
+			t.Fatalf("err = %v, want a left-alone group-role error", err)
 		}
 		if len(fc.runCalls) != 0 {
 			t.Errorf("no DROP may run:\n%s", allSQL(fc))
