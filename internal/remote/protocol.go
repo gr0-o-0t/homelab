@@ -40,6 +40,11 @@ var ReadOnly = map[string]bool{
 	"backup-list": true,
 }
 
+// LockedSub are the canonical paths of subcommands that take the lock
+// although their top-level command does not: `images load` writes to the
+// engine, while `images` only reads.
+var LockedSub = map[string]bool{"images load": true}
+
 // Detached are the commands (canonical top-level names) that run to
 // completion when their client disconnects: stopping a backup midway leaves
 // a service scaled to zero, and stopping a restore can kill it in the
@@ -252,5 +257,5 @@ func Locks(path []string) bool {
 	if len(path) == 0 || ReadOnly[strings.Join(path, " ")] {
 		return false
 	}
-	return Mutating[path[0]]
+	return Mutating[path[0]] || LockedSub[strings.Join(path, " ")]
 }

@@ -41,6 +41,8 @@ var parityExcludedFlags = map[string]string{
 	"join --secret-stdin":  "for scripts; the interactive action prompts for the secret",
 	"login --endpoint":     "the interactive action prompts for it, offering the tailnet default",
 	"login --secret-stdin": "for scripts; the interactive action prompts for the secret",
+	"images --all":         "with --json only: the PC reads every service's images to ship local ones; front ends show one service's table",
+	"images --group":       "with --json only: see images --all",
 	"backup --fetch":       "copies a backup to a directory on this PC named in a shell; front ends act on the leader's backups",
 }
 

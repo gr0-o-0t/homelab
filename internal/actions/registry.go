@@ -188,7 +188,7 @@ func build() []Action {
 			Args: named("config"), Commands: []string{"config"}},
 		Action{ID: "service.images", Label: "Images", Group: GroupInspect, Icon: "box", Scope: Service,
 			Help: "Images the stack deploys", Inputs: []Input{inQuiet}, Args: namedBools("images", "quiet"),
-			Commands: []string{"images", "images --quiet"}},
+			Commands: []string{"images", "images --quiet", "images --json"}},
 		Action{ID: "service.status", Label: "Status", Group: GroupInspect, Icon: "info", Scope: Service,
 			Help: "Containers, ports and addresses", Args: named("status"), Commands: []string{"status"}},
 	)

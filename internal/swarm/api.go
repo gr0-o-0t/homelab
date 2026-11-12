@@ -12,6 +12,7 @@ import (
 	"github.com/docker/docker/api/types/swarm"
 	"github.com/docker/docker/api/types/system"
 	"github.com/docker/docker/api/types/volume"
+	"github.com/docker/docker/client"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
@@ -44,6 +45,9 @@ type API interface {
 	// still part of client.APIClient.
 	ImageInspectWithRaw(ctx context.Context, image string) (image.InspectResponse, []byte, error)
 	ImagePull(ctx context.Context, ref string, options image.PullOptions) (io.ReadCloser, error)
+	// ImageLoad reads a `docker save` tar into the engine (a custom
+	// service's locally built image, shipped to the leader).
+	ImageLoad(ctx context.Context, input io.Reader, opts ...client.ImageLoadOption) (image.LoadResponse, error)
 	SwarmInit(ctx context.Context, req swarm.InitRequest) (string, error)
 	SwarmJoin(ctx context.Context, req swarm.JoinRequest) error
 	SwarmInspect(ctx context.Context) (swarm.Swarm, error)

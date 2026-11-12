@@ -24,6 +24,7 @@ import (
 	"github.com/docker/docker/api/types/swarm"
 	"github.com/docker/docker/api/types/system"
 	"github.com/docker/docker/api/types/volume"
+	"github.com/docker/docker/client"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 
 	hswarm "github.com/groot/homelab/internal/swarm"
@@ -40,36 +41,38 @@ type Fake struct {
 	EventsCh chan events.Message
 	ErrCh    chan error
 
-	mu         sync.Mutex
-	calls      []string
-	nodes      []swarm.Node
-	tasks      []swarm.Task
-	volumes    []*volume.Volume
-	images     map[string]image.InspectResponse
-	containers []container.Summary
-	swarm      swarm.Swarm
-	services   map[string]swarm.Service
-	networks   []network.Summary
-	secrets    []swarm.Secret
-	configs    []swarm.Config
-	seq        int
-	failUpdate map[string]error // service ID → error for its next ServiceUpdate
-	info       system.Info
-	inits      []swarm.InitRequest
-	joins      []swarm.JoinRequest
-	execs      []*Exec
-	execExit   int
-	created    []*CreatedContainer
-	pulls      map[string]string // ref → ImagePull's JSON stream
-	stallPulls map[string]bool   // ref → ImagePull's stream never ends until closed
-	leaves     int
-	copies     []Copy
-	restartErr error
-	copyLimit  int64
-	removed    []Removed
-	startErr   map[string]error // image → ContainerStart error
-	crash      map[string]bool  // image → crash-looping once started
-	queries    []bool           // QueryRegistry of each ServiceCreate/Update, in order
+	mu          sync.Mutex
+	calls       []string
+	nodes       []swarm.Node
+	tasks       []swarm.Task
+	volumes     []*volume.Volume
+	images      map[string]image.InspectResponse
+	loadResults map[string]image.InspectResponse // applied to images by ImageLoad
+	loaded      []byte
+	containers  []container.Summary
+	swarm       swarm.Swarm
+	services    map[string]swarm.Service
+	networks    []network.Summary
+	secrets     []swarm.Secret
+	configs     []swarm.Config
+	seq         int
+	failUpdate  map[string]error // service ID → error for its next ServiceUpdate
+	info        system.Info
+	inits       []swarm.InitRequest
+	joins       []swarm.JoinRequest
+	execs       []*Exec
+	execExit    int
+	created     []*CreatedContainer
+	pulls       map[string]string // ref → ImagePull's JSON stream
+	stallPulls  map[string]bool   // ref → ImagePull's stream never ends until closed
+	leaves      int
+	copies      []Copy
+	restartErr  error
+	copyLimit   int64
+	removed     []Removed
+	startErr    map[string]error // image → ContainerStart error
+	crash       map[string]bool  // image → crash-looping once started
+	queries     []bool           // QueryRegistry of each ServiceCreate/Update, in order
 }
 
 // New returns an empty Fake.
@@ -569,6 +572,36 @@ func (f *Fake) ImageInspectWithRaw(_ context.Context, ref string) (image.Inspect
 		return image.InspectResponse{}, nil, fmt.Errorf("swarmtest: image %q not found: %w", ref, errdefs.ErrNotFound)
 	}
 	return img, []byte("{}"), nil
+}
+
+// SetLoadResult makes the next ImageLoad leave ref on the engine as img.
+func (f *Fake) SetLoadResult(ref string, img image.InspectResponse) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.loadResults == nil {
+		f.loadResults = map[string]image.InspectResponse{}
+	}
+	f.loadResults[ref] = img
+}
+
+// Loaded is what ImageLoad has read so far, across calls.
+func (f *Fake) Loaded() []byte {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.loaded)
+}
+
+func (f *Fake) ImageLoad(_ context.Context, input io.Reader, _ ...client.ImageLoadOption) (image.LoadResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rec("ImageLoad", "")
+	data, err := io.ReadAll(input)
+	if err != nil {
+		return image.LoadResponse{}, err
+	}
+	f.loaded = append(f.loaded, data...)
+	maps.Copy(f.images, f.loadResults)
+	return image.LoadResponse{Body: io.NopCloser(strings.NewReader(`{"stream":"Loaded"}`)), JSON: true}, nil
 }
 
 func (f *Fake) ImagePull(_ context.Context, ref string, _ image.PullOptions) (io.ReadCloser, error) {
