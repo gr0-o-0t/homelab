@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"time"
 
@@ -50,6 +51,14 @@ func ensureDBDependencies(ctx context.Context, root, name string) error {
 	}
 	if len(svcDB) == 0 {
 		return nil
+	}
+	for i := range svcDB {
+		if entry := &svcDB[i]; entry.Type == config.DBPostgres && entry.ReadOnly {
+			if other := readOnlyUserDeclarer(root, name, entry.User); other != "" {
+				return fmt.Errorf("read-only user %q is already declared by %s: give %s's declaration a user of its own",
+					entry.User, other, name)
+			}
+		}
 	}
 
 	// Sorted so the startup order (and any output) is deterministic.
@@ -263,6 +272,10 @@ func releaseDBDependencies(ctx context.Context, root, name string) []error {
 			if !entry.ReadOnly {
 				continue
 			}
+			if other := readOnlyUserDeclarer(root, name, entry.User); other != "" {
+				fmt.Printf("  read-only role %s kept: %s declares it too\n", entry.User, other)
+				continue
+			}
 			if dockerErr != nil {
 				errs = append(errs, fmt.Errorf("read-only role %s for %s not dropped: %w", entry.User, name, dockerErr))
 				continue
@@ -283,6 +296,37 @@ func releaseDBDependencies(ctx context.Context, root, name string) []error {
 		}
 	}
 	return errs
+}
+
+// readOnlyUserDeclarer is the first installed service other than name whose
+// config.yaml declares a read-only postgres user named user, "" when none
+// does. A read-only role belongs to one consumer: a second one declaring it
+// would reset its password, and deleting either would drop it under the
+// other. An unreadable config.yaml is skipped: it declares nothing usable.
+func readOnlyUserDeclarer(root, name, user string) string {
+	des, err := os.ReadDir(filepath.Join(root, "services"))
+	if err != nil {
+		return ""
+	}
+	for _, de := range des { // sorted by name
+		if !de.IsDir() || de.Name() == name {
+			continue
+		}
+		cfg, err := config.Load(config.ServiceConfigFile(root, de.Name()))
+		if err != nil || cfg == nil || cfg.Databases.Kind == 0 {
+			continue
+		}
+		decls, err := cfg.ServiceDatabases()
+		if err != nil {
+			continue
+		}
+		for _, d := range decls {
+			if d.Type == config.DBPostgres && d.ReadOnly && d.User == user {
+				return de.Name()
+			}
+		}
+	}
+	return ""
 }
 
 // deprovisionDB is (*db.Provisioner).Deprovision; a var so tests can observe

@@ -88,3 +88,52 @@ func TestDelete_DropsReadOnlyRole(t *testing.T) {
 	assert.Equal(t, "taash_ro", dropped[0].User)
 	assert.True(t, dropped[0].ReadOnly)
 }
+
+// writeROConsumer installs svc with a read-only declaration of user on taash.
+func writeROConsumer(t *testing.T, root, svc, user string) {
+	t.Helper()
+	dir := filepath.Join(root, "services", svc)
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(`databases:
+  - postgres:
+      database: taash
+      user: `+user+`
+      readonly: true
+`), 0o644))
+}
+
+// Two consumers declaring one read-only user would share a role (and reset
+// each other's password): the second is refused before anything runs.
+func TestEnsureDBDependencies_RefusesReadOnlyUserOfAnotherService(t *testing.T) {
+	root := t.TempDir()
+	writeROConsumer(t, root, "grafana", "taash_ro")
+	writeROConsumer(t, root, "metabase", "taash_ro")
+
+	oldAPI, oldSecrets := newSwarmAPI, openSecrets
+	t.Cleanup(func() { newSwarmAPI, openSecrets = oldAPI, oldSecrets })
+	newSwarmAPI = func() (swarm.API, error) { t.Fatal("docker reached"); return nil, nil }
+
+	err := ensureDBDependencies(context.Background(), root, "metabase")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `read-only user "taash_ro" is already declared by grafana`)
+}
+
+// Deleting one of two consumers that (from before the refusal) declare the
+// same read-only user keeps the role for the other.
+func TestDelete_KeepsReadOnlyRoleAnotherServiceDeclares(t *testing.T) {
+	root := t.TempDir()
+	writeROConsumer(t, root, "grafana", "taash_ro")
+	writeROConsumer(t, root, "metabase", "taash_ro")
+
+	oldAPI, oldSecrets, oldDeprov := newSwarmAPI, openSecrets, deprovisionDB
+	t.Cleanup(func() { newSwarmAPI, openSecrets, deprovisionDB = oldAPI, oldSecrets, oldDeprov })
+	newSwarmAPI = func() (swarm.API, error) { return swarmtest.New(), nil }
+	sm := secrets.NewForTest(keyring.NewArrayKeyring(nil))
+	openSecrets = func() (*secrets.Manager, error) { return sm, nil }
+	deprovisionDB = func(*db.Provisioner, context.Context, config.DBType, string, config.ServiceDBDecl) error {
+		t.Error("the role another service declares was dropped")
+		return nil
+	}
+
+	require.Empty(t, releaseDBDependencies(context.Background(), root, "metabase"))
+}
