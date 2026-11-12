@@ -412,9 +412,11 @@ func (e *Engine) restoreDatabase(d DatabaseRecord, path string) error {
 	case config.DBPostgres:
 		// --clean --if-exists drops existing objects first so a restore over a
 		// populated database replaces it instead of colliding with it.
+		// --no-privileges: the dump's grants name roles a fresh cluster may
+		// not have (a read-only consumer's); the consumer's next up re-grants.
 		if err := e.Exec.RunFrom(f, "docker", "exec", "-i", container,
 			"pg_restore", "-U", "postgres", "-d", d.Database,
-			"--clean", "--if-exists", "--no-owner", "--role="+d.User); err != nil {
+			"--clean", "--if-exists", "--no-owner", "--no-privileges", "--role="+d.User); err != nil {
 			return fmt.Errorf("restoring postgres database %q: %w", d.Database, err)
 		}
 	case config.DBMariaDB:

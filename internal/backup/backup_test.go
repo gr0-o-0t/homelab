@@ -268,6 +268,7 @@ func TestRestore_PostgresUsesCleanRestore(t *testing.T) {
 	assert.Contains(t, line, "--clean")
 	assert.Contains(t, line, "--if-exists", "a restore into a fresh database must not fail on missing objects")
 	assert.Contains(t, line, "--role=appuser", "objects should end up owned by the service role")
+	assert.Contains(t, line, "--no-privileges", "grants to roles a fresh cluster lacks (read-only consumers) must not fail the restore")
 	assert.Contains(t, line, "exec -i", "the dump is piped in")
 	assert.True(t, c.Stdin, "dump must stream from the file")
 }

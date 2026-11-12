@@ -194,6 +194,8 @@ scaled to zero for its own snapshot unless `--live` is given; `backup` and
 Secrets are deliberately **not** in backups; they stay in the leader's vault.
 After restoring onto a new cluster run `homelab setup <service>`, which
 re-enters them and re-syncs the database role password (`ALTER USER … PASSWORD`).
+A postgres restore leaves out the dump's grants (`--no-privileges`): after a
+restore, `homelab up <consumer>` re-grants a consumer's read-only access.
 
 Redis is never dumped: in this catalog it is only ever a cache or job queue, and
 a stale restored queue is worse than an empty one.
