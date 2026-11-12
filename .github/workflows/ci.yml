@@ -1,13 +1,15 @@
 name: CI
 
+# Branch pushes and pull requests only. A release tag points at a commit the
+# branch push already tested, and release.yml handles the tag: triggering on
+# tags too ran CI twice for `git push origin main <tag>`.
 on:
   push:
     branches: ["**"]
-    tags: ["v*.*.*"]
   pull_request:
     branches: ["**"]
 
-# Keep this in lockstep with the local toolchain: `make lint-full` runs whatever
+# Keep this in lockstep with the local toolchain: `make lint` runs whatever
 # golangci-lint is on PATH, so a drifting version means CI and a developer's
 # machine disagree about what passes.
 env:
