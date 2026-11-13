@@ -39,9 +39,11 @@ jobs:
           cache: true
 
       # The default build includes the desktop GUI (giu), which needs cgo and
-      # the OpenGL/X11 development headers.
-      - name: Install GUI build dependencies
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libgl1-mesa-dev xorg-dev
+      # the OpenGL/X11 development headers (cached .debs, as in ci.yml).
+      - uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: libgl1-mesa-dev xorg-dev
+          version: "1.0"
 
       # amd64 with the GUI, amd64 headless and arm64 headless, each packed as
       # dist/homelab_<tag>_linux_<arch>.tar.gz, plus dist/SHA256SUMS.
@@ -85,6 +87,10 @@ jobs:
           context: .
           platforms: linux/amd64,linux/arm64
           build-args: VERSION=${{ github.ref_name }}
+          # Layer cache in the GitHub Actions cache: the base image and the
+          # tzdata layer are reused between releases.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
           push: true
           tags: ${{ steps.tags.outputs.tags }}
 
