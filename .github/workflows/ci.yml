@@ -63,7 +63,7 @@ jobs:
 
       # `make ci` builds the GUI binary last (./homelab): hand it to the
       # compatibility job.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: homelab-gui
           path: homelab
