@@ -28,7 +28,7 @@ unpacked, and each database is restored with --clean, dropping existing objects.
 Running services are scaled down first and wait for their containers to stop.
 
 The database and its role must already exist — run 'homelab setup <service>'
-first on a fresh machine. That also re-syncs the role password with the keyring,
+first on a fresh machine. That also re-syncs the role password with the leader's vault,
 which is why secrets are not carried in the backup.
 
 A volume of the service missing on this node is refused, so that data is never

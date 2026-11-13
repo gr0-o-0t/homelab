@@ -3,6 +3,30 @@
 Notable changes per release. The release workflow publishes the section
 matching the pushed tag as the GitHub release notes.
 
+## v0.5.6 — 2026-11-13
+
+Patch release.
+
+### Docs
+
+- README: install from the release tarball (checked against `SHA256SUMS`) and
+  keep current with `homelab update` / `homelab upgrade`, instead of a clone of
+  a placeholder URL; a Firewall prerequisite (Swarm ports on `tailscale0`, with
+  the `ufw` lines); the quick-start order that works; the Included-services
+  table regenerated from the catalog (real subdomains and purposes; minero
+  left out, it is unsupported on Swarm; shared providers marked).
+- Cloudflare guide: how to create the tunnel, where `CF_TUNNEL_TOKEN` comes
+  from, and that every public hostname's service is `HTTP` `homelab-edge:80`.
+- Tailscale guide: a complete ACL policy that also allows the Swarm ports
+  between the cluster hosts.
+- Adding a service: the port grammar (`ssh:22` is a subdomain, not a named
+  port; the `--ports=` names) and the compose keys Swarm ignores.
+- Secrets live in the leader's vault: the wording in `restore`'s help,
+  `setup`'s output and `doctor`'s checks no longer says "keyring"; "minis" in
+  the docs is "the leader (core node)".
+- `docs/network-extensions-plan.md` is marked obsolete; the service-testing
+  guide and CONTRIBUTING drop the Tor/I2P/Ygg steps and the `caddy.conf` files.
+
 ## v0.5.5 — 2026-11-13
 
 Patch release.

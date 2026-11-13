@@ -14,7 +14,7 @@ homelab new paperless --container paperless-ngx --port 8000
 
 Like every command but `init`/`join`/`login`/`edit`, `new` runs on the leader
 agent: it creates `services/paperless/` with boilerplate files in the leader's
-state dir (`/var/lib/homelab/state` in the `homelab-agent` volume on minis).
+state dir (`/var/lib/homelab/state` in the `homelab-agent` volume on the leader).
 Edit the generated files, then follow the steps below to test and optionally
 contribute to the catalog.
 
@@ -27,7 +27,7 @@ contribute to the catalog.
 > services, with no secret in a spec); an invalid one is refused and the
 > previous content kept. `exposure.yaml` is owned by `homelab enable`/`disable`.
 
-> **Port config format**: The scaffolded `config.yaml` uses the new list-of-strings format. For a single HTTP port, use a bare port number (e.g. `- 8000`). For services with multiple ports, use named entries (e.g. `- ssh:22`) or mapped entries (e.g. `- 22:22`). See below for examples.
+> **Port config format**: `config.yaml` lists the ports to route as strings: a bare number for a single HTTP port (`- 8000`), `name:port` for a subdomain (`- web:8000`), `listen:port/proto` for a raw port (`- 22:2222/tcp`). See the port grammar below.
 
 ---
 
@@ -63,10 +63,25 @@ Two rules:
 
 It runs on Swarm, so `privileged`, `devices`, `network_mode`, `env_file` and a
 `build:` without an `image:` are refused. A container with a data volume, a
-host path or the docker socket is pinned to minis; a stateless one prefers a
+host path or the docker socket is pinned to the leader (core node); a stateless one prefers a
 worker PC. Override per container in `config.yaml` with `placement:`
 (`core`, `worker`, `any`), and list re-creatable volumes (model caches) under
 `cache_volumes:` so they do not pin.
+
+**What Swarm honours.** Only the keys the translator maps are deployed:
+`image`, `entrypoint`, `command`, `environment` (delivered through the Swarm
+secret), `volumes` and `tmpfs` (without options), `networks` (and
+`container_name` as an alias), `labels`, `hostname`, `working_dir`, `user`,
+`group_add`, `tty`, `stdin_open`, `read_only`, `init`, `stop_signal`,
+`stop_grace_period`, `healthcheck`, `extra_hosts`, `sysctls`, `cap_add`,
+`cap_drop`, `ulimits`, `security_opt: no-new-privileges`, and `restart`.
+Everything else in the compose file is **ignored, without an error**, notably `ports:`
+(publish through `config.yaml`'s `ports:` and `homelab enable` instead — nothing is
+published on a host), `deploy.resources` / `mem_limit` / `cpus`, `depends_on`
+(start order is not enforced: make the app retry its connections),
+`shm_size`, `dns` / `dns_search`, `logging`, `expose`, `pid`, `ipc`, and other
+`security_opt` values. If a service needs one of those, it will not work as it
+did under plain Compose.
 
 ```yaml
 networks:
@@ -160,10 +175,21 @@ ports:
   - "{{.Port}}"
 ```
 
-> **Port format reference**:
-> - `- 8000` — bare port number: `<service>.<home>.<domain>` → container :8000
-> - `- web:8000` — a subdomain: `web.<home>.<domain>` → container :8000 (it replaces the service name)
-> - `- 22:2222/tcp` — a listen port: raw TCP on the tailnet, `:22` → container :2222 (caddy-l4)
+> **Port grammar**: one list entry per exposed port. The token left of the
+> colon decides the form:
+>
+> | Entry | Meaning | `--ports=` name |
+> |---|---|---|
+> | `8000` | bare port: `<service>.<home>.<domain>` → container :8000 | `default` |
+> | `web:8000` | a **subdomain**: `web.<home>.<domain>` → container :8000; it *replaces* the service name | `web` |
+> | `22:2222/tcp` | all digits = a **listen port**: raw TCP on the tailnet node, `:22` → container :2222 (caddy-l4) | `22` |
+>
+> `ssh:22` is therefore a subdomain (`ssh.<home>.<domain>` → :22, over HTTPS),
+> **not** a named raw port; for raw SSH write `22:22/tcp`. A raw port is
+> tailnet-only, unique per protocol across the cluster, and both tcp and udp
+> when the protocol suffix is left off, so declare `/tcp` unless you need udp.
+> `homelab enable <service> --ports=web,22` then routes only those names;
+> `homelab status <service>` lists each declared port.
 
 Run the interactive setup wizard to configure values:
 

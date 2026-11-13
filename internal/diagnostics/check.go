@@ -86,11 +86,11 @@ func RunConfigChecks(cfgFile string) CheckGroup {
 		isSet := sm != nil && sm.IsSet("", k)
 		if e.Required && !isSet {
 			results = append(results, CheckResult{
-				Name: k, Status: StatusFail, Message: k + " is set in keyring",
+				Name: k, Status: StatusFail, Message: k + " is set",
 			})
 		} else if e.Required {
 			results = append(results, CheckResult{
-				Name: k, Status: StatusPass, Message: k + " is set in keyring",
+				Name: k, Status: StatusPass, Message: k + " is set",
 			})
 		}
 	}
@@ -191,11 +191,11 @@ func RunServiceConfigChecks(dir, name string) CheckGroup {
 				isSet := sm != nil && sm.IsSet(name, k)
 				if e.Required && !isSet {
 					results = append(results, CheckResult{
-						Name: k, Status: StatusFail, Message: k + " is set in keyring",
+						Name: k, Status: StatusFail, Message: k + " is set",
 					})
 				} else if e.Required {
 					results = append(results, CheckResult{
-						Name: k, Status: StatusPass, Message: k + " is set in keyring",
+						Name: k, Status: StatusPass, Message: k + " is set",
 					})
 				}
 			}

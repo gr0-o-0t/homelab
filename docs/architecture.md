@@ -3,14 +3,14 @@
 ## Overview
 
 homelab runs on Docker Swarm with one `homelab` agent container per PC. The
-Swarm manager (minis) runs the **leader** agent, which holds all state and is
+Swarm manager (the core node) runs the **leader** agent, which holds all state and is
 the network edge: Caddy runs inside it, serving on its own Tailscale node. The
 CLI on any PC forwards its commands to the leader over the tailnet.
 
 ```
 any PC:  homelab (CLI) ──tailnet, cluster-secret auth──▶ agent API (:7443)
                                                          │
-minis    [docker: swarm manager, node label homelab.role=core]
+leader    [docker: swarm manager, node label homelab.role=core]
          └─ homelab agent (leader)  ◀────────────────────┘
               ├─ tsnet node "homelab"  → owns *.home.<domain> (DNS A → its 100.x)
               ├─ embedded Caddy + caddy-l4 (:443 sites, raw ports, DNS-01 wildcard)
@@ -30,14 +30,14 @@ Tailscale IPv4 as advertise and data-path address; `homelab init` and
 
 ## Key design decisions
 
-### 1. One agent per PC, minis as the single manager
+### 1. One agent per PC, the leader as the single manager
 
-`homelab init` on minis runs `docker swarm init` on its tailnet IP, generates
+`homelab init` on the first PC runs `docker swarm init` on its tailnet IP, generates
 the cluster secret and starts the leader agent (`homelab-agent` container,
 restart `unless-stopped`, docker socket mounted, state in the `homelab-agent`
 volume). `homelab join` on another PC fetches a worker join token from the
 leader, joins Swarm on its own tailnet IP and starts a worker agent. `homelab
-login` makes a PC a client only. There is no HA: minis holds every piece of
+login` makes a PC a client only. There is no HA: the leader holds every piece of
 state, by design.
 
 The leader, at start: creates the overlay, starts the edge, points the
@@ -82,7 +82,7 @@ use a stack-local network marked `internal: true`.
 
 Placement is decided per container. A container with a data volume, a host
 bind path, the docker socket, or a shared-database provider role is pinned to
-`node.labels.homelab.role == core` (minis). Stateless containers prefer
+`node.labels.homelab.role == core` (the core node). Stateless containers prefer
 workers: Swarm has no soft affinity, so the constraint is `role == worker`
 while any worker is Ready and none otherwise; the rebalancer force-updates
 those services when a worker returns. A service's `config.yaml` can override
@@ -123,7 +123,7 @@ would leave Tailscale and become publicly routed — defeating the entire point.
 ### 9. Cloudflare Tunnel (optional public access)
 
 For services that need to be publicly reachable, cloudflared runs as a Swarm
-service pinned to minis and points at the leader's plain-HTTP listener on the
+service pinned to the core node and points at the leader's plain-HTTP listener on the
 overlay (`homelab-edge:80`):
 
 - Configure `CF_TUNNEL_TOKEN` and `CF_TUNNEL_NAME` via `homelab setup`
@@ -159,7 +159,7 @@ exposure.yaml plus the sites file.
 ### 11. Backups
 
 Backups run on the leader, which can snapshot every data volume because
-placement keeps them all on minis. They land in the `homelab-backups` volume;
+placement keeps them all on the leader. They land in the `homelab-backups` volume;
 `homelab backup --fetch <name> <dir>` streams one to the PC running the CLI.
 Each service is scaled to zero for its snapshot unless `--live` is given.
 
@@ -185,7 +185,7 @@ Client (anywhere on internet)
   └─► DNS: immich.example.com
         └─► Cloudflare: proxied CNAME → <tunnel>.cfargotunnel.com
               └─► Cloudflare Edge → encrypted tunnel
-                    └─► cloudflared (Swarm task on minis)
+                    └─► cloudflared (Swarm task on the core node)
                           └─► home-services overlay → homelab-edge:80
                                 └─► Caddy inside the leader agent
                                       └─► reverse_proxy immich:2283

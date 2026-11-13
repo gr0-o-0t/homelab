@@ -6,7 +6,7 @@ Thank you for your interest in contributing! This project is in active developme
 
 1. **Test services**: Deploy services from the catalog, verify they work on each network layer, and submit a PR updating the [Service Testing Status](docs/service-testing.md) table. Every tested service helps the community!
 2. **Add new services**: Follow the [service addition guide](docs/adding-a-service.md)
-3. **Report bugs**: Open issues with detailed reproduction steps and logs — include the service name, network layer (tailnet/CF/Tor/I2P/Ygg), and relevant output from `homelab logs` and `homelab doctor`
+3. **Report bugs**: Open issues with detailed reproduction steps and logs — include the service name, network layer (tailnet/CF), and relevant output from `homelab logs` and `homelab doctor`
 4. **Improve documentation**: Fix typos, clarify instructions, add examples
 5. **Submit PRs**: Bug fixes, new features, and improvements are welcome
 
@@ -14,11 +14,11 @@ Thank you for your interest in contributing! This project is in active developme
 
 ```bash
 # Clone the repository
-git clone https://github.com/you/homelab
+git clone https://github.com/gr0-o-0t/homelab
 cd homelab
 
 # Build and install locally
-make install
+make build-headless make installmake install make install   # or `make build` for the GUI
 
 # Run tests
 make test
@@ -33,7 +33,7 @@ make catalog
 ## Code style
 
 - Follow existing patterns in the codebase
-- Run `go vet` and `golint` before committing
+- Run `make lint` (golangci-lint) before committing; `make ci` runs lint, race tests and both builds
 - Add tests for new functionality
 - Keep PRs focused and well-described
 
@@ -44,9 +44,9 @@ See [docs/adding-a-service.md](docs/adding-a-service.md) for step-by-step instru
 ### Service requirements
 
 1. **Use official images**: Prefer official Docker images from the upstream project
-2. **Network isolation**: Main container on `home-services`, databases/workers on `internal: true` network
-3. **Configuration schema**: Use `config.yaml` with `vars` (non-secrets) and `secrets` (keyring-stored)
-4. **Caddy configs**: Provide both `caddy.conf` (private) and `caddy.cf.conf` (public)
+2. **Network isolation**: Main container on `home-services`; never bundle a database, cache or object store (declare it under `databases:`), other background workers on an `internal: true` network
+3. **Configuration schema**: Use `config.yaml` with `vars` (non-secrets), `secrets` (kept in the leader's vault) and `ports:` (the ports to route)
+4. **Routing**: declare `ports:` in `config.yaml`; the Caddy site blocks are generated. Only a service whose routing is more than one host to one upstream adds `caddy.routes.conf` (a catalog test rejects `caddy.conf`/`caddy.cf.conf`)
 5. **Test end-to-end**: Verify the service works from the catalog before submitting
 
 ### Service template
@@ -54,9 +54,8 @@ See [docs/adding-a-service.md](docs/adding-a-service.md) for step-by-step instru
 ```
 assets/services/<name>/
 ├── docker-compose.yml    # Service definition
-├── caddy.conf            # Private reverse proxy (tailnet)
-├── caddy.cf.conf        # Public reverse proxy (Cloudflare Tunnel)
-└── config.yaml           # Configuration schema
+├── config.yaml           # Configuration schema
+└── caddy.routes.conf     # optional: the body of a site block, for non-trivial routing
 ```
 
 ## Testing

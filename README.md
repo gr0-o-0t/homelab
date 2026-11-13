@@ -33,34 +33,72 @@ See [docs/architecture.md](docs/architecture.md) for the full design rationale.
 |---|---|
 | Docker Engine (rootful) | On every PC; `homelab init`/`join` set up Swarm |
 | Tailscale on every PC | Swarm traffic between PCs rides the tailnet |
-| Go 1.25+ | To build the `homelab` CLI |
 | Tailscale account | Free tier supports 100 devices; see [docs/tailscale-setup.md](docs/tailscale-setup.md) |
 | Cloudflare-managed domain | Any registrar; just delegate DNS to Cloudflare |
+| Go 1.25+ | Only to build the CLI from source (not needed for a release binary) |
+
+### Firewall
+
+Swarm control, gossip and the overlay run over each PC's Tailscale address, so
+open these on the `tailscale0` interface of every PC (2377/tcp only needs to
+reach the manager):
+
+| Port | Protocol | Purpose |
+|---|---|---|
+| 2377 | tcp | Swarm management (to the manager) |
+| 7946 | tcp + udp | Node gossip |
+| 4789 | udp | Overlay (VXLAN) data path |
+
+With `ufw`:
+
+```bash
+sudo ufw allow in on tailscale0 to any port 2377 proto tcp
+sudo ufw allow in on tailscale0 to any port 7946 proto tcp
+sudo ufw allow in on tailscale0 to any port 7946 proto udp
+sudo ufw allow in on tailscale0 to any port 4789 proto udp
+```
+
+`homelab init` and `homelab join` print these lines when `ufw` is enabled. The
+tailnet ACL must allow the same ports between the cluster's hosts (see
+[docs/tailscale-setup.md](docs/tailscale-setup.md)).
 
 ---
 
 ## Quick start
 
-### 1. Build and install the CLI
+### 1. Install the CLI
+
+Download a release binary (Linux) and check it against the release's
+`SHA256SUMS`:
 
 ```bash
-git clone https://github.com/you/homelab
-cd homelab
-make build           # homelab binary with the desktop GUI (needs cgo + OpenGL/X11 headers:
-                     #   Debian/Ubuntu: sudo apt install libgl1-mesa-dev xorg-dev)
-make build-headless  # pure Go, no GUI — for servers without a desktop
-make install      # go install → puts 'homelab' on your PATH
+VERSION=v0.5.5          # the latest tag on https://github.com/gr0-o-0t/homelab/releases
+# amd64 = desktop build with `homelab --gui` (needs glibc 2.39+: Ubuntu 24.04,
+# Linux Mint 22, Debian 13 or newer). Servers: ARCH=amd64_headless.
+# Raspberry Pi / ARM64 (headless): ARCH=arm64. The headless builds are static
+# and run on any distro.
+ARCH=amd64
+NAME=homelab_${VERSION}_linux_${ARCH}
+BASE=https://github.com/gr0-o-0t/homelab/releases/download/$VERSION
+wget "$BASE/$NAME.tar.gz" "$BASE/SHA256SUMS"
+sha256sum --check --ignore-missing SHA256SUMS
+tar xzf "$NAME.tar.gz"
+sudo install -m 0755 "$NAME/homelab" /usr/local/bin/homelab
 ```
 
-Or install a release binary (`homelab_<tag>_linux_<arch>.tar.gz` from the
-GitHub releases, checked against its `SHA256SUMS`). Later, `homelab upgrade`
-replaces the CLI with the latest release (through `sudo`, or `doas`, when its
-binary is not writable by you) and then upgrades the cluster's agents.
+From then on `homelab update` tells you when a newer release exists, and
+`homelab upgrade` replaces the CLI (through `sudo`/`doas` only for the swap,
+run `homelab upgrade` itself without sudo) and then rolls the agents.
+
+To build from source instead (`git clone https://github.com/gr0-o-0t/homelab`):
+`make build` (with the GUI; needs cgo and OpenGL/X11 headers, e.g.
+`sudo apt install libgl1-mesa-dev xorg-dev`), `make build-headless` (pure Go,
+no GUI) and `make install`.
 
 ### 2. Get the credentials
 
 - Follow [docs/tailscale-setup.md](docs/tailscale-setup.md) to generate a reusable auth key (`TS_AUTHKEY`).
-- Follow [docs/cloudflare-setup.md](docs/cloudflare-setup.md) to create the API token (`CLOUDFLARE_API_TOKEN`).
+- Follow [docs/cloudflare-setup.md](docs/cloudflare-setup.md) to create the API token (`CLOUDFLARE_API_TOKEN`), and, for public services, the tunnel token (`CF_TUNNEL_TOKEN`).
 
 ### 3. Create the cluster
 
@@ -273,58 +311,71 @@ written to disk in plain text, and never appear in a Swarm service spec.
 
 ## Included services
 
-| Service | Private subdomain | Purpose |
+Subdomains are `<name>.<HOME_SUBDOMAIN>.<DOMAIN>` (`home.*` below); a `:<port>`
+entry is a raw port on the leader's tailnet node. `homelab add` with no name
+lists the catalog; `homelab status <service>` shows what a service declares.
+
+| Service | Private address | Purpose |
 |---|---|---|
-| [Actual Budget](https://actualbudget.org) | `budget.home.*` | Personal finance |
-| [AdGuard Home](https://adguard.com/adguard-home/overview.html) | `adguard.home.*` | Network-wide ad blocking |
-| [Audiobookshelf](https://audiobookshelf.org) | `audiobooks.home.*` | Audiobook/Podcast server |
-| [Bazarr](https://bazarr.media) | `bazarr.home.*` | Movie/TV subtitle manager |
-| [Beszel Hub](https://github.com/henrygd/beszel) | `beszel.home.*` | Server monitoring |
-| [Copyparty](https://github.com/9001/copyparty) | `share.home.*` | File sharing server |
-| [CyberChef](https://cyberchef.org) | `cyberchef.home.*` | All-in-one data processing |
-| [Dozzle](https://dozzle.dev) | `logs.home.*` | Docker log viewer |
-| [Excalidraw](https://excalidraw.com) | `draw.home.*` | Whiteboard/diagramming |
-| [Forgejo](https://forgejo.org) | `forgejo.home.*` | Git hosting |
-| [Gitea](https://gitea.io) | `git.home.*` | Git hosting |
-| [Glance](https://github.com/glanceapp/glance) | `dashboard.home.*` | Dashboard |
-| [Gokapi](https://github.com/Forceu/gokapi) | `files.home.*` | File sharing |
-| [Gotify](https://gotify.net) | `notify.home.*` | Notification server |
-| [Homarr](https://homarr.dev) | `homarr.home.*` | Dashboard |
-| [Home Assistant](https://home-assistant.io) | `home.home.*` | Home automation |
-| [Homebox](https://homebox.software) | `inventory.home.*` | Inventory management |
-| [Homepage](https://gethomepage.dev) | `start.home.*` | Landing page/dashboard |
-| [Immich](https://immich.app) | `immich.home.*` | Photo & video backup |
-| [IT-Tools](https://it-tools.tech) | `tools.home.*` | Developer utilities |
-| [Jellyfin](https://jellyfin.org) | `jellyfin.home.*` | Media server |
-| [Kavita](https://kavita.io) | `kavita.home.*` | Comic/Manga reader |
-| [Mattermost](https://mattermost.com) | `chat.home.*` | Team communication |
-| [Mealie](https://mealie.io) | `recipes.home.*` | Recipe manager |
-| [MeTube](https://github.com/alexta69/metube) | `youtube.home.*` | YouTube downloader |
-| [Minero](https://github.com/gr0-o-0t/minero) | `minero.home.*` | AIO xmr miner |
-| [Miniflux](https://miniflux.app) | `rss.home.*` | RSS reader |
-| [Navidrome](https://navidrome.org) | `music.home.*` | Music server |
-| [NetBox](https://netbox.dev) | `netbox.home.*` | IPAM/DCIM |
-| [Nextcloud](https://nextcloud.com) | `nextcloud.home.*` | File sync & collaboration |
-| [ntfy](https://ntfy.sh) | `push.home.*` | Push notifications |
-| [Ollama](https://ollama.ai) | `ollama.home.*` | Local LLM server |
-| [Open WebUI](https://openwebui.com) | `ai.home.*` | LLM web interface |
-| [Pi-hole](https://pi-hole.net) | `pihole.home.*` | Network-wide ad blocking |
-| [Plex](https://plex.tv) | `plex.home.*` | Media server |
-| [Pocket ID](https://github.com/stonith404/pocket-id) | `sso.home.*` | SSO provider |
-| [Portainer](https://portainer.io) | `portainer.home.*` | Docker management |
-| [Prowlarr](https://prowlarr.com) | `prowlarr.home.*` | Indexer manager |
-| [qBittorrent](https://qbittorrent.org) | `torrent.home.*` | BitTorrent client |
-| [Radarr](https://radarr.video) | `radarr.home.*` | Movie management |
-| [SearXNG](https://searxng.org) | `search.home.*` | Metasearch engine |
-| [Seerr](https://seerr.dev) | `requests.home.*` | Media requests |
-| [Sonarr](https://sonarr.tv) | `sonarr.home.*` | TV show management |
-| [Speedtest Tracker](https://github.com/henrygd/speedtest-tracker) | `speedtest.home.*` | Speed test history |
-| [Stirling-PDF](https://stirlingpdf.com) | `pdf.home.*` | PDF manipulation |
-| [Tandoor](https://tandoor.dev) | `tandoor.home.*` | Recipe manager |
-| [Tautulli](https://tautulli.com) | `stats.home.*` | Plex statistics |
-| [Technitium](https://technitium.com) | `dns.home.*` | DNS server |
-| [Uptime Kuma](https://github.com/louislam/uptime-kuma) | `status.home.*` | Service monitoring |
-| [Vaultwarden](https://github.com/dani-garcia/vaultwarden) | `vault.home.*` | Password manager |
+| `actual-budget` | `actual-budget.home.*` | Actual Budget (local-first personal finance tool) |
+| `adguardhome` | `adguardhome.home.*` | AdGuard Home (network-wide ad and tracker blocking DNS server) |
+| `appflowy` | `appflowy.home.*` | AppFlowy (self-hosted Notion alternative — notes, docs, databases) |
+| `audiobookshelf` | `audiobookshelf.home.*` | Audiobookshelf (self-hosted audiobook and podcast server) |
+| `bazarr` | `bazarr.home.*` | Bazarr (subtitle management companion for Sonarr and Radarr) |
+| `beszel-hub` | `beszel-hub.home.*` | Beszel Hub (lightweight server monitoring dashboard) |
+| `bifrost` | `bifrost.home.*` | Bifrost (OpenAI-compatible AI gateway + web UI) |
+| `copyparty` | `copyparty.home.*` | Copyparty (file server with upload, search, and media streaming) |
+| `cyberchef` | `cyberchef.home.*` | CyberChef (web app for encryption, encoding, compression and more) |
+| `dbx` | `dbx.home.*` | dbx (lightweight, cross-platform database client) |
+| `dozzle` | `dozzle.home.*` | Dozzle (real-time Docker log viewer) |
+| `excalidraw` | `excalidraw.home.*` | Excalidraw (virtual whiteboard for sketching diagrams) |
+| `forgejo` | `forgejo.home.*`, `:22/tcp` | Forgejo (self-hosted Git service, Gitea fork) |
+| `garage` | – | shared, installed on demand |
+| `gitea` | `gitea.home.*`, `:2222/tcp` | Gitea (self-hosted Git service) |
+| `glance` | `glance.home.*` | Glance (self-hosted dashboard with widgets and feeds) |
+| `gokapi` | `gokapi.home.*` | Gokapi (lightweight file sharing server) |
+| `gotify` | `gotify.home.*` | Gotify (self-hosted push notification server) |
+| `grafana` | `grafana.home.*` | Shared Grafana for homelab services |
+| `homarr` | `homarr.home.*` | Homarr (intuitive homelab dashboard) |
+| `home-assistant` | `home-assistant.home.*` | Home Assistant (home automation platform) |
+| `homebox` | `homebox.home.*` | Homebox (self-hosted home inventory and organization) |
+| `homepage` | `homepage.home.*` | Homepage (self-hosted application dashboard) |
+| `immich` | `immich.home.*` | Immich (self-hosted photo & video backup) |
+| `it-tools` | `it-tools.home.*` | IT Tools (collection of handy online tools for developers) |
+| `jellyfin` | `jellyfin.home.*` | Jellyfin (open-source media server) |
+| `kavita` | `kavita.home.*` | Kavita (self-hosted digital library for manga, comics, and books) |
+| `litellm` | `litellm.home.*` | LiteLLM (OpenAI-compatible LLM proxy/gateway + usage dashboard) |
+| `mariadb` | – | shared, installed on demand |
+| `mattermost` | `mattermost.home.*` | Mattermost (self-hosted team messaging platform) |
+| `mealie` | `mealie.home.*` | Mealie (self-hosted recipe manager and meal planner) |
+| `metube` | `metube.home.*` | MeTube (web GUI for yt-dlp — download videos from 1000+ sites) |
+| `miniflux` | `miniflux.home.*` | Miniflux (minimalist feed reader) |
+| `navidrome` | `navidrome.home.*` | Navidrome (self-hosted music streaming server) |
+| `netbox` | `netbox.home.*` | NetBox (network source of truth & IPAM/DCIM) |
+| `nextcloud` | `nextcloud.home.*` | Nextcloud (self-hosted cloud storage and collaboration) |
+| `ntfy` | `ntfy.home.*` | ntfy (self-hosted push notification service) |
+| `ollama` | `ollama.home.*` | Ollama (local large language model runner) |
+| `open-webui` | `open-webui.home.*` | Open WebUI (browser-based UI for Ollama and other LLM backends) |
+| `pihole` | `pihole.home.*` | Pi-hole (network-wide ad blocking DNS server) |
+| `plex` | `plex.home.*` | Plex Media Server |
+| `pocket-id` | `pocket-id.home.*` | Pocket ID (OIDC identity provider) |
+| `portainer` | `portainer.home.*` | Portainer (Docker management UI) |
+| `postgres` | – | shared, installed on demand |
+| `prometheus` | `prometheus.home.*` | Shared Prometheus for homelab services |
+| `prowlarr` | `prowlarr.home.*` | Prowlarr (indexer manager for the *arr suite) |
+| `qbittorrent` | `qbittorrent.home.*` | qBittorrent (BitTorrent client with web UI) |
+| `radarr` | `radarr.home.*` | Radarr (movie collection management and automation) |
+| `redis` | – | shared, installed on demand |
+| `searxng` | `searxng.home.*` | SearXNG (privacy-respecting metasearch engine) |
+| `seerr` | `seerr.home.*` | Seerr (media discovery and request management) |
+| `sonarr` | `sonarr.home.*` | Sonarr (TV series management and automation) |
+| `speedtest-tracker` | `speedtest-tracker.home.*` | Speedtest Tracker (automated internet speed monitoring) |
+| `stirlingpdf` | `stirlingpdf.home.*` | Stirling PDF (self-hosted PDF manipulation tool) |
+| `tandoor` | `tandoor.home.*` | Tandoor Recipes (self-hosted recipe manager) |
+| `tautulli` | `tautulli.home.*` | Tautulli (Plex media server monitoring and statistics) |
+| `technitium` | `technitium.home.*` | Technitium DNS Server (authoritative and recursive DNS server) |
+| `uptime-kuma` | `status.home.*` | Uptime Kuma (self-hosted monitoring dashboard) |
+| `vaultwarden` | `vault.home.*` | Vaultwarden (unofficial Bitwarden-compatible server) |
 
 > **⚠️ Service Testing Status**: These services are included in the catalog but have varying levels of real-world testing. See the [Service Testing Status](docs/service-testing.md) document for what has been verified on each network layer. Contributions and test reports welcome — see [Contributing](#contributing) below.
 

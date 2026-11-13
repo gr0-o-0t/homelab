@@ -12,8 +12,8 @@ Use the "Edit zone DNS" template, then restrict it:
 | Permissions | Zone – DNS – Edit |
 | Zone Resources | Include – Specific zone – `example.com` |
 
-Copy the token, then store it with `homelab setup` — it goes into the system
-keyring, not a file on disk.
+Copy the token, then store it with `homelab setup` — it goes into the leader's
+vault (`CLOUDFLARE_API_TOKEN` is a root secret), not a file on disk.
 
 > **When you change `DOMAIN`, re-scope the token too.** Zone Resources still
 > point at the old zone, so Caddy's DNS-01 challenge fails with
@@ -78,3 +78,43 @@ Browsers with Secure DNS (DoH) enabled use their own resolver, which bypasses yo
 - **Firefox:** Settings → Network Settings → DNS over HTTPS → set to "Default protection" or off
 
 This is only needed if the browser's DoH provider has not yet cached the updated record.
+
+## 5. Cloudflare Tunnel (optional, for public services)
+
+Only needed to expose a service on the public internet with `homelab enable
+<service> --cf`. The tailnet-only setup above does not use it.
+
+1. In the Cloudflare dashboard open **Zero Trust → Networks → Tunnels →
+   Create a tunnel**, choose the **Cloudflared** connector type and name it
+   (e.g. `homelab`). Do not run the install command it shows: homelab runs
+   cloudflared itself, as a Swarm service pinned to the core node.
+2. Copy the **tunnel token** from that install command (the long string after
+   `--token`) into the root secret `CF_TUNNEL_TOKEN`, and set the var
+   `CF_TUNNEL_NAME` to the tunnel's name (the root wizard asks for both):
+
+   ```bash
+   homelab setup                                  # root wizard, or:
+   echo '{"CF_TUNNEL_TOKEN":"<token>"}' | homelab setup --secrets-stdin
+   homelab setup --set CF_TUNNEL_NAME=<tunnel name>
+   ```
+
+3. Turn the extension on; the leader deploys cloudflared:
+
+   ```bash
+   homelab ext enable cf
+   homelab cf status
+   ```
+
+4. Every public hostname of the tunnel must send its traffic to the leader's
+   plain-HTTP listener on the overlay: in the tunnel's **Public Hostname**
+   settings the service is type **HTTP**, URL `homelab-edge:80`.
+   `homelab enable <service> --cf` creates the proxied CNAME
+   `<service>.<DOMAIN>` → `<tunnel-id>.cfargotunnel.com` through the Cloudflare
+   API (it needs the `CLOUDFLARE_API_TOKEN` from step 1, with DNS – Edit), so
+   in the dashboard you only add a hostname with that service if you want one
+   not created by `enable --cf`.
+
+```bash
+homelab enable paperless --cf     # public, in addition to the private tailnet route
+homelab disable paperless --cf    # removes the public route and its CNAME
+```

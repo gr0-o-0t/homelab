@@ -39,30 +39,60 @@ it, which is why the key must be reusable.
 
 ## 3. Configure ACLs (recommended)
 
-In the Tailscale admin console, edit your ACL policy to restrict which tailnet devices can reach the homelab nodes. Example policy:
+Two kinds of tailnet nodes are involved, so use two tags:
+
+- `tag:homelab` — the agents' tsnet nodes (`homelab`, `homelab-<host>`): the
+  auth key from step 2 carries it. They serve the sites (443), the remote CLI
+  (7443) and the raw ports services declare.
+- `tag:homelab-host` — the PCs' own Tailscale nodes (tag each cluster PC with
+  `sudo tailscale up --advertise-tags=tag:homelab-host`). Swarm traffic runs
+  between these addresses.
+
+A complete policy (adapt the owners and the raw ports):
 
 ```json
 {
   "tagOwners": {
-    "tag:homelab": ["autogroup:admin"]
+    "tag:homelab":      ["autogroup:admin"],
+    "tag:homelab-host": ["autogroup:admin"]
   },
   "acls": [
     {
+      // Clients reach the sites, the remote CLI and the raw ports services declare
+      // (22 and 2222 are Forgejo's and Gitea's SSH; list what you use).
       "action": "accept",
       "src": ["autogroup:member"],
-      "dst": ["tag:homelab:443", "tag:homelab:7443"]
+      "dst": ["tag:homelab:443", "tag:homelab:7443", "tag:homelab:22", "tag:homelab:2222"]
+    },
+    {
+      // Swarm between the cluster PCs, in both directions: management (2377),
+      // gossip (7946, tcp + udp) and the VXLAN overlay (4789, udp).
+      "action": "accept",
+      "src": ["tag:homelab-host"],
+      "dst": [
+        "tag:homelab-host:2377",
+        "tag:homelab-host:7946",
+        "tag:homelab-host:4789"
+      ]
+    },
+    {
+      // The agents reach each other's API (the leader relays exec and upgrades to the workers).
+      "action": "accept",
+      "src": ["tag:homelab"],
+      "dst": ["tag:homelab:7443"]
     }
   ]
 }
 ```
 
-This allows any authenticated tailnet member to reach the sites (443) and the
-remote CLI (7443, which also needs the cluster secret) on homelab-tagged nodes.
-Add the raw ports your services declare (e.g. `tag:homelab:22` for Gitea SSH).
+(The admin console's policy editor accepts the `//` comments.) An ACL port
+without a protocol covers tcp, udp and icmp, which is what 7946 (tcp + udp) and
+4789 (udp) need. The leader's own `ufw` (or other host firewall) must allow the
+same Swarm ports on `tailscale0`; see the README's Firewall section.
 
-The Swarm traffic between PCs (2377, 7946, 4789) runs between the hosts' own
-Tailscale addresses, so those hosts must be able to reach each other on those
-ports as well.
+If your PCs are not tagged, use their user or `autogroup:member` as `src` and
+`dst` of the Swarm rule instead; the requirement is only that the cluster hosts
+reach each other on 2377/tcp, 7946/tcp+udp and 4789/udp.
 
 ## 4. Verify the node is registered
 

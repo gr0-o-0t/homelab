@@ -71,7 +71,7 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 
 	fmt.Printf("\n%s\n\n", styles.Header.Render("Homelab Setup"))
 	fmt.Printf("  %s\n", styles.Muted.Render("Non-secret values → "+cfgFile))
-	fmt.Printf("  %s\n\n", styles.Muted.Render("Secrets → system keyring"))
+	fmt.Printf("  %s\n\n", styles.Muted.Render("Secrets → the leader's vault"))
 
 	if setupNonInteractive() {
 		if err := applySetup(cmd, withRootDeclarations(cfg), "", sm); err != nil {
@@ -87,7 +87,7 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 	step(styles.Success.Render("✓"), "config.yaml written to "+dir)
-	step(styles.Success.Render("✓"), "Secrets stored in keyring")
+	step(styles.Success.Render("✓"), "Secrets stored in the leader's vault")
 
 	// ── Next steps ────────────────────────────────────────────────────────────
 	fmt.Printf("\n%s\n", styles.Header.Render("Setup complete — next steps:"))
@@ -292,7 +292,7 @@ func runServiceSetup(cmd *cobra.Command, args []string) error {
 	}
 	step(styles.Success.Render("✓"), fmt.Sprintf("services/%s/config.yaml written", name))
 	if len(svcCfg.Secrets) > 0 {
-		step(styles.Success.Render("✓"), "Secrets stored in keyring")
+		step(styles.Success.Render("✓"), "Secrets stored in the leader's vault")
 	}
 
 	// ── Database provisioning ─────────────────────────────────────────────────

@@ -15,7 +15,7 @@ import (
 
 // Default debounces. Coming up waits longer: a laptop that wakes for a
 // minute should not drag every stateless container across and back.
-// Going down is short so work returns to the minis quickly.
+// Going down is short so work returns to the core node quickly.
 const (
 	DefaultUpDebounce   = 2 * time.Minute
 	DownDebounce        = 20 * time.Second

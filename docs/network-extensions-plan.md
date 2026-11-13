@@ -1,6 +1,8 @@
-# Network Extension Services — Implementation Status
+# Network Extension Services — OBSOLETE
 
-> ⚠️ This document was originally an implementation plan. Most phases are now **implemented and shipped**. The content below is kept for historical reference. See [docs/architecture.md](architecture.md) for the current architecture and [docs/service-testing.md](service-testing.md) for testing status.
+> **Obsolete.** This was the plan for the Compose-era Tor, I2P, Yggdrasil and IPFS extensions. None of it applies to the Swarm cluster: the only extension in cluster mode is `cf` (cloudflared), and `--tor`/`--i2p`/`--ygg` fail with "not available in cluster mode yet". See [architecture.md](architecture.md) and [cloudflare-setup.md](cloudflare-setup.md). Kept as history only; do not follow it.
+
+> ⚠️ Original note: this document was an implementation plan, most phases of which shipped in the Compose-era releases. See [docs/architecture.md](architecture.md) for the current architecture and [docs/service-testing.md](service-testing.md) for testing status.
 
 ## Status by Phase
 
