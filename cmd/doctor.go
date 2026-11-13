@@ -99,10 +99,10 @@ func runDoctor(_ *cobra.Command, args []string) error {
 		defer func() { _ = dc.Close() }()
 	}
 
-	renderCheckGroup(diagnostics.RunConfigChecks(cfgFile), &pass)
+	warns := renderCheckGroup(diagnostics.RunConfigChecks(cfgFile), &pass)
 	configPass := pass
 	infra := diagnostics.RunInfraChecks(dc)
-	renderCheckGroup(infra, &pass)
+	warns += renderCheckGroup(infra, &pass)
 
 	// --fix: create the overlay network if that check failed, as `up` would.
 	// Only that failure is repaired: any other keeps the run failing.
@@ -167,7 +167,7 @@ func runDoctor(_ *cobra.Command, args []string) error {
 
 	fmt.Println()
 	if pass {
-		fmt.Printf("  %s\n\n", styles.Success.Render("All checks passed."))
+		fmt.Printf("  %s\n\n", styles.Success.Render(passedSummary(warns)))
 	} else {
 		if !doctorFixFlag {
 			fmt.Printf("  %s\n", styles.Err.Render("Some checks failed — see above."))
@@ -180,7 +180,7 @@ func runDoctor(_ *cobra.Command, args []string) error {
 }
 
 // renderCheckGroup prints a CheckGroup with the same ✓/✗/! format as the original doctor.
-func renderCheckGroup(g diagnostics.CheckGroup, pass *bool) {
+func renderCheckGroup(g diagnostics.CheckGroup, pass *bool) (warns int) {
 	fmt.Printf("\n  %s\n", styles.Bold.Render(g.Title))
 	for _, r := range g.Results {
 		switch r.Status {
@@ -193,8 +193,10 @@ func renderCheckGroup(g diagnostics.CheckGroup, pass *bool) {
 			}
 		case diagnostics.StatusWarn:
 			fmt.Printf("  %s  %s\n", styles.Warning.Render("!"), r.Message)
+			warns++
 		}
 	}
+	return warns
 }
 
 // caddyRoutingCheck checks the routes directory, caddy/sites, and with --fix
@@ -293,13 +295,13 @@ func runServiceDoctorFor(dir, name string, fix bool) bool {
 	src, closeSrc := stateSource(dir)
 	defer closeSrc()
 
-	renderCheckGroup(diagnostics.RunServiceConfigChecks(dir, name), &pass)
-	renderCheckGroup(diagnostics.RunServiceContainerChecks(name, src, desiredStopped(dir, name)), &pass)
-	renderCheckGroup(diagnostics.RunServiceRoutingChecks(dir, name), &pass)
+	warns := renderCheckGroup(diagnostics.RunServiceConfigChecks(dir, name), &pass)
+	warns += renderCheckGroup(diagnostics.RunServiceContainerChecks(name, src, desiredStopped(dir, name)), &pass)
+	warns += renderCheckGroup(diagnostics.RunServiceRoutingChecks(dir, name), &pass)
 
 	fmt.Println()
 	if pass {
-		fmt.Printf("  %s\n", styles.Success.Render("All checks passed."))
+		fmt.Printf("  %s\n", styles.Success.Render(passedSummary(warns)))
 	} else {
 		fmt.Printf("  %s\n", styles.Err.Render("Some checks failed."))
 		if !fix {
@@ -342,4 +344,16 @@ func extLayerState(layer network.NetworkLayer, dc *docker.Client) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	return dc.ContainerState(ctx, layer.ContainerName())
+}
+
+// passedSummary is the closing line of a run with no failure: warnings are
+// not failures, but they are not "all passed" either.
+func passedSummary(warns int) string {
+	switch warns {
+	case 0:
+		return "All checks passed."
+	case 1:
+		return "Passed with 1 warning."
+	}
+	return fmt.Sprintf("Passed with %d warnings.", warns)
 }

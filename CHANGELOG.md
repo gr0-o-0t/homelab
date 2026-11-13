@@ -3,6 +3,17 @@
 Notable changes per release. The release workflow publishes the section
 matching the pushed tag as the GitHub release notes.
 
+## v0.5.3 — 2026-11-13
+
+Patch release.
+
+### Fixed
+
+- `homelab doctor` no longer warns "no log cap in /etc/docker/daemon.json" on
+  every run: the agent runs in a container where the host's file is never
+  mounted, so the check could not tell. It also ends with "Passed with N
+  warning(s)." instead of "All checks passed." when anything warned.
+
 ## v0.5.2 — 2026-11-13
 
 ### Added
