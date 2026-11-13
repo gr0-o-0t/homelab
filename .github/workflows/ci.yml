@@ -82,7 +82,7 @@ jobs:
       matrix:
         image: ["ubuntu:24.04", "ubuntu:25.10", "ubuntu:26.04"]
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: homelab-gui
       - name: Runtime libraries a desktop has
