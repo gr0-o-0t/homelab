@@ -59,9 +59,11 @@ func runDoctor(_ *cobra.Command, args []string) error {
 				return nil
 			}
 			var failed []string
+			warns := 0
 			for i := range svcs {
 				svc := &svcs[i]
-				ok := runServiceDoctorFor(dir, svc.Name, doctorFixFlag)
+				ok, w := runServiceDoctorWarns(dir, svc.Name, doctorFixFlag)
+				warns += w
 				if !ok {
 					failed = append(failed, svc.Name)
 				}
@@ -72,7 +74,7 @@ func runDoctor(_ *cobra.Command, args []string) error {
 					styles.Err.Render("Checks failed for:"),
 					strings.Join(failed, ", "))
 			} else {
-				fmt.Printf("  %s\n\n", styles.Success.Render("All services healthy."))
+				fmt.Printf("  %s\n\n", styles.Success.Render(allServicesSummary(warns)))
 			}
 			return nil
 		}
@@ -286,6 +288,21 @@ func renderExtensionChecks(cfgFile string, dc *docker.Client, pass *bool) {
 }
 
 func runServiceDoctorFor(dir, name string, fix bool) bool {
+	ok, _ := runServiceDoctorWarns(dir, name, fix)
+	return ok
+}
+
+// allServicesSummary is the closing line of `doctor --all` when no service
+// failed: warnings across the services are counted like passedSummary does.
+func allServicesSummary(warns int) string {
+	if warns == 0 {
+		return "All services healthy."
+	}
+	return passedSummary(warns)
+}
+
+// runServiceDoctorWarns is runServiceDoctorFor that also counts warnings.
+func runServiceDoctorWarns(dir, name string, fix bool) (bool, int) {
 	fmt.Printf("\n%s %s\n\n",
 		styles.Header.Render("Service Health:"),
 		styles.Bold.Render(name))
@@ -308,7 +325,7 @@ func runServiceDoctorFor(dir, name string, fix bool) bool {
 			fmt.Printf("  %s\n", styles.Muted.Render("Run with --fix to auto-repair safe issues."))
 		}
 	}
-	return pass
+	return pass, warns
 }
 
 // hasResolvedExtension reports whether cfg has an extension that resolves

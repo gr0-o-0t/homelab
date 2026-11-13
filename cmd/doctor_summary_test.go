@@ -16,3 +16,11 @@ func TestPassedSummary(t *testing.T) {
 		}
 	}
 }
+
+func TestAllServicesSummary(t *testing.T) {
+	for warns, want := range map[int]string{0: "All services healthy.", 1: "Passed with 1 warning.", 3: "Passed with 3 warnings."} {
+		if got := allServicesSummary(warns); got != want {
+			t.Errorf("allServicesSummary(%d) = %q, want %q", warns, got, want)
+		}
+	}
+}

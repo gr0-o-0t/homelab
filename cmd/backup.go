@@ -112,6 +112,9 @@ func backupRunsLocally(c *cobra.Command) bool {
 }
 
 func runBackup(c *cobra.Command, args []string) error {
+	if rootFlags.json && !backupFlags.list {
+		return fmt.Errorf("--json is not supported by %q (only with --list)", c.CommandPath())
+	}
 	if c.Flags().Changed("fetch") {
 		if backupFlags.fetch == "" {
 			return errors.New("--fetch needs a backup name (one listed by `homelab backup --list`)")

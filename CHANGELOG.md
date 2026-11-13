@@ -7,6 +7,17 @@ matching the pushed tag as the GitHub release notes.
 
 Patch release.
 
+### Fixed
+
+- `logs -f -n N` follows every service, also one whose backlog could not be
+  read (a task of its history on a node that is down): the error is reported
+  and the live tail goes on, so the TUI/GUI log viewer no longer dies. A
+  service with an empty backlog follows from when the backlog read began, not
+  from "now", so lines logged in between are not lost.
+- `backup <service> --json` is refused; only `backup --list` reads `--json`.
+- `doctor --all` closes with "Passed with N warnings." instead of "All
+  services healthy." when services passed with warnings.
+
 ### Docs
 
 - README: install from the release tarball (checked against `SHA256SUMS`) and

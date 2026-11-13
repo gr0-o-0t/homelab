@@ -133,3 +133,13 @@ func TestJSONSupported_MarkedSet(t *testing.T) {
 	walk(rootCmd)
 	assert.ElementsMatch(t, []string{"homelab", "homelab ls", "homelab status", "homelab setup", "homelab images", "homelab backup", "homelab backup-list"}, got)
 }
+
+// Only `backup --list` reads --json: a backup itself refuses it.
+func TestBackup_JSONOnlyWithList(t *testing.T) {
+	t.Setenv("HOMELAB_AGENT", "1")
+	resetFlags()
+	rootCmd.SetArgs([]string{"backup", "web", "--json"})
+	err := rootCmd.Execute()
+	assert.EqualError(t, err, `--json is not supported by "homelab backup" (only with --list)`)
+	resetFlags()
+}

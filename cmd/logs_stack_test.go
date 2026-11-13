@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -177,16 +178,22 @@ func TestLogs_FollowPastFailedBacklog(t *testing.T) {
 	got := stubLogsFn(t, func(name string, follow bool) (string, string, error) {
 		switch {
 		case name == "immich_immich-machine-learning":
-			return "", "", errors.New("exit status 1")
+			return "", "incomplete log stream: node is not available\n", errors.New("exit status 1")
 		case follow:
 			return "2026-11-13T09:00:06.000000000Z live\n", "", nil
 		}
 		return serverBacklog, "", nil
 	})
-	code, out, _ := runLogs(t, "--config-dir", root, "logs", "-f", "-n", "1", "immich")
+	code, out, errOut := runLogs(t, "--config-dir", root, "logs", "-f", "-n", "1", "immich")
 	assert.NotZero(t, code)
 	assert.Equal(t, []string{"new 3", "live"}, stripPrefixes(out))
-	assert.Len(t, *got, 3) // two backlogs, one follow
+	assert.Contains(t, errOut, "machine-learning | incomplete log stream") // the backlog error is reported
+	assert.Len(t, *got, 4)                                                 // two backlogs, two follows
+	var mlFollow bool
+	for _, a := range *got {
+		mlFollow = mlFollow || (slices.Contains(a, "--follow") && a[len(a)-1] == "immich_immich-machine-learning")
+	}
+	assert.True(t, mlFollow, "the service whose backlog failed is followed too")
 }
 
 // -f prints the merged, tailed backlog, then follows each service from the
@@ -216,10 +223,19 @@ func TestLogs_FollowEmptyBacklog(t *testing.T) {
 	root := makeBatchFixture(t)
 	immichStack(t, root, fakeSwarm(t))
 	got := stubTimedLogs(t, nil, map[string]string{"immich_immich-server": "2026-11-13T09:00:06.000000000Z live\n"})
+	before := time.Now().Add(-time.Second)
 	code, out, _ := runLogs(t, "--config-dir", root, "logs", "-f", "-n", "5", "-c", "immich-server", "immich")
+	after := time.Now().Add(time.Second)
 	require.Zero(t, code)
 	assert.Equal(t, "immich-server | live\n", out)
-	assert.Equal(t, svcLogsArgv("--follow", "--tail", "0", "immich_immich-server"), (*got)[1])
+	// From when the backlog read began, so nothing logged in between is lost.
+	f := (*got)[1]
+	require.Len(t, f, 8, f)
+	assert.Equal(t, svcLogsArgv("--follow", "--since")[:6], f[:6])
+	assert.Equal(t, "immich_immich-server", f[7])
+	since, err := time.Parse(time.RFC3339Nano, f[6])
+	require.NoError(t, err)
+	assert.True(t, since.After(before) && since.Before(after), since)
 
 	*got = nil
 	code, _, _ = runLogs(t, "--config-dir", root, "logs", "-f", "-n", "5", "--since", "1h", "-c", "immich-server", "immich")

@@ -129,15 +129,17 @@ func runStackLogs(root, svc, want string, stdout, stderr io.Writer) error {
 			}
 			return streamStack(ctx, svcs, plans, logsFlags.follow, prefixes, stdout, stderr)
 		}
+		start := time.Now()
 		backlogs, errs := readBacklogs(ctx, svcs)
 		printBacklog(backlogs, tail, prefixes, stdout, stderr)
 		if !logsFlags.follow {
 			return errors.Join(errs...)
 		}
+		// Every service is followed, even one whose backlog read failed (a
+		// task of its history on a node that is down): the error is still
+		// reported, the live tail goes on from what was collected.
 		for i := range svcs {
-			if errs[i] == nil { // a service whose backlog failed is not followed
-				plans[i] = followPlan(backlogs[i])
-			}
+			plans[i] = followPlan(backlogs[i], start)
 		}
 		return errors.Join(append(errs, streamStack(ctx, svcs, plans, true, prefixes, stdout, stderr))...)
 	})
@@ -278,8 +280,9 @@ type streamPlan struct {
 
 // followPlan follows a service from the newest line of its backlog
 // (docker's --since includes it, so lines at that instant already read are
-// skipped), from --since with no backlog, else from now.
-func followPlan(backlog []logEntry) *streamPlan {
+// skipped), from --since with no backlog, else from start (when the
+// backlog read began, so nothing logged in between is lost).
+func followPlan(backlog []logEntry, start time.Time) *streamPlan {
 	p := &streamPlan{since: logsFlags.since, seen: map[string]int{}}
 	for _, e := range backlog {
 		switch {
@@ -295,7 +298,7 @@ func followPlan(backlog []logEntry) *streamPlan {
 	case !p.cutoff.IsZero():
 		p.since = p.cutoff.UTC().Format(time.RFC3339Nano)
 	case p.since == "":
-		p.tail = "0"
+		p.since = start.UTC().Format(time.RFC3339Nano)
 	}
 	return p
 }

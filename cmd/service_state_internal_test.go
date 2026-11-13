@@ -145,6 +145,12 @@ func TestDoctor_ServiceTasks(t *testing.T) {
 	assert.Contains(t, g.Results[0].Message, "is stopped")
 	recordService(root, "idle", desired.Stopped)
 	assert.True(t, runServiceDoctorForQuiet(t, root, "idle"))
+	// ...and runServiceDoctorWarns counts it, for the `doctor --all` footer.
+	var ok bool
+	var warns int
+	captureStdout(t, func() { ok, warns = runServiceDoctorWarns(root, "idle", false) })
+	assert.True(t, ok)
+	assert.GreaterOrEqual(t, warns, 1)
 }
 
 func runServiceDoctorForQuiet(t *testing.T, root, name string) (ok bool) {
