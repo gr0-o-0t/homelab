@@ -18,23 +18,42 @@ env:
 jobs:
   test:
     name: Test
-    runs-on: ubuntu-latest
+    # The same base as the release job, so the GUI binary built here is the
+    # one the compatibility job below runs on newer Ubuntu releases.
+    runs-on: ubuntu-24.04
 
     steps:
       - uses: actions/checkout@v6
 
+      # Caches the module download cache and the build cache (keyed on
+      # go.sum): later runs only compile what changed.
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: true
 
       # The default build includes the desktop GUI (giu), which needs cgo and
-      # the OpenGL/X11 development headers.
-      - name: Install GUI build dependencies
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libgl1-mesa-dev xorg-dev
+      # the OpenGL/X11 development headers. Cached .debs instead of apt-get
+      # update + install on every run.
+      - uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: libgl1-mesa-dev xorg-dev
+          version: "1.0"
+
+      # golangci-lint binary and its analysis cache, keyed on its version and
+      # go.sum: a hit skips building the linter and re-analysing unchanged
+      # packages.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/bin/golangci-lint
+            ~/.cache/golangci-lint
+          key: golangci-lint-${{ runner.os }}-${{ env.GOLANGCI_LINT_VERSION }}-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            golangci-lint-${{ runner.os }}-${{ env.GOLANGCI_LINT_VERSION }}-
 
       - name: Install golangci-lint
-        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${{ env.GOLANGCI_LINT_VERSION }}
+        run: test -x ~/go/bin/golangci-lint || go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${{ env.GOLANGCI_LINT_VERSION }}
 
       # One command, the same one developers run. This used to inline `go vet`,
       # `go test -race` and `go build`, which quietly dropped the golangci-lint
@@ -43,3 +62,35 @@ jobs:
       # CI green.
       - name: make ci
         run: make ci
+
+      # `make ci` builds the GUI binary last (./homelab): hand it to the
+      # compatibility job.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: homelab-gui
+          path: homelab
+          retention-days: 3
+
+  # The desktop (GUI) build links the build machine's glibc and needs
+  # OpenGL/X11 at runtime: start it on each Ubuntu base it is meant to run on.
+  # Ubuntu 22.04 is not one: Dear ImGui's prebuilt library needs glibc 2.38.
+  compat:
+    name: GUI build on ${{ matrix.image }}
+    needs: test
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["ubuntu:24.04", "ubuntu:25.10", "ubuntu:26.04"]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: homelab-gui
+      - name: Runtime libraries a desktop has
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            libgl1 libx11-6 libxrandr2 libxinerama1 libxcursor1 libxi6 libxxf86vm1 libstdc++6
+      - name: The binary starts
+        run: chmod +x homelab && ./homelab version
