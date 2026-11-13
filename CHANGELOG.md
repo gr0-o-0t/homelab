@@ -13,6 +13,12 @@ Patch release.
   every run: the agent runs in a container where the host's file is never
   mounted, so the check could not tell. It also ends with "Passed with N
   warning(s)." instead of "All checks passed." when anything warned.
+- `homelab logs <service> -n N` prints the last N lines of the whole stack,
+  in time order. Docker applied the tail per task and printed one task after
+  another, so a service with an old and a new task gave twice the lines,
+  interleaved across days. The lines of every task and container are now
+  merged by their timestamps before the tail; the timestamps are shown only
+  with `-t`. `-f` prints that backlog, then follows.
 
 ## v0.5.2 — 2026-11-13
 

@@ -224,11 +224,11 @@ func TestLogs_StreamsEveryServiceWithPrefixes(t *testing.T) {
 	immichStack(t, root, f)
 	got := stubServiceLogs(t)
 
-	code, out, errOut := runLogs(t, "--config-dir", root, "logs", "-f", "-n", "50", "-t", "--since", "1h", "immich")
+	code, out, errOut := runLogs(t, "--config-dir", root, "logs", "-n", "50", "-t", "--since", "1h", "immich")
 	require.Zero(t, code)
 	assert.ElementsMatch(t, [][]string{
-		{"service", "logs", "--raw", "--follow", "--timestamps", "--tail", "50", "--since", "1h", "immich_immich-machine-learning"},
-		{"service", "logs", "--raw", "--follow", "--timestamps", "--tail", "50", "--since", "1h", "immich_immich-server"},
+		svcLogsArgv("--tail", "50", "--since", "1h", "immich_immich-machine-learning"),
+		svcLogsArgv("--tail", "50", "--since", "1h", "immich_immich-server"),
 	}, *got)
 	lines := strings.Split(strings.TrimSpace(out), "\n")
 	assert.ElementsMatch(t, []string{
