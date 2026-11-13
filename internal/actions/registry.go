@@ -397,6 +397,8 @@ func build() []Action {
 			Inputs: []Input{inGroup}, Args: batch("pull"), Commands: []string{"pull --all", "pull --group"}},
 		Action{ID: "global.update", Label: "Update all", Group: GroupMaintenance, Icon: "upgrade", Scope: Global,
 			Inputs: []Input{inGroup}, Args: batch("update"), Commands: []string{"update --all", "update --group"}},
+		Action{ID: "global.update.check", Label: "Check for updates", Group: GroupMaintenance, Icon: "upgrade", Scope: Global,
+			Help: "Report whether a newer homelab release exists", Args: named("update"), Commands: []string{"update"}},
 		Action{ID: "global.backup", Label: "Back up all", Group: GroupMaintenance, Icon: "backup", Scope: Global,
 			Inputs: []Input{inGroup, inOut, inLive}, Args: backupArgs, Commands: []string{"backup --all", "backup --group"}},
 		Action{ID: "global.backup.list", Label: "Backups", Group: GroupMaintenance, Icon: "list", Scope: Global,

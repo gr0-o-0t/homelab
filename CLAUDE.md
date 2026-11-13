@@ -122,6 +122,7 @@ homelab stop <service...>                          # same as down on Swarm (-a, 
 homelab restart <service...>                       # force-update every Swarm service of the stack (-a, --group)
 homelab pull <service...>                          # pull images only (-a, --group)
 homelab update <service...>                        # pull + redeploy, tags resolved to digests (-a, --group)
+homelab update                                     # no service: report whether a newer homelab release exists (CLI + leader versions; runs on this PC)
 homelab reload [service]                           # load the routes into the agent's Caddy, or re-render one service's
 homelab edit <service> <path>                      # edit docker-compose.yml, config.yaml or a bind-mounted file in $EDITOR; validated, saved on the leader, applied as `up` does if the service runs
 homelab edit <service> <path> --from <file>        # same without an editor: the file's content replaces/creates <path> (scripts; max 500 KiB)

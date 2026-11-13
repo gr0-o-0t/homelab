@@ -122,6 +122,7 @@ homelab restart <service...>    Replace every task of the service
 homelab reload [service]        Load the routes into Caddy, or re-render one service's
 homelab pull <service...>       Pull latest images without redeploying
 homelab update <service...>     Pull latest images and redeploy
+homelab update                  Check for a newer homelab release
 homelab edit <service> <path>   Edit docker-compose.yml, config.yaml or a bind-mounted file in $EDITOR and roll it out
 homelab delete <service>...     Remove service entirely, asks for the name (alias: rm, -y to skip)
 homelab ls [-q]                 List installed services

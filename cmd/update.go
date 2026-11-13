@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/groot/homelab/internal/desired"
 	"github.com/groot/homelab/internal/swarm"
@@ -12,7 +13,10 @@ import (
 var serviceUpdateCmd = &cobra.Command{
 	Use:   "update <service...>",
 	Short: "Pull latest images and redeploy services",
-	Long: `Pull the latest Docker images and redeploy services on Swarm, each tag
+	Long: `With no service, report whether a newer homelab release exists (this CLI's
+and the leader agent's versions, then the latest GitHub release).
+
+Pull the latest Docker images and redeploy services on Swarm, each tag
 resolved to its current digest.
 
   homelab update jellyfin immich  # these services
@@ -25,7 +29,10 @@ resolved to its current digest.
 
 var updateFlags = batchFlags{}
 
-func runServiceUpdate(_ *cobra.Command, args []string) error {
+func runServiceUpdate(c *cobra.Command, args []string) error {
+	if bareUpdate(c) && os.Getenv("HOMELAB_AGENT") != "1" {
+		return runUpdateCheck(cmdContext(), c.OutOrStdout())
+	}
 	root := configDir()
 	names, err := resolveTargets(root, "update", updateFlags.all, updateFlags.group, args)
 	if err != nil {
