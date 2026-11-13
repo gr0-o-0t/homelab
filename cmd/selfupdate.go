@@ -41,11 +41,16 @@ var runSudo = func(args []string) error {
 	return c.Run()
 }
 
-// execSelf replaces this process with path (it returns only on failure); a
-// var so tests never exec.
-var execSelf = func(path string, argv []string) error {
-	return syscall.Exec(path, argv, os.Environ()) //nolint:gosec // the binary just installed, verified
-}
+// upgradeSelfEnv marks the binary exec'd after the sudo step with the
+// tag it must be: that process never runs a CLI step again.
+const upgradeSelfEnv = "HOMELAB_UPGRADE_SELF"
+
+// execSelf replaces this process with path, env as its environment (it
+// returns only on failure); a var so tests never exec.
+var execSelf = syscall.Exec
+
+// renameFile is os.Rename; a var so tests make it refuse.
+var renameFile = os.Rename
 
 // sudoUsable reports whether a non-writable binary can be swapped through
 // sudo: not when this already is root, nor without a sudo on PATH. A var
@@ -109,7 +114,12 @@ func replaceSelf(ctx context.Context, path string, rel release.Release, w io.Wri
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("writing the new binary next to %s: %w", path, err)
 	}
-	if err := os.Rename(tmp.Name(), path); err != nil {
+	if err := renameFile(tmp.Name(), path); err != nil {
+		// A sticky directory (or one that lets you create but not replace a
+		// root-owned binary) refuses only here: the sudo path too.
+		if errors.Is(err, fs.ErrPermission) {
+			return &notWritableError{path: path, err: err}
+		}
 		return fmt.Errorf("replacing %s: %w", path, err)
 	}
 	ok = true
@@ -141,7 +151,8 @@ func upgradeSelf(ctx context.Context, rel release.Release, rootFlags []string, w
 		return false, fmt.Errorf("replacing %s with sudo: %w", path, err)
 	}
 	argv := append([]string{path, "upgrade", versionFlag, rel.Tag}, rootFlags...)
-	if err := execSelf(path, argv); err != nil {
+	env := append(os.Environ(), upgradeSelfEnv+"="+rel.Tag)
+	if err := execSelf(path, argv, env); err != nil {
 		return true, fmt.Errorf("this CLI is now %s, but starting it failed: %w — run `homelab upgrade --version %s`", rel.Tag, err, rel.Tag)
 	}
 	return true, nil

@@ -66,14 +66,18 @@ running executable (a temp file in the same directory, `os.Executable` +
 `EvalSymlinks`). A directory the user cannot write: `sudo -- <exe> upgrade
 --cli-only --version <tag>` (hidden, local, refused in the agent: replace the
 binary and exit) — only that step runs as root — then this process execs the
-new binary as `upgrade --version <tag>` so the agent rollout runs as the
-invoking user, with their client.yaml and keyring. Already root or no
-`sudo`: an error naming the path and the manual command. A bare upgrade
-whose CLI is not behind the latest release (never a downgrade) rolls the
-agents to the CLI's version only when the leader's is older ("everything is
-on vX" otherwise; a lagging worker with a current leader takes `--version`).
-A dev CLI build refuses a bare upgrade (`--version` or `--image`). `--image`
-leaves the CLI alone and rolls that image to the agents only.
+new binary as `upgrade --version <tag>` with `HOMELAB_UPGRADE_SELF=<tag>` in
+its environment (every root flag set kept, wherever it stood) so the agent
+rollout runs as the invoking user, with their client.yaml and keyring; that
+exec'd leg never runs a CLI step (a binary not on the tag fails: "not
+retrying"). Already root or no `sudo`: an error naming the path and the
+manual command; a rename refused with EPERM (sticky dir) also takes sudo. A
+bare upgrade whose CLI is not behind the latest release (never a downgrade)
+keeps the CLI and still forwards the rollout to the CLI's version (unless
+the leader runs a newer release): the leader leaves every agent already on
+it alone, so a worker that missed an upgrade is caught up. A dev CLI build
+refuses a bare upgrade (`--version` or `--image`). `--image` leaves the CLI
+alone and rolls that image to the agents only.
 
 The agent step (forwarded; Mutating and Detached) resolves the image on the PC
 (`ghcr.io/gr0-o-0t/homelab:<tag>`, or `--image`),
@@ -87,7 +91,11 @@ replaced; then replaces the workers one by one through `agent self-replace
 --image REF`, accepting a worker only when a *different* agent container
 (new ID) has answered steadily for 10 s within 60 s, on the expected version
 (`--version`, else the image's `org.opencontainers.image.version` label) — a
-failure, rollback or mismatch halts before the leader; then prints
+failure, rollback or mismatch halts before the leader; then — unless the
+leader agent itself already runs the expected version (`Upgrade.Current`:
+it prints "leader: already on vX", and "Everything is on vX: nothing
+replaced." when no worker changed either, and ends without the marker) —
+prints
 `bootstrap.LeaderReplaceMarker` and replaces its own agent, ending the
 session. Only after seeing that marker does the PC print "agent restarting",
 reconnect for up to 60 s and check the leader the same way (a connection lost

@@ -242,6 +242,52 @@ func TestUpgrade_WorkerAlreadyCurrent(t *testing.T) {
 	}
 }
 
+// A leader already on the target is not replaced (no marker: the CLI does
+// not wait for a restart); a worker that missed an upgrade still is.
+func TestUpgrade_LeaderCurrentWorkerBehind(t *testing.T) {
+	f := upgradeFake(workerNode("n1", "desktop", dswarm.NodeStateReady))
+	var log []string
+	w := &fakeWorkers{version: map[string]string{"desktop": "v1.4.0"}, log: &log}
+	u, out := newUpgrade(f, w, &log)
+	u.Current = "v1.5.0"
+	res, err := u.Do(context.Background())
+	require.NoError(t, err, out.String())
+	assert.Equal(t, WorkerUpgraded, res[0].Status)
+	assert.Contains(t, log, "desktop: agent self-replace --image "+newImage)
+	assert.NotContains(t, log, "leader: self-replace")
+	assert.NotContains(t, out.String(), LeaderReplaceMarker)
+	assert.Contains(t, out.String(), "leader: already on v1.5.0")
+	assert.NotContains(t, out.String(), "Everything is on")
+}
+
+func TestUpgrade_AllCurrentReplacesNothing(t *testing.T) {
+	f := upgradeFake(workerNode("n1", "desktop", dswarm.NodeStateReady))
+	var log []string
+	w := &fakeWorkers{version: map[string]string{"desktop": "v1.5.0"}, log: &log}
+	u, out := newUpgrade(f, w, &log)
+	u.Version, u.Current = "v1.5.0", "v1.5.0"
+	res, err := u.Do(context.Background())
+	require.NoError(t, err, out.String())
+	assert.Equal(t, WorkerCurrent, res[0].Status)
+	for _, l := range log {
+		assert.NotContains(t, l, "self-replace")
+	}
+	assert.NotContains(t, out.String(), LeaderReplaceMarker)
+	assert.Contains(t, out.String(), "Everything is on v1.5.0: nothing replaced.")
+}
+
+// A leader on another version is replaced as before.
+func TestUpgrade_LeaderBehindIsReplaced(t *testing.T) {
+	f := upgradeFake()
+	var log []string
+	u, out := newUpgrade(f, &fakeWorkers{log: &log}, &log)
+	u.Current = "v1.4.0"
+	_, err := u.Do(context.Background())
+	require.NoError(t, err)
+	assert.Contains(t, log, "leader: self-replace")
+	assert.Contains(t, out.String(), LeaderReplaceMarker)
+}
+
 // startedAgent is a fake engine running the agent container as init/join
 // created it, from oldImage.
 func startedAgent(t *testing.T, leader bool) *swarmtest.Fake {

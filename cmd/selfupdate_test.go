@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -35,6 +36,7 @@ type selfStub struct {
 	sudo      [][]string
 	execPath  string
 	execArgv  []string
+	execEnv   []string
 	sudoErr   error
 	sudoUsed  bool
 	whyNoSudo string
@@ -113,12 +115,12 @@ func stubSelfUpgrade(t *testing.T, version, latest string, also ...string) *self
 	}
 	srv = httptest.NewTLSServer(mux)
 
-	prevV, prevC, prevA, prevExe, prevSudo, prevExec, prevUsable, prevUA :=
-		Version, releaseClient, releaseAPI, selfExecutable, runSudo, execSelf, sudoUsable, release.UserAgent
+	prevV, prevC, prevA, prevExe, prevSudo, prevExec, prevUsable, prevUA, prevRename :=
+		Version, releaseClient, releaseAPI, selfExecutable, runSudo, execSelf, sudoUsable, release.UserAgent, renameFile
 	t.Cleanup(func() {
 		srv.Close()
-		Version, releaseClient, releaseAPI, selfExecutable, runSudo, execSelf, sudoUsable, release.UserAgent =
-			prevV, prevC, prevA, prevExe, prevSudo, prevExec, prevUsable, prevUA
+		Version, releaseClient, releaseAPI, selfExecutable, runSudo, execSelf, sudoUsable, release.UserAgent, renameFile =
+			prevV, prevC, prevA, prevExe, prevSudo, prevExec, prevUsable, prevUA, prevRename
 		_ = os.Chmod(dir, 0o755) //nolint:gosec // let TempDir clean up
 	})
 	Version = version
@@ -131,10 +133,10 @@ func stubSelfUpgrade(t *testing.T, version, latest string, also ...string) *self
 		s.sudo = append(s.sudo, append([]string(nil), args...))
 		return s.sudoErr
 	}
-	execSelf = func(path string, argv []string) error {
+	execSelf = func(path string, argv, env []string) error {
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		s.execPath, s.execArgv = path, append([]string(nil), argv...)
+		s.execPath, s.execArgv, s.execEnv = path, append([]string(nil), argv...), append([]string(nil), env...)
 		return nil
 	}
 	sudoUsable = func() (string, bool) {
@@ -210,22 +212,75 @@ func TestUpgradeCLI_VersionPicksThatRelease(t *testing.T) {
 
 // A binary the user cannot write is replaced by `sudo -- <exe> upgrade
 // --cli-only --version <tag>` (nothing downloaded here), then this process
-// execs the new binary to roll the agents as the invoking user.
+// execs the new binary to roll the agents as the invoking user — root
+// flags kept wherever they stood, the exec'd leg marked with the tag.
 func TestUpgradeCLI_UnwritableBinaryGoesThroughSudoThenExecs(t *testing.T) {
-	fw, asks, _ := fakeUpgrade(t, "v1.4.0", true, 0, nil, oldLeader, v150)
-	s := stubSelfUpgrade(t, "v1.4.0", "v1.5.0")
-	readOnlyDir(t, s)
-	var code int
-	stderr := captureStderr(func() { code = executeArgs([]string{"--no-color", "upgrade"}) })
-	require.Equal(t, 0, code, stderr)
+	for _, argv := range [][]string{{"--no-color", "upgrade"}, {"upgrade", "--no-color"}} {
+		t.Run(strings.Join(argv, " "), func(t *testing.T) {
+			fw, asks, _ := fakeUpgrade(t, "v1.4.0", true, 0, nil, oldLeader, v150)
+			s := stubSelfUpgrade(t, "v1.4.0", "v1.5.0")
+			readOnlyDir(t, s)
+			var code int
+			stderr := captureStderr(func() { code = executeArgs(argv) })
+			require.Equal(t, 0, code, stderr)
 
-	assert.Contains(t, stderr, "homelab: "+s.exe+" is not writable; re-running with sudo…")
+			assert.Contains(t, stderr, "homelab: "+s.exe+" is not writable; re-running with sudo…")
+			assert.Equal(t, [][]string{{s.exe, "upgrade", "--cli-only", "--version", "v1.5.0"}}, s.sudo)
+			assert.Equal(t, s.exe, s.execPath)
+			assert.Equal(t, []string{s.exe, "upgrade", "--version", "v1.5.0", "--no-color=true"}, s.execArgv)
+			assert.Contains(t, s.execEnv, upgradeSelfEnv+"=v1.5.0")
+			assert.Zero(t, s.dl.Load(), "the root step downloads; this one does not")
+			assert.Empty(t, *fw, "the exec'd binary rolls the agents")
+			assert.Zero(t, *asks)
+			s.assertUntouched(t)
+		})
+	}
+}
+
+// A directory that lets a file be created but not renamed over the binary
+// (sticky, root-owned binary) takes the sudo path too.
+func TestUpgradeCLI_RenameRefusedGoesThroughSudo(t *testing.T) {
+	fw, _, _ := fakeUpgrade(t, "v1.4.0", true, 0, nil, oldLeader, v150)
+	s := stubSelfUpgrade(t, "v1.4.0", "v1.5.0")
+	renameFile = func(oldpath, newpath string) error {
+		return &os.LinkError{Op: "rename", Old: oldpath, New: newpath, Err: syscall.EPERM}
+	}
+	require.Equal(t, 0, executeArgs([]string{"upgrade"}))
 	assert.Equal(t, [][]string{{s.exe, "upgrade", "--cli-only", "--version", "v1.5.0"}}, s.sudo)
 	assert.Equal(t, s.exe, s.execPath)
-	assert.Equal(t, []string{s.exe, "upgrade", "--version", "v1.5.0", "--no-color"}, s.execArgv)
-	assert.Zero(t, s.dl.Load(), "the root step downloads; this one does not")
-	assert.Empty(t, *fw, "the exec'd binary rolls the agents")
-	assert.Zero(t, *asks)
+	assert.Empty(t, *fw)
+	s.assertUntouched(t)
+}
+
+// The binary exec'd after the sudo step: no release lookup, no download,
+// no CLI step — straight to the agents with the tag's image.
+func TestUpgradeCLI_ExecdLegRollsAgentsOnly(t *testing.T) {
+	fw, _, _ := fakeUpgrade(t, "v1.5.0", true, 0, nil, oldLeader, v150)
+	s := stubSelfUpgrade(t, "v1.5.0", "v1.6.0", "v1.5.0")
+	t.Setenv(upgradeSelfEnv, "v1.5.0")
+	require.Equal(t, 0, executeArgs([]string{"upgrade", "--version", "v1.5.0", "--no-color=true"}))
+	assert.Equal(t, [][]string{{"upgrade", "--image", "ghcr.io/gr0-o-0t/homelab:v1.5.0", "--version", "v1.5.0"}}, *fw)
+	assert.Zero(t, s.apiHits())
+	assert.Zero(t, s.dl.Load())
+	assert.Empty(t, s.sudo)
+	assert.Empty(t, s.execPath)
+	s.assertUntouched(t)
+}
+
+// An exec'd leg whose binary is not the target (the swap did not take)
+// stops: never sudo → exec → sudo again.
+func TestUpgradeCLI_ExecdLegWrongVersionStops(t *testing.T) {
+	fw, _, _ := fakeUpgrade(t, "v1.4.0", true, 0, nil, oldLeader, v150)
+	s := stubSelfUpgrade(t, "v1.4.0", "v1.5.0")
+	t.Setenv(upgradeSelfEnv, "v1.5.0")
+	var code int
+	stderr := captureStderr(func() { code = executeArgs([]string{"upgrade", "--version", "v1.5.0"}) })
+	assert.Equal(t, 1, code)
+	assert.Contains(t, stderr, "the installed binary reports v1.4.0, not v1.5.0; not retrying")
+	assert.Empty(t, s.sudo)
+	assert.Empty(t, s.execPath)
+	assert.Zero(t, s.apiHits())
+	assert.Empty(t, *fw)
 	s.assertUntouched(t)
 }
 
@@ -272,20 +327,25 @@ func TestUpgradeCLI_ChecksumFailureReplacesNothing(t *testing.T) {
 	assert.Zero(t, *asks)
 }
 
-// No newer release, agents on this CLI's version: nothing to do.
-func TestUpgradeCLI_EverythingCurrent(t *testing.T) {
-	fw, _, _ := fakeUpgrade(t, "v1.5.0", true, 0, nil, v150)
+
+// No newer release: the CLI stays, and the rollout is still forwarded —
+// the leader leaves alone every agent already on the CLI's version (itself
+// included: no marker, so no wait for a restart) and catches up the rest.
+func TestUpgradeCLI_NothingNewerStillForwards(t *testing.T) {
+	fw, asks, _ := fakeUpgrade(t, "v1.5.0", false, 0, nil, v150, v150)
 	s := stubSelfUpgrade(t, "v1.5.0", "v1.5.0")
 	out := captureStdout(t, func() { assert.Equal(t, 0, executeArgs([]string{"upgrade"})) })
 	assert.Contains(t, out, "this CLI is already v1.5.0")
-	assert.Contains(t, out, "everything is on v1.5.0")
-	assert.Empty(t, *fw)
+	assert.NotContains(t, out, "everything is on", "only the leader can tell")
+	assert.Equal(t, [][]string{{"upgrade", "--image", "ghcr.io/gr0-o-0t/homelab:v1.5.0", "--version", "v1.5.0"}}, *fw)
+	assert.Equal(t, 2, *asks, "the version check and the probe before; no wait")
 	assert.Zero(t, s.dl.Load())
 	s.assertUntouched(t)
 }
 
 // A CLI newer than the latest release is not "upgraded" to it: the CLI is
-// left alone, and agents behind this CLI are rolled to its version.
+// left alone and the agents are rolled to its version; a leader on a newer
+// release than this CLI is never downgraded.
 func TestUpgradeCLI_NewerThanLatestNeverDowngrades(t *testing.T) {
 	v160 := bootstrap.AgentID{Version: "v1.6.0", Boot: "newer-container"}
 	fw, _, _ := fakeUpgrade(t, "v1.6.0", true, 0, nil, v150, v150, v160)
@@ -296,10 +356,10 @@ func TestUpgradeCLI_NewerThanLatestNeverDowngrades(t *testing.T) {
 	assert.Zero(t, s.dl.Load())
 	s.assertUntouched(t)
 
-	// …and agents already there are left alone.
-	fw, _, _ = fakeUpgrade(t, "v1.6.0", true, 0, nil, v160)
+	fw, _, _ = fakeUpgrade(t, "v1.6.0", true, 0, nil, bootstrap.AgentID{Version: "v1.7.0", Boot: "x"})
 	s = stubSelfUpgrade(t, "v1.6.0", "v1.5.0")
-	assert.Equal(t, 0, executeArgs([]string{"upgrade"}))
+	out = captureStdout(t, func() { assert.Equal(t, 0, executeArgs([]string{"upgrade"})) })
+	assert.Contains(t, out, "the leader agent runs v1.7.0, newer than this CLI")
 	assert.Empty(t, *fw)
 	s.assertUntouched(t)
 }

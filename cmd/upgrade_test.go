@@ -40,6 +40,7 @@ var (
 func fakeUpgrade(t *testing.T, version string, marker bool, code int, runErr error, answers ...any) (*[][]string, *int, *bytes.Buffer) {
 	t.Helper()
 	t.Setenv("HOMELAB_AGENT", "") // a PC, not the agent
+	t.Setenv(upgradeSelfEnv, "")  // not the binary exec'd after sudo
 	prevV, prevRun, prevAsk, prevSleep, prevClient := Version, upgradeRun, upgradeAsk, upgradeSleep, upgradeClient
 	t.Cleanup(func() {
 		Version, upgradeRun, upgradeAsk, upgradeSleep, upgradeClient = prevV, prevRun, prevAsk, prevSleep, prevClient

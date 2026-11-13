@@ -135,6 +135,10 @@ type Upgrade struct {
 	// Version is what the upgraded agents must report; "" reads the image's
 	// VersionLabel, and without one versions are reported, not checked.
 	Version string
+	// Current is the version the leader's own agent runs (the binary doing
+	// the rollout); equal to the expected version, the leader is not
+	// replaced.
+	Current string
 	Call    AgentCall
 	// Replace replaces the leader's own agent; default SelfReplace.
 	Replace func(ctx context.Context) error
@@ -230,7 +234,16 @@ func (u *Upgrade) Do(ctx context.Context) ([]WorkerResult, error) {
 	}
 	u.summary(res)
 
-	// 3. The leader last: this ends the session.
+	// 3. The leader last: this ends the session — unless it already runs
+	// the expected version (as a worker on it is left alone), so a rerun
+	// that only catches up a worker does not restart the leader.
+	if want != "" && u.Current == want {
+		u.printf("leader: already on %s\n", want)
+		if !slices.ContainsFunc(res, func(r WorkerResult) bool { return r.Status != WorkerCurrent }) {
+			u.printf("Everything is on %s: nothing replaced.\n", want)
+		}
+		return res, nil
+	}
 	u.printf("%s; this session ends here.\n", LeaderReplaceMarker)
 	replace := u.Replace
 	if replace == nil {
