@@ -166,7 +166,7 @@ func applySetup(cmd *cobra.Command, cfg *config.Config, svc string, sm *secrets.
 			continue // like pressing Enter at the prompt: keep what is stored
 		}
 		if err := sm.Set(svc, k, v); err != nil {
-			return fmt.Errorf("storing %s in keyring: %w", k, err)
+			return fmt.Errorf("storing %s in the leader vault: %w", k, err)
 		}
 	}
 	return nil

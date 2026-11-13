@@ -105,14 +105,16 @@ Only needed to expose a service on the public internet with `homelab enable
    homelab cf status
    ```
 
-4. Every public hostname of the tunnel must send its traffic to the leader's
-   plain-HTTP listener on the overlay: in the tunnel's **Public Hostname**
-   settings the service is type **HTTP**, URL `homelab-edge:80`.
-   `homelab enable <service> --cf` creates the proxied CNAME
+4. The tunnel's ingress is managed in the dashboard, not by homelab. In the
+   tunnel's **Public Hostname** settings add either one rule per public host,
+   or ONE wildcard rule added once: hostname `*.<DOMAIN>`, service type
+   **HTTP**, URL `homelab-edge:80` (the leader's plain-HTTP listener on the
+   overlay; its catch-all closes hosts no service answers). Without a rule the
+   CNAME exists but the host answers 502/404.
+5. `homelab enable <service> --cf` only creates the proxied CNAME
    `<service>.<DOMAIN>` → `<tunnel-id>.cfargotunnel.com` through the Cloudflare
-   API (it needs the `CLOUDFLARE_API_TOKEN` from step 1, with DNS – Edit), so
-   in the dashboard you only add a hostname with that service if you want one
-   not created by `enable --cf`.
+   API (it needs the `CLOUDFLARE_API_TOKEN` from step 1, with DNS – Edit); it
+   does not touch the tunnel's public hostnames.
 
 ```bash
 homelab enable paperless --cf     # public, in addition to the private tailnet route

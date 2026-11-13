@@ -41,7 +41,6 @@ Tor, I2P and Yggdrasil are not available in cluster mode yet, so only the tailne
 | mattermost | [ ] | [ ] |
 | mealie | [ ] | [ ] |
 | metube | [ ] | [ ] |
-| minero | [ ] | [ ] |
 | miniflux | [ ] | [ ] |
 | navidrome | [ ] | [ ] |
 | netbox | [ ] | [ ] |

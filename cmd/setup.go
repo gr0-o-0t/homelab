@@ -159,7 +159,7 @@ func promptRootSetup(cfg *config.Config, sm *secrets.Manager) error {
 		isSet := sm.IsSet("", k)
 		if val := promptSecret(k, isSet); val != "" {
 			if err := sm.Set("", k, val); err != nil {
-				return fmt.Errorf("storing %s in keyring: %w", k, err)
+				return fmt.Errorf("storing %s in the leader vault: %w", k, err)
 			}
 		}
 	}
@@ -217,7 +217,7 @@ func promptRootSetup(cfg *config.Config, sm *secrets.Manager) error {
 
 		if val := promptSecret("CF_TUNNEL_TOKEN", sm.IsSet("", "CF_TUNNEL_TOKEN")); val != "" {
 			if err := sm.Set("", "CF_TUNNEL_TOKEN", val); err != nil {
-				return fmt.Errorf("storing CF_TUNNEL_TOKEN in keyring: %w", err)
+				return fmt.Errorf("storing CF_TUNNEL_TOKEN in the leader vault: %w", err)
 			}
 		}
 	}
@@ -385,7 +385,7 @@ func promptServiceSetup(name string, svcCfg *config.Config, sm *secrets.Manager)
 			}
 			if val := promptSecret(lbl, sm.IsSet(name, k)); val != "" {
 				if err := sm.Set(name, k, val); err != nil {
-					return fmt.Errorf("storing %s in keyring: %w", k, err)
+					return fmt.Errorf("storing %s in the leader vault: %w", k, err)
 				}
 			}
 		}

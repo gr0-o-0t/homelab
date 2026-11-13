@@ -61,7 +61,7 @@ A complete policy (adapt the owners and the raw ports):
       // Clients reach the sites, the remote CLI and the raw ports services declare
       // (22 and 2222 are Forgejo's and Gitea's SSH; list what you use).
       "action": "accept",
-      "src": ["autogroup:member"],
+      "src": ["autogroup:member", "tag:homelab-host"],
       "dst": ["tag:homelab:443", "tag:homelab:7443", "tag:homelab:22", "tag:homelab:2222"]
     },
     {
@@ -89,6 +89,10 @@ A complete policy (adapt the owners and the raw ports):
 without a protocol covers tcp, udp and icmp, which is what 7946 (tcp + udp) and
 4789 (udp) need. The leader's own `ufw` (or other host firewall) must allow the
 same Swarm ports on `tailscale0`; see the README's Firewall section.
+
+Tagging a node transfers it from its user to the tag, which takes it out of
+`autogroup:member` (hence `tag:homelab-host` in the first rule's `src`).
+Personal laptops are usually left untagged; tag only the PCs that run Swarm.
 
 If your PCs are not tagged, use their user or `autogroup:member` as `src` and
 `dst` of the Swarm rule instead; the requirement is only that the cluster hosts

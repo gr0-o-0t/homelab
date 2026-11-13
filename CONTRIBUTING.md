@@ -18,7 +18,7 @@ git clone https://github.com/gr0-o-0t/homelab
 cd homelab
 
 # Build and install locally
-make build-headless make installmake install make install   # or `make build` for the GUI
+make install   # or `make build` / `make build-headless` for a binary in the repo
 
 # Run tests
 make test

@@ -186,7 +186,7 @@ func attachDocker(p *db.Provisioner) (func(), error) {
 func ensureGeneratedSecrets(p *db.Provisioner, name string) error {
 	created, err := p.EnsureGeneratedSecrets(name)
 	for _, k := range created {
-		fmt.Printf("  %s generated %s/%s (stored in keyring)\n", styles.Success.Render("✓"), name, k)
+		fmt.Printf("  %s generated %s/%s (stored in the leader vault)\n", styles.Success.Render("✓"), name, k)
 	}
 	if err != nil {
 		return fmt.Errorf("generating secrets for %s: %w", name, err)

@@ -70,7 +70,7 @@ worker PC. Override per container in `config.yaml` with `placement:`
 
 **What Swarm honours.** Only the keys the translator maps are deployed:
 `image`, `entrypoint`, `command`, `environment` (delivered through the Swarm
-secret), `volumes` and `tmpfs` (without options), `networks` (and
+secret), `volumes` (a writable `./` bind mount is refused; read-only ones become configs) and `tmpfs` (long-form `size` is kept; short-form `path:options` drops its options), `networks` (and
 `container_name` as an alias), `labels`, `hostname`, `working_dir`, `user`,
 `group_add`, `tty`, `stdin_open`, `read_only`, `init`, `stop_signal`,
 `stop_grace_period`, `healthcheck`, `extra_hosts`, `sysctls`, `cap_add`,

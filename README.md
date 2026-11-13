@@ -72,7 +72,8 @@ Download a release binary (Linux) and check it against the release's
 `SHA256SUMS`:
 
 ```bash
-VERSION=v0.5.5          # the latest tag on https://github.com/gr0-o-0t/homelab/releases
+# The latest release (/latest skips prereleases); or set a tag by hand, e.g. VERSION=v0.5.5
+VERSION=$(curl -fsSL https://api.github.com/repos/gr0-o-0t/homelab/releases/latest | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')
 # amd64 = desktop build with `homelab --gui` (needs glibc 2.39+: Ubuntu 24.04,
 # Linux Mint 22, Debian 13 or newer). Servers: ARCH=amd64_headless.
 # Raspberry Pi / ARM64 (headless): ARCH=arm64. The headless builds are static
