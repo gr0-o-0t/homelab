@@ -30,7 +30,7 @@ the flags (and -a) still remove them from a service enabled on them earlier.
 
 Without flags, only the private tailnet config is removed.
 -a/--all removes every layer, private included. The container keeps running;
-add --stop to also stop and remove it.
+add --stop to also scale it to zero.
 
 Examples:
   homelab disable gitea                  # private only
@@ -57,7 +57,7 @@ func init() {
 	}
 	disableUnavail = addUnavailableFlags(disableCmd)
 	disableCmd.Flags().BoolVarP(&disableAll, "all", "a", false, "Remove every layer, private included")
-	disableCmd.Flags().BoolVar(&disableStop, "stop", false, "Also stop and remove the service containers")
+	disableCmd.Flags().BoolVar(&disableStop, "stop", false, "Also scale the service to zero")
 	rootCmd.AddCommand(disableCmd)
 }
 

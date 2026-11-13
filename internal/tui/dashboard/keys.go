@@ -31,7 +31,7 @@ var shortcuts = map[actions.Scope][]shortcut{
 		{"e", "layer.enable"}, {"d", "layer.disable"},
 		{"l", "layer.logs"},
 	},
-	actions.Global: {{"n", "global.new"}, {"b", "global.backup"}, {"r", "global.restore"}},
+	actions.Global: {{"n", "global.new"}, {"b", "global.backup"}, {"B", "global.restore"}},
 }
 
 // shortcutFor returns the action a key runs for a scope.

@@ -358,7 +358,7 @@ func Test_Form_DynamicChoicesAndBackupPrefill(t *testing.T) {
 	m := newTestModel(stubServices())
 	m.backups = []backup.Listing{{Dir: "/b/2026-10-01", Created: time.Unix(0, 0), Services: []string{"caddy"}}}
 	m = press(m, "4")
-	m, cmd := pressCmd(m, "r") // global.restore, prefilled with the selected backup
+	m, cmd := pressCmd(m, "B") // global.restore, prefilled with the selected backup
 	require.Equal(t, modeForm, m.mode, "restore asks: it has a required choice")
 	in, _ := m.frm.values()
 	assert.Equal(t, "/b/2026-10-01", in["backup"])
@@ -717,4 +717,20 @@ func Test_Clip(t *testing.T) {
 	assert.True(t, utf8.ValidString(r))
 	assert.Equal(t, "café…", r)
 	assert.Equal(t, "abcdef", clip("abcdef", 0))
+}
+
+// A key is bound once per scope (a scope may shadow Global on purpose).
+func TestShortcuts_UniquePerScope(t *testing.T) {
+	for sc, list := range shortcuts {
+		seen := map[string]string{}
+		check := func(l []shortcut) {
+			for _, s := range l {
+				if prev, dup := seen[s.key]; dup {
+					t.Errorf("scope %v: key %q is both %s and %s", sc, s.key, prev, s.id)
+				}
+				seen[s.key] = s.id
+			}
+		}
+		check(list)
+	}
 }

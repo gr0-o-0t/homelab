@@ -157,3 +157,21 @@ func TestBuild_MultiSelection(t *testing.T) {
 	assert.Equal(t, []string{"logs", "--follow", "--tail", "200", "web"},
 		logs.Build(Target{Scope: Service, Names: []string{"web"}}, nil), "a one-service selection is that service")
 }
+
+func TestRegistry_BulkAndSecretActionsConfirm(t *testing.T) {
+	for _, id := range []string{"global.stop", "global.down", "global.restart", "global.update", "service.config"} {
+		a, ok := ByID(id)
+		require.True(t, ok, id)
+		assert.Equal(t, Confirm, a.Danger, id)
+		assert.NotEmpty(t, a.Help, id)
+	}
+	cfg, _ := ByID("service.config")
+	assert.NotEqual(t, GroupInspect, cfg.Group, "prints secrets: not in the harmless group")
+	stop, _ := ByID("service.stop")
+	down, _ := ByID("service.down")
+	gstop, _ := ByID("global.stop")
+	assert.Equal(t, down.Icon, stop.Icon)
+	assert.Equal(t, down.Icon, gstop.Icon)
+	gdown, _ := ByID("global.down")
+	assert.NotContains(t, gdown.Help, "remove")
+}

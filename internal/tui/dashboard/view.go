@@ -514,7 +514,7 @@ func (m Model) backupDetail(w int) []string {
 	if b.Live {
 		lines = append(lines, "", styles.Warning.Render(styles.Icon("warn")+" taken live — files may be torn"))
 	}
-	return append(lines, "", styles.Key("r")+" restore  "+styles.Key("b")+" new backup  "+styles.Key(keyEnter)+" all actions")
+	return append(lines, "", styles.Key("B")+" restore  "+styles.Key("b")+" new backup  "+styles.Key(keyEnter)+" all actions")
 }
 
 func (m Model) healthDetail(h, w int) string {

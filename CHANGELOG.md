@@ -3,6 +3,23 @@
 Notable changes per release. The release workflow publishes the section
 matching the pushed tag as the GitHub release notes.
 
+## v0.5.5 — 2026-11-13
+
+Patch release.
+
+### Fixed
+
+- The front ends confirm "Stop all", "Restart all" and "Update all" the way
+  "Down all" already did, and "Compose config" (which prints secrets in plain
+  text) now asks first and sits in Configure instead of Inspect.
+- The TUI's Global restore moved from `r` (restart on a service) to `B`.
+
+### Changed
+
+- Stop shows the stop icon, like Down, instead of pause.
+- "Down all" and `disable --stop` said they remove containers; they scale
+  the service to zero, keeping config, volumes and exposure.
+
 ## v0.5.4 — 2026-11-13
 
 Patch release.
