@@ -20,10 +20,12 @@ env:
 
 jobs:
   release:
-    # The GUI build links the runner's glibc: an older runner keeps it
-    # runnable on older desktops (ubuntu-latest's 2.43 broke Linux Mint).
+    # The GUI build links the runner's glibc, so the runner sets the oldest
+    # desktop it starts on: ubuntu-latest's 2.43 broke Linux Mint 22 (2.39).
+    # It cannot go below 24.04 either: cimgui-go's prebuilt cimgui.a needs
+    # glibc >= 2.38 (__isoc23_sscanf) and fails to link on 22.04's 2.35.
     # The glibc check after `make release` holds the floor.
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       # fetch-depth: 0 is load-bearing — the Makefile derives VERSION from
       # `git tag --points-at HEAD`, which sees nothing in a shallow clone.
@@ -46,13 +48,14 @@ jobs:
       - name: Build and package
         run: make release
 
-      # The GUI binary must run on glibc 2.35 (Ubuntu 22.04, Mint 21 and
-      # anything newer): fail here rather than ship one that will not start.
+      # The GUI binary must run on glibc 2.39 (Ubuntu 24.04, Linux Mint 22,
+      # Debian 13 and anything newer): fail here rather than ship one that
+      # will not start.
       - name: Check the GUI build's glibc floor
         run: |
           need=$(objdump -T dist/homelab_*_linux_amd64/homelab | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -uV | tail -1)
           echo "the GUI build needs glibc $need"
-          test "$(printf '%s\n' "$need" 2.35 | sort -V | tail -1)" = 2.35
+          test "$(printf '%s\n' "$need" 2.39 | sort -V | tail -1)" = 2.39
 
       # The agent image, linux/amd64 + linux/arm64, from the static headless
       # binaries `make release` just built (dist/image/linux_<arch>/homelab):

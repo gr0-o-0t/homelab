@@ -19,9 +19,9 @@ cluster, plus:
 ### Fixed
 
 - The desktop (GUI) amd64 build needed glibc 2.43 and did not start on
-  Linux Mint or other distributions older than the CI runner. It is built on
-  Ubuntu 22.04 again, and the release fails if it ever needs more than
-  glibc 2.35.
+  Linux Mint 22 or other distributions older than the CI runner. It is built
+  on Ubuntu 24.04 (glibc 2.39; the prebuilt Dear ImGui library needs 2.38),
+  and the release fails if it ever needs more than glibc 2.39.
 
 ### Highlights (details in the release candidates)
 
