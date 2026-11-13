@@ -3,7 +3,12 @@
 // source repository.
 package assets
 
-import "embed"
+import (
+	"embed"
+	"fmt"
+
+	"gopkg.in/yaml.v3"
+)
 
 // CoreFS holds caddy/Caddyfile: the global options and the wildcard TLS
 // snippet internal/edge assembles the agent's whole Caddy config from (with
@@ -22,3 +27,30 @@ var CoreFS embed.FS
 //
 //go:embed services
 var CatalogFS embed.FS
+
+//go:embed cloudflared/docker-compose.yml
+var cloudflaredCompose []byte
+
+// CloudflaredImage returns the cloudflared image reference from
+// cloudflared/docker-compose.yml, which must declare exactly one service with
+// an image. The file exists so Dependabot can bump the tag.
+func CloudflaredImage() (string, error) {
+	var f struct {
+		Services map[string]struct {
+			Image string `yaml:"image"`
+		} `yaml:"services"`
+	}
+	if err := yaml.Unmarshal(cloudflaredCompose, &f); err != nil {
+		return "", fmt.Errorf("cloudflared/docker-compose.yml: %w", err)
+	}
+	if len(f.Services) != 1 {
+		return "", fmt.Errorf("cloudflared/docker-compose.yml: want exactly one service, found %d", len(f.Services))
+	}
+	for _, s := range f.Services {
+		if s.Image == "" {
+			return "", fmt.Errorf("cloudflared/docker-compose.yml: the service has no image")
+		}
+		return s.Image, nil
+	}
+	return "", nil
+}

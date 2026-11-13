@@ -1,0 +1,30 @@
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule: {interval: weekly}
+    open-pull-requests-limit: 5
+    commit-message: {prefix: "build(deps)"}
+    groups:
+      go-minor-patch: {patterns: ["*"], update-types: [minor, patch]}
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: {interval: weekly}
+    open-pull-requests-limit: 5
+    commit-message: {prefix: ci}
+    groups:
+      actions-minor-patch: {patterns: ["*"], update-types: [minor, patch]}
+  - package-ecosystem: docker
+    directory: /
+    schedule: {interval: weekly}
+    open-pull-requests-limit: 5
+    commit-message: {prefix: "build(deps)"}
+    groups:
+      docker-minor-patch: {patterns: ["*"], update-types: [minor, patch]}
+  - package-ecosystem: docker-compose
+    directories: [/assets/cloudflared, "/assets/services/*"]
+    schedule: {interval: weekly}
+    open-pull-requests-limit: 5
+    commit-message: {prefix: "build(deps)"}
+    groups:
+      compose-minor-patch: {patterns: ["*"], update-types: [minor, patch]}

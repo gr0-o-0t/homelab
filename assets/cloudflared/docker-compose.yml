@@ -1,0 +1,6 @@
+# The cloudflared image the leader agent deploys as a Swarm service (see
+# internal/swarm/cloudflared.go). Only the image is read from this file; it
+# lives here so Dependabot's docker-compose ecosystem can bump the tag.
+services:
+  cloudflared:
+    image: cloudflare/cloudflared:2026.10.7

@@ -31,6 +31,13 @@ context is `dist/image/` only (`.dockerignore`). Releases push
 (`.github/workflows/release.yml`). Test a local build with
 `init|join|upgrade --image homelab:dev`.
 
+Dependabot (`.github/dependabot.yml`) opens weekly PRs, minor and patch updates
+grouped per ecosystem, for the Go modules (Caddy, Tailscale, the Docker SDK…),
+GitHub Actions, the agent image's base (`Dockerfile`), cloudflared (the image
+tag in `assets/cloudflared/docker-compose.yml`, which `internal/swarm` reads) and
+the catalog images. Merging them and cutting a release is how the edge gets
+newer.
+
 Run a single test package:
 
 ```bash

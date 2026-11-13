@@ -7,15 +7,25 @@ import (
 	"strings"
 
 	"github.com/docker/docker/api/types/swarm"
+
+	"github.com/groot/homelab/assets"
 )
 
-const (
-	// CloudflaredImage is pinned to a concrete release (cloudflared prints
-	// 2026.10.7 as its version; the tag was confirmed with `docker manifest
-	// inspect`): the image carries no version label, and :latest would roll the
-	// public tunnel on whichever node pulls next.
-	CloudflaredImage = "cloudflare/cloudflared:2026.10.7"
+// CloudflaredImage is pinned to a concrete release, read from the embedded
+// assets/cloudflared/docker-compose.yml (which Dependabot bumps): the image
+// carries no version label, and :latest would roll the public tunnel on
+// whichever node pulls next. A broken file fails at startup.
+var CloudflaredImage = mustCloudflaredImage()
 
+func mustCloudflaredImage() string {
+	img, err := assets.CloudflaredImage()
+	if err != nil {
+		panic(err)
+	}
+	return img
+}
+
+const (
 	// CloudflaredService is the Swarm service name; its homelab.service label
 	// is CloudflaredLabel.
 	CloudflaredService = "homelab_cloudflared"

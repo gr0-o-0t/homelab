@@ -17,6 +17,12 @@ matching the pushed tag as the GitHub release notes.
   release it only brings agents behind this CLI up to it. `--image` still
   rolls an image to the agents only.
 
+### Build
+
+- Dependabot proposes weekly, grouped updates for Go modules, GitHub Actions,
+  the agent image base, cloudflared and catalog images. The cloudflared image
+  now comes from `assets/cloudflared/docker-compose.yml`.
+
 ## v0.5.1 — 2026-11-13
 
 Patch release.
