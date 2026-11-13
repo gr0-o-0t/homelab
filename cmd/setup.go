@@ -18,8 +18,9 @@ import (
 // ── homelab setup ─────────────────────────────────────────────────────────────
 
 var setupCmd = &cobra.Command{
-	Use:   "setup [service]",
-	Short: "Configure homelab or service variables and secrets",
+	Annotations: jsonSupported,
+	Use:         "setup [service]",
+	Short:       "Configure homelab or service variables and secrets",
 	Long: `Configure homelab root settings, or a specific service's config.
 
 Without a service argument, runs the homelab root setup wizard.

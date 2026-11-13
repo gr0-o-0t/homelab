@@ -15,9 +15,10 @@ import (
 )
 
 var statusCmd = &cobra.Command{
-	Use:     "status [service]",
-	Aliases: []string{"ps"},
-	Short:   "Show homelab status overview",
+	Annotations: jsonSupported,
+	Use:         "status [service]",
+	Aliases:     []string{"ps"},
+	Short:       "Show homelab status overview",
 	Long: `Display the status of the edge (the leader agent's Caddy, network extensions)
 and every installed service.
 

@@ -25,8 +25,9 @@ var (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "homelab",
-	Short: "Self-hosted services manager",
+	Annotations: jsonSupported,
+	Use:         "homelab",
+	Short:       "Self-hosted services manager",
 	Long: `homelab manages your self-hosted service stack backed by Tailscale and Caddy.
 
 Run without arguments to open the interactive service browser.`,

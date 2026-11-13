@@ -6,6 +6,7 @@ import (
 	"io"
 	"testing"
 
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -89,4 +90,46 @@ func TestRoot_NeverForwardsInsideAgent(t *testing.T) {
 	code := executeArgs([]string{"--config-dir", t.TempDir(), "ls", "-q"})
 	require.Equal(t, 0, code)
 	assert.Empty(t, *calls)
+}
+
+func TestRoot_JSONUnsupportedIsRefusedBeforeForwarding(t *testing.T) {
+	t.Setenv("HOMELAB_AGENT", "")
+	calls := fakeAgent(t, 0, nil)
+	for _, argv := range [][]string{{"doctor", "--json"}, {"ext", "list", "--json"}, {"up", "web", "--json"}} {
+		resetFlags()
+		assert.Equal(t, 1, executeArgs(argv), "%q", argv)
+	}
+	assert.Empty(t, *calls, "nothing reaches the leader")
+
+	resetFlags()
+	rootCmd.SetArgs([]string{"doctor", "--json"})
+	err := rootCmd.Execute()
+	assert.EqualError(t, err, `--json is not supported by "homelab doctor"`)
+}
+
+func TestRoot_JSONSupportedStillForwards(t *testing.T) {
+	t.Setenv("HOMELAB_AGENT", "")
+	for _, argv := range [][]string{{"status", "--json"}, {"status", "web", "--json"}, {"ls", "--json"}, {"setup", "--json"}, {"images", "web", "--json"}, {"backup-list", "--json"}} {
+		calls := fakeAgent(t, 0, nil)
+		resetFlags()
+		assert.Equal(t, 0, executeArgs(argv), "%q", argv)
+		assert.Equal(t, [][]string{argv}, *calls)
+	}
+}
+
+// The commands marked as honouring --json are the ones whose code reads
+// rootFlags.json: a new reader must be marked (and listed here).
+func TestJSONSupported_MarkedSet(t *testing.T) {
+	var got []string
+	var walk func(c *cobra.Command)
+	walk = func(c *cobra.Command) {
+		if c.Annotations[jsonAnnotation] == "true" {
+			got = append(got, c.CommandPath())
+		}
+		for _, sub := range c.Commands() {
+			walk(sub)
+		}
+	}
+	walk(rootCmd)
+	assert.ElementsMatch(t, []string{"homelab", "homelab ls", "homelab status", "homelab setup", "homelab images", "homelab backup", "homelab backup-list"}, got)
 }

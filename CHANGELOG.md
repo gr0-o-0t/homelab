@@ -20,6 +20,11 @@ Patch release.
   whether it is enabled. `status --json` and `status <service> --json`
   carry the same as each service's `ports` (name, label, raw, port, listen,
   protocols, target, enabled, note).
+- `--json` on a command that does not support it (`doctor`, `ext list`, ...)
+  now fails with `error: --json is not supported by "homelab doctor"` before
+  anything is forwarded, instead of printing human text and exiting 0. The
+  commands that honour it (`status`, `ls`, `setup`, `images`, `backup --list`,
+  `backup-list`) are unchanged.
 
 ## v0.5.3 — 2026-11-13
 

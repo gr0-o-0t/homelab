@@ -32,8 +32,9 @@ var backupsRoot = agentstate.BackupsRoot
 const backupStopTimeout = 2 * time.Minute
 
 var backupCmd = &cobra.Command{
-	Use:   "backup [service...]",
-	Short: "Back up service volumes, databases and config",
+	Annotations: jsonSupported,
+	Use:         "backup [service...]",
+	Short:       "Back up service volumes, databases and config",
 	Long: `Snapshot everything a service owns: its named Docker volumes, its
 databases on the shared instances, and its config files.
 
@@ -90,10 +91,11 @@ func init() {
 // flags); backup-list is in remote.ReadOnly and never waits behind an up or
 // a backup. Hidden plumbing: users have `backup --list`.
 var backupListCmd = &cobra.Command{
-	Use:    "backup-list",
-	Short:  "List existing backups, newest first (backup --list without the lock; used by the front ends)",
-	Hidden: true,
-	Args:   cobra.NoArgs,
+	Annotations: jsonSupported,
+	Use:         "backup-list",
+	Short:       "List existing backups, newest first (backup --list without the lock; used by the front ends)",
+	Hidden:      true,
+	Args:        cobra.NoArgs,
 	RunE: func(*cobra.Command, []string) error {
 		dir, err := backup.ResolveUnder(backupsRoot, "")
 		if err != nil {

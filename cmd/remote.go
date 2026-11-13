@@ -46,6 +46,9 @@ func init() {
 }
 
 func rootPreRun(c *cobra.Command, args []string) error {
+	if err := checkJSON(c); err != nil {
+		return err
+	}
 	if shouldForward(c) {
 		argv := invokedArgs
 		if argv == nil {

@@ -21,9 +21,10 @@ import (
 // lsCmd lists installed services as a table, like `docker compose ls` — never
 // the dashboard, so it is safe in scripts and on a TTY alike.
 var lsCmd = &cobra.Command{
-	Use:   "ls",
-	Short: "List installed services",
-	Args:  cobra.NoArgs,
+	Annotations: jsonSupported,
+	Use:         "ls",
+	Short:       "List installed services",
+	Args:        cobra.NoArgs,
 	RunE: func(_ *cobra.Command, _ []string) error {
 		root := configDir()
 		svcs, err := discoverServices(root)

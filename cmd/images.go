@@ -38,8 +38,9 @@ type imageInfo struct {
 }
 
 var imagesCmd = &cobra.Command{
-	Use:   "images <service>",
-	Short: "List the Docker images a service deploys",
+	Annotations: jsonSupported,
+	Use:         "images <service>",
+	Short:       "List the Docker images a service deploys",
 	Long: `List the image of every container of a service's stack, as its compose file
 resolves them.
 
