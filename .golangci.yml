@@ -1,7 +1,9 @@
 version: "2"
 
 run:
-  timeout: 5m
+  # CI lints twice (default + nogui) and starts with an empty cache on a new
+  # cache key; 5m was not enough there.
+  timeout: 15m
   modules-download-mode: readonly
 
 linters:
