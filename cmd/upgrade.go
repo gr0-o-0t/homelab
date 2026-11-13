@@ -252,6 +252,11 @@ func rollAgents(argv []string, img, want, cli string) (int, error) {
 	}
 	c, err := upgradeClient()
 	if err != nil {
+		// `sudo homelab upgrade`: root has no client.yaml or keyring of the
+		// user's (and the swap already happened, as root).
+		if os.Getenv("SUDO_USER") != "" {
+			err = fmt.Errorf("%w — run `homelab upgrade` as yourself, not with sudo: it asks for root only to replace the binary", err)
+		}
 		return 1, err
 	}
 	ctx := cmdContext()

@@ -244,3 +244,24 @@ func imageLabelled(version string) image.InspectResponse {
 	return image.InspectResponse{Config: &dockerspec.DockerOCIImageConfig{ImageConfig: ocispec.ImageConfig{
 		Labels: map[string]string{bootstrap.VersionLabel: version}}}}
 }
+
+// `sudo homelab upgrade`: root has no client.yaml, so the rollout cannot
+// reach the leader — say to run it as yourself.
+func TestUpgradeCLI_UnderSudoHintsToRunAsYourself(t *testing.T) {
+	const hint = "run `homelab upgrade` as yourself, not with sudo: it asks for root only to replace the binary"
+	for _, sudoUser := range []string{"alice", ""} {
+		fw, _, _ := fakeUpgrade(t, "v1.5.0", true, 0, nil, oldLeader)
+		upgradeClient = func() (*remote.Client, error) { return nil, errors.New("no client.yaml: run homelab login") }
+		t.Setenv("SUDO_USER", sudoUser)
+		var code int
+		stderr := captureStderr(func() { code = executeArgs([]string{"upgrade", "--image", "homelab:dev"}) })
+		assert.Equal(t, 1, code)
+		assert.Contains(t, stderr, "no client.yaml")
+		if sudoUser != "" {
+			assert.Contains(t, stderr, hint)
+		} else {
+			assert.NotContains(t, stderr, hint)
+		}
+		assert.Empty(t, *fw)
+	}
+}
