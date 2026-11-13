@@ -70,21 +70,29 @@ target is the latest GitHub release (`internal/release`), or `--version`'s.
 When the CLI is not the target it downloads that release's archive for this
 build, checks it against `SHA256SUMS` and renames the binary over the
 running executable (a temp file in the same directory, `os.Executable` +
-`EvalSymlinks`). A directory the user cannot write: `sudo -- <exe> upgrade
---cli-only --version <tag>` (hidden, local, refused in the agent: replace the
+`EvalSymlinks`). API calls time out after 30 s; the download has no overall
+client timeout (dial/TLS/header timeouts, 15 min per download). Release
+binaries are linux-only: off Linux the CLI step refuses (rebuild from
+source, then `--version`/`--image` for the agents). A directory the user
+cannot write: `sudo -- <exe> upgrade --cli-only --version <tag>` (`doas`
+when there is no `sudo`; hidden, local, refused in the agent: replace the
 binary and exit) — only that step runs as root — then this process execs the
 new binary as `upgrade --version <tag>` with `HOMELAB_UPGRADE_SELF=<tag>` in
 its environment (every root flag set kept, wherever it stood) so the agent
 rollout runs as the invoking user, with their client.yaml and keyring; that
 exec'd leg never runs a CLI step (a binary not on the tag fails: "not
-retrying"). Already root or no `sudo`: an error naming the path and the
-manual command; a rename refused with EPERM (sticky dir) also takes sudo. A
+retrying"). Already root or neither `sudo` nor `doas`: an error naming the
+path and the manual command (as root); a rename refused with EPERM (sticky
+dir) also takes that path. `sudo homelab upgrade` swaps the binary but root
+has no client.yaml: the rollout's error then says to run it as yourself. A
 bare upgrade whose CLI is not behind the latest release (never a downgrade)
 keeps the CLI and still forwards the rollout to the CLI's version (unless
 the leader runs a newer release): the leader leaves every agent already on
 it alone, so a worker that missed an upgrade is caught up. A dev CLI build
 refuses a bare upgrade (`--version` or `--image`). `--image` leaves the CLI
 alone and rolls that image to the agents only.
+`--image` with an unchanged version label (a rebuilt dev image of the same commit) replaces nothing: agents on that version are left alone.
+A bare upgrade from a release CLI rolls a dev-build cluster to that release (the dev agents are not "newer").
 
 The agent step (forwarded; Mutating and Detached) resolves the image on the PC
 (`ghcr.io/gr0-o-0t/homelab:<tag>`, or `--image`),

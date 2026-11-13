@@ -54,8 +54,8 @@ make install      # go install → puts 'homelab' on your PATH
 
 Or install a release binary (`homelab_<tag>_linux_<arch>.tar.gz` from the
 GitHub releases, checked against its `SHA256SUMS`). Later, `homelab upgrade`
-replaces the CLI with the latest release (through `sudo` when its binary is
-not writable by you) and then upgrades the cluster's agents.
+replaces the CLI with the latest release (through `sudo`, or `doas`, when its
+binary is not writable by you) and then upgrades the cluster's agents.
 
 ### 2. Get the credentials
 
@@ -122,9 +122,11 @@ homelab upgrade --image REF     Roll an image to the agents only (a development 
 `homelab upgrade` downloads the release for this build, checks it against the
 release's `SHA256SUMS` and replaces the `homelab` binary in place. When that
 binary is not writable by you (e.g. `/usr/local/bin`), only the replacement
-runs under `sudo`, which asks for your password; the agents are then
-upgraded as you, with your cluster login. Install the CLI on each PC once;
-from then on `homelab upgrade` keeps it and the cluster current.
+runs under `sudo` (or `doas` where there is no `sudo`), which asks for your
+password; the agents are then upgraded as you, with your cluster login — so
+run `homelab upgrade` itself without sudo. Install the CLI on each PC once;
+from then on `homelab upgrade` keeps it and the cluster current. Release
+binaries are Linux-only: on another OS, build the CLI from source.
 
 ### Service lifecycle
 

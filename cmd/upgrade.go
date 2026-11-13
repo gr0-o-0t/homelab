@@ -35,7 +35,7 @@ var upgradeCmd = &cobra.Command{
 	Short: "Upgrade this PC's homelab CLI to the latest release, then the cluster's agents: workers first, the leader last",
 	Long: `Replaces this PC's homelab binary with the latest release's (or --version's),
 verified against the release's SHA256SUMS; a binary you cannot write is
-replaced through sudo. Then pulls the agent image on every node, replaces
+replaced through sudo (or doas). Then pulls the agent image on every node, replaces
 each worker's homelab-agent container (one by one, each back on the new
 version before the next) and the leader's last. Mounts, networks, env,
 labels and restart policy are kept; no volume is touched. An offline worker
