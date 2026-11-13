@@ -116,15 +116,15 @@ func stubSelfUpgrade(t *testing.T, version, latest string, also ...string) *self
 	srv = httptest.NewTLSServer(mux)
 
 	prevV, prevC, prevA, prevExe, prevSudo, prevExec, prevUsable, prevUA, prevRename :=
-		Version, releaseClient, releaseAPI, selfExecutable, runSudo, execSelf, sudoUsable, release.UserAgent, renameFile
+		Version, releaseTransport, releaseAPI, selfExecutable, runSudo, execSelf, sudoUsable, release.UserAgent, renameFile
 	t.Cleanup(func() {
 		srv.Close()
-		Version, releaseClient, releaseAPI, selfExecutable, runSudo, execSelf, sudoUsable, release.UserAgent, renameFile =
+		Version, releaseTransport, releaseAPI, selfExecutable, runSudo, execSelf, sudoUsable, release.UserAgent, renameFile =
 			prevV, prevC, prevA, prevExe, prevSudo, prevExec, prevUsable, prevUA, prevRename
 		_ = os.Chmod(dir, 0o755) //nolint:gosec // let TempDir clean up
 	})
 	Version = version
-	releaseClient = srv.Client
+	releaseTransport = trusting(srv)
 	releaseAPI = srv.URL
 	selfExecutable = func() (string, error) { return s.exe, nil }
 	runSudo = func(args []string) error {

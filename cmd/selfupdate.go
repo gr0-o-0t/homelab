@@ -98,7 +98,9 @@ func replaceSelf(ctx context.Context, path string, rel release.Release, w io.Wri
 		}
 	}()
 	_, _ = fmt.Fprintf(w, "Downloading homelab %s …\n", rel.Tag)
-	data, err := release.FetchBinary(ctx, releaseClient(), rel)
+	dctx, cancel := context.WithTimeout(ctx, downloadDeadline)
+	data, err := release.FetchBinary(dctx, downloadClient(), rel)
+	cancel()
 	if err != nil {
 		return fmt.Errorf("downloading homelab %s (%s left unchanged): %w", rel.Tag, path, err)
 	}

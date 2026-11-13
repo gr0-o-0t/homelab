@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"time"
 
@@ -12,12 +13,38 @@ import (
 	"github.com/groot/homelab/internal/release"
 )
 
-// releaseClient is the HTTP client for the release check; releaseAPI the
-// repository's API base. Vars so tests point them at httptest.
+// releaseAPI is the repository's API base; a var so tests point it at
+// httptest. releaseTransport is the base transport of both HTTP clients
+// (tests trust their own CA through it).
 var (
-	releaseClient = func() *http.Client { return &http.Client{Timeout: 30 * time.Second} }
-	releaseAPI    = release.DefaultAPI
+	releaseAPI       = release.DefaultAPI
+	releaseTransport = func() *http.Transport { return http.DefaultTransport.(*http.Transport).Clone() }
 )
+
+// apiTimeout bounds one GitHub API call (a small JSON document), the body
+// included; downloadDeadline bounds a whole download. Vars for tests.
+var (
+	apiTimeout       = 30 * time.Second
+	downloadDeadline = 15 * time.Minute
+)
+
+// releaseClient is the client for the release API (Latest, ByTag).
+func releaseClient() *http.Client {
+	return &http.Client{Timeout: apiTimeout, Transport: releaseTransport()}
+}
+
+// downloadClient is the client for a release's assets. It has no overall
+// Timeout — that would cover reading the body, and a ~60 MB archive on a
+// slow link takes minutes — but each step that can hang is bounded: dial,
+// TLS handshake, response headers; the caller's context (downloadDeadline)
+// bounds the rest.
+func downloadClient() *http.Client {
+	t := releaseTransport()
+	t.DialContext = (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext
+	t.TLSHandshakeTimeout = 30 * time.Second
+	t.ResponseHeaderTimeout = 60 * time.Second
+	return &http.Client{Transport: t}
+}
 
 // updateLeaderVersion asks the leader agent its version; a var for tests.
 var updateLeaderVersion = func(ctx context.Context) (string, error) {
