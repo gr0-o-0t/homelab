@@ -29,7 +29,7 @@ jobs:
     steps:
       # fetch-depth: 0 is load-bearing — the Makefile derives VERSION from
       # `git tag --points-at HEAD`, which sees nothing in a shallow clone.
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
