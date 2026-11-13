@@ -26,10 +26,13 @@ import (
 //
 // Docker applies --tail per task and prints one task after another, so a
 // service with an old and a new task gives twice the lines, out of order.
-// The backlog is therefore read with --timestamps, every task's and
-// container's lines are merged by time, and -n applies after the merge;
-// docker's timestamps are printed only with -t. -f then follows each
-// service from the last line of its backlog, in arrival order.
+// With -n N the backlog is therefore read with --timestamps (at most N
+// lines per task), every task's and container's lines are merged by time,
+// and -n applies after the merge; -f then follows each service from the
+// last line of its backlog, in arrival order. Without -n nothing is
+// buffered: every line is streamed as docker prints it (task after task),
+// so a whole log is never held in the agent, which also runs the edge.
+// Docker's timestamps are printed only with -t.
 
 // serviceLogsCLI runs `docker args…` with its output to stdout and stderr;
 // a var so tests stand in for docker.
@@ -117,12 +120,26 @@ func runStackLogs(root, svc, want string, stdout, stderr io.Writer) error {
 			prefixes[i] = fmt.Sprintf("%-*s | ", width, s.Key)
 		}
 
-		backlogs, err := readBacklogs(ctx, svcs)
-		printBacklog(backlogs, tail, prefixes, stdout, stderr)
-		if err != nil || !logsFlags.follow {
-			return err
+		plans := make([]*streamPlan, len(svcs))
+		if tail < 0 {
+			// No -n: stream as docker prints it (task after task), never
+			// buffering a whole log in the agent.
+			for i := range plans {
+				plans[i] = &streamPlan{tail: logsFlags.tail, since: logsFlags.since}
+			}
+			return streamStack(ctx, svcs, plans, logsFlags.follow, prefixes, stdout, stderr)
 		}
-		return followStack(ctx, svcs, backlogs, prefixes, stdout, stderr)
+		backlogs, errs := readBacklogs(ctx, svcs)
+		printBacklog(backlogs, tail, prefixes, stdout, stderr)
+		if !logsFlags.follow {
+			return errors.Join(errs...)
+		}
+		for i := range svcs {
+			if errs[i] == nil { // a service whose backlog failed is not followed
+				plans[i] = followPlan(backlogs[i])
+			}
+		}
+		return errors.Join(append(errs, streamStack(ctx, svcs, plans, true, prefixes, stdout, stderr))...)
 	})
 }
 
@@ -197,9 +214,10 @@ func collector(svc int, stderr bool, entries *[]logEntry) *lineWriter {
 	}}
 }
 
-// readBacklogs reads every service's backlog (no --follow) in parallel.
-// --tail goes to docker too: per task it is more than the merged tail needs.
-func readBacklogs(ctx context.Context, svcs []bootstrap.StackService) ([][]logEntry, error) {
+// readBacklogs reads every service's backlog (no --follow) in parallel,
+// with an error per service. --tail goes to docker too: N per task is at
+// least what the merged tail needs, and bounds what is held in memory.
+func readBacklogs(ctx context.Context, svcs []bootstrap.StackService) ([][]logEntry, []error) {
 	backlogs := make([][]logEntry, len(svcs))
 	errs := make([]error, len(svcs))
 	var wg sync.WaitGroup
@@ -216,12 +234,14 @@ func readBacklogs(ctx context.Context, svcs []bootstrap.StackService) ([][]logEn
 		})
 	}
 	wg.Wait()
-	return backlogs, errors.Join(errs...)
+	return backlogs, errs
 }
 
 // printBacklog merges every backlog by time and prints its last tail
-// entries (all with tail < 0). Lines with no timestamp at all (docker's own
-// errors) are printed first and never cut.
+// entries. An entry is a timestamped line plus the unstamped lines after it
+// (docker stamps every line, so in practice an entry is one line). Lines
+// with no timestamp and nothing before them (docker's own error text) are
+// printed after the others and never cut.
 func printBacklog(backlogs [][]logEntry, tail int, prefixes []string, stdout, stderr io.Writer) {
 	var untimed, timed []logEntry
 	for _, b := range backlogs {
@@ -234,10 +254,10 @@ func printBacklog(backlogs [][]logEntry, tail int, prefixes []string, stdout, st
 		}
 	}
 	slices.SortStableFunc(timed, func(a, b logEntry) int { return a.ts.Compare(b.ts) })
-	if tail >= 0 && len(timed) > tail {
+	if len(timed) > tail {
 		timed = timed[len(timed)-tail:]
 	}
-	for _, e := range append(untimed, timed...) {
+	for _, e := range append(timed, untimed...) {
 		w := stdout
 		if e.stderr {
 			w = stderr
@@ -248,33 +268,49 @@ func printBacklog(backlogs [][]logEntry, tail int, prefixes []string, stdout, st
 	}
 }
 
-// followStack follows every service from the newest line of its backlog
-// (docker's --since includes it, so lines at that instant already printed
-// are skipped), from --since with no backlog, else from now.
-func followStack(ctx context.Context, svcs []bootstrap.StackService, backlogs [][]logEntry,
+// streamPlan is how one service's logs are streamed: docker's --tail and
+// --since, and the lines to skip (before cutoff, or at it and in seen).
+type streamPlan struct {
+	tail, since string
+	cutoff      time.Time
+	seen        map[string]int // raw lines at cutoff already read, with their count
+}
+
+// followPlan follows a service from the newest line of its backlog
+// (docker's --since includes it, so lines at that instant already read are
+// skipped), from --since with no backlog, else from now.
+func followPlan(backlog []logEntry) *streamPlan {
+	p := &streamPlan{since: logsFlags.since, seen: map[string]int{}}
+	for _, e := range backlog {
+		switch {
+		case e.ts.After(p.cutoff):
+			p.cutoff = e.ts
+			clear(p.seen)
+			p.seen[e.raw]++
+		case e.ts.Equal(p.cutoff) && !e.ts.IsZero():
+			p.seen[e.raw]++
+		}
+	}
+	switch {
+	case !p.cutoff.IsZero():
+		p.since = p.cutoff.UTC().Format(time.RFC3339Nano)
+	case p.since == "":
+		p.tail = "0"
+	}
+	return p
+}
+
+// streamStack streams every service with a plan (nil: skipped) in arrival
+// order, timestamps stripped unless -t.
+func streamStack(ctx context.Context, svcs []bootstrap.StackService, plans []*streamPlan, follow bool,
 	prefixes []string, stdout, stderr io.Writer) error {
 	var mu sync.Mutex // one line at a time across every stream
 	var wg sync.WaitGroup
 	errs := make([]error, len(svcs))
 	for i, s := range svcs {
-		var cutoff time.Time
-		seen := map[string]int{} // raw lines at cutoff already printed
-		for _, e := range backlogs[i] {
-			switch {
-			case e.ts.After(cutoff):
-				cutoff = e.ts
-				clear(seen)
-				seen[e.raw]++
-			case e.ts.Equal(cutoff) && !e.ts.IsZero():
-				seen[e.raw]++
-			}
-		}
-		tail, since := "", logsFlags.since
-		switch {
-		case !cutoff.IsZero():
-			since = cutoff.UTC().Format(time.RFC3339Nano)
-		case since == "":
-			tail = "0"
+		p := plans[i]
+		if p == nil {
+			continue
 		}
 		follower := func(w io.Writer) *lineWriter {
 			drop := false
@@ -283,9 +319,9 @@ func followStack(ctx context.Context, svcs []bootstrap.StackService, backlogs []
 				defer mu.Unlock()
 				ts, rest, ok := splitTimestamp(line)
 				if ok {
-					drop = ts.Before(cutoff)
-					if ts.Equal(cutoff) && seen[line] > 0 {
-						seen[line]--
+					drop = ts.Before(p.cutoff)
+					if ts.Equal(p.cutoff) && p.seen[line] > 0 {
+						p.seen[line]--
 						drop = true
 					}
 					line = shown(line, rest)
@@ -297,7 +333,7 @@ func followStack(ctx context.Context, svcs []bootstrap.StackService, backlogs []
 		}
 		wg.Go(func() {
 			out, errOut := follower(stdout), follower(stderr)
-			if err := serviceLogsCLI(ctx, serviceLogsArgs(s.Name, true, tail, since), out, errOut); err != nil {
+			if err := serviceLogsCLI(ctx, serviceLogsArgs(s.Name, follow, p.tail, p.since), out, errOut); err != nil {
 				errs[i] = fmt.Errorf("%s: %w", s.Key, err)
 			}
 			out.Flush()

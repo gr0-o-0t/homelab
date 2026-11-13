@@ -13,6 +13,10 @@ var logsCmd = &cobra.Command{
 runs it, each line prefixed with its compose key. Without a service, print the
 leader agent's logs (the agent, its Caddy and its tailnet node).
 
+With -n N a service's lines are the last N across all its tasks and
+containers, merged by time. Without -n every line is streamed as Docker
+gives it: one task after another, not merged.
+
   homelab logs jellyfin             # print and exit
   homelab logs -f -n 100 jellyfin   # follow, starting from the last 100 lines
   homelab logs -c server immich     # one container of the stack
@@ -52,7 +56,8 @@ func init() {
 	f := logsCmd.Flags()
 	f.BoolVarP(&logsFlags.follow, "follow", "f", false, "Follow log output")
 	f.BoolVarP(&logsFlags.timestamps, "timestamps", "t", false, "Show timestamps")
-	f.StringVarP(&logsFlags.tail, "tail", "n", "", `Number of lines to show from the end (e.g. "100", "all")`)
+	f.StringVarP(&logsFlags.tail, "tail", "n", "",
+		`Number of lines to show from the end (e.g. "100", "all"); for a service, the last N lines across all tasks, merged by time`)
 	f.StringVar(&logsFlags.since, "since", "", `Show logs since timestamp or relative duration (e.g. "30m", "2h")`)
 	f.StringVar(&logsFlags.until, "until", "", `Show logs before timestamp or relative duration (agent logs only)`)
 	f.BoolVar(&logsFlags.tui, "tui", false, "Open the full-screen log viewer")

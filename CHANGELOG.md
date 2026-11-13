@@ -18,7 +18,8 @@ Patch release.
   another, so a service with an old and a new task gave twice the lines,
   interleaved across days. The lines of every task and container are now
   merged by their timestamps before the tail; the timestamps are shown only
-  with `-t`. `-f` prints that backlog, then follows.
+  with `-t`. `-f` prints those lines, then follows. Without `-n`, logs
+  still stream as Docker gives them, one task after another.
 
 ## v0.5.2 — 2026-11-13
 
