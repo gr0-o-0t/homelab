@@ -20,7 +20,9 @@ import (
 	"net/http"
 	"net/url"
 	"runtime"
+	"strconv"
 	"strings"
+	"time"
 
 	"golang.org/x/mod/semver"
 )
@@ -273,6 +275,9 @@ func get(ctx context.Context, c *http.Client, u string, limit int64, accept stri
 	if final := resp.Request.URL; final.Scheme != "https" {
 		return nil, fmt.Errorf("release: GET %s: redirected to %s: not https", u, final.Redacted())
 	}
+	if err := rateLimited(resp); err != nil {
+		return nil, fmt.Errorf("release: GET %s: %w", u, err)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("release: GET %s: %s", u, resp.Status)
 	}
@@ -309,4 +314,23 @@ func Newer(current, latest string) bool {
 		return false
 	}
 	return semver.Compare(latest, current) > 0
+}
+
+// rateLimitLayout is how a rate limit's reset time is shown (local time).
+const rateLimitLayout = "15:04:05 MST, Jan 2"
+
+// rateLimited: GitHub refused because no requests are left (403 or 429
+// with X-RateLimit-Remaining: 0); nil otherwise.
+func rateLimited(resp *http.Response) error {
+	if resp.StatusCode != http.StatusForbidden && resp.StatusCode != http.StatusTooManyRequests {
+		return nil
+	}
+	if resp.Header.Get("X-RateLimit-Remaining") != "0" {
+		return nil
+	}
+	when := "later"
+	if s, err := strconv.ParseInt(resp.Header.Get("X-RateLimit-Reset"), 10, 64); err == nil {
+		when = "after " + time.Unix(s, 0).Local().Format(rateLimitLayout)
+	}
+	return fmt.Errorf("GitHub API rate limit reached; retry %s", when)
 }

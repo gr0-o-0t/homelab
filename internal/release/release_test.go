@@ -10,8 +10,10 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 const tag = "v0.5.1"
@@ -383,5 +385,37 @@ func TestDevBuild(t *testing.T) {
 		if reason, dev := DevBuild(v); dev {
 			t.Errorf("DevBuild(%q) = %q, true", v, reason)
 		}
+	}
+}
+
+// A 403/429 with no requests left says so, and when it resets (local time).
+func TestRateLimit(t *testing.T) {
+	reset := time.Date(2026, 11, 13, 15, 4, 5, 0, time.UTC)
+	for _, code := range []int{http.StatusForbidden, http.StatusTooManyRequests} {
+		srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("X-RateLimit-Remaining", "0")
+			w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(reset.Unix(), 10))
+			w.WriteHeader(code)
+		}))
+		_, err := Latest(context.Background(), srv.Client(), srv.URL)
+		srv.Close()
+		if err == nil {
+			t.Fatalf("%d: no error", code)
+		}
+		want := "GitHub API rate limit reached; retry after " + reset.Local().Format(rateLimitLayout)
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("%d: %v, want %q", code, err, want)
+		}
+	}
+
+	// A 403 with requests left is a plain refusal.
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("X-RateLimit-Remaining", "12")
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer srv.Close()
+	_, err := Latest(context.Background(), srv.Client(), srv.URL)
+	if err == nil || strings.Contains(err.Error(), "rate limit") {
+		t.Errorf("got %v, want a plain 403", err)
 	}
 }
