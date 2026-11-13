@@ -13,7 +13,7 @@ networks:
 
 services:
   forgejo:
-    image: codeberg.org/forgejo/forgejo:15-rootless
+    image: codeberg.org/forgejo/forgejo:17-rootless
     container_name: forgejo
     user: "${PUID:-1000}:${PGID:-1000}"
     restart: always
