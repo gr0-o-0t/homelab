@@ -443,11 +443,14 @@ func build() []Action {
 		Action{ID: "global.cluster.login", Label: "Log in to cluster", Group: GroupConfigure, Icon: "link", Scope: Global,
 			Interactive: true, Help: "Use this machine as a client of the leader agent; asks for its endpoint and the cluster secret",
 			Args: named("login"), Commands: []string{"login"}},
-		Action{ID: "global.upgrade", Label: "Upgrade agents", Group: GroupMaintenance, Icon: "upgrade", Scope: Global,
-			Danger: Confirm, Help: "Roll a new homelab version across every agent: workers one by one, the leader last (it restarts)",
+		// Interactive: replacing a binary the user cannot write asks for the
+		// sudo password on the terminal.
+		Action{ID: "global.upgrade", Label: "Upgrade homelab", Group: GroupMaintenance, Icon: "upgrade", Scope: Global,
+			Danger: Confirm, Interactive: true,
+			Help: "Upgrade this PC's homelab CLI to the latest release (sudo if its binary is not writable), then every agent: workers one by one, the leader last (it restarts)",
 			Inputs: []Input{
-				{Key: "version", Label: "Version", Kind: Text, Help: "Default: this CLI's version"},
-				{Key: "image", Label: "Image", Kind: Text, Help: "Default: ghcr.io/gr0-o-0t/homelab:<version>"},
+				{Key: "version", Label: "Version", Kind: Text, Help: "Default: the latest release"},
+				{Key: "image", Label: "Image", Kind: Text, Help: "Agents only, the CLI left as it is (dev builds)"},
 			},
 			Args: func(_ Target, in Inputs) []string {
 				args := []string{"upgrade"}

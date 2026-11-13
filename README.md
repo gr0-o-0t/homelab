@@ -52,6 +52,11 @@ make build-headless  # pure Go, no GUI — for servers without a desktop
 make install      # go install → puts 'homelab' on your PATH
 ```
 
+Or install a release binary (`homelab_<tag>_linux_<arch>.tar.gz` from the
+GitHub releases, checked against its `SHA256SUMS`). Later, `homelab upgrade`
+replaces the CLI with the latest release (through `sudo` when its binary is
+not writable by you) and then upgrades the cluster's agents.
+
 ### 2. Get the credentials
 
 - Follow [docs/tailscale-setup.md](docs/tailscale-setup.md) to generate a reusable auth key (`TS_AUTHKEY`).
@@ -106,7 +111,20 @@ homelab logout                  Forget the cluster endpoint and secret here
 
 `init --import ~/.config/homelab` brings a Compose-era install along (config,
 services, exposure, desired state, keyring secrets) and reuses its volumes.
-`homelab upgrade` (rolling the agents) is planned and does not exist yet.
+
+```
+homelab update                  Check for a newer homelab release
+homelab upgrade                 This PC's CLI to the latest release, then every agent (workers first, the leader last)
+homelab upgrade --version vX    The same, to release vX
+homelab upgrade --image REF     Roll an image to the agents only (a development build)
+```
+
+`homelab upgrade` downloads the release for this build, checks it against the
+release's `SHA256SUMS` and replaces the `homelab` binary in place. When that
+binary is not writable by you (e.g. `/usr/local/bin`), only the replacement
+runs under `sudo`, which asks for your password; the agents are then
+upgraded as you, with your cluster login. Install the CLI on each PC once;
+from then on `homelab upgrade` keeps it and the cluster current.
 
 ### Service lifecycle
 

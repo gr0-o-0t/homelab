@@ -3,6 +3,20 @@
 Notable changes per release. The release workflow publishes the section
 matching the pushed tag as the GitHub release notes.
 
+## v0.5.2 — 2026-11-13
+
+### Added
+
+- `homelab update` with no service checks for a newer homelab release and
+  reports this CLI's and the leader agent's versions. `homelab update
+  <service>` still pulls and redeploys a service.
+- `homelab upgrade` upgrades this PC's CLI to the latest release (or
+  `--version`'s), verified against the release's `SHA256SUMS`, then the
+  agents. A CLI binary you cannot write is replaced through `sudo`; the
+  agents are then upgraded as you. It never downgrades: with no newer
+  release it only brings agents behind this CLI up to it. `--image` still
+  rolls an image to the agents only.
+
 ## v0.5.1 — 2026-11-13
 
 Patch release.

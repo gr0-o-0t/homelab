@@ -70,31 +70,34 @@ func fakeUpgrade(t *testing.T, version string, marker bool, code int, runErr err
 		return a.(bootstrap.AgentID), nil
 	}
 	upgradeSleep = func(context.Context, time.Duration) bool { return true }
+	stubSelfUpgrade(t, version, version) // the latest release is this CLI: no CLI step
 	return &forwarded, &asks, &stream
 }
 
 var errNotBack = fmt.Errorf("dial: %w", remote.ErrUnreachable)
 
+// A bare upgrade whose CLI already is the latest release asks the leader
+// its version (the first answer), and rolls the agents behind this CLI.
 func TestUpgradeCLI_ForwardsResolvedImageAndVerifiesLeader(t *testing.T) {
 	fw, asks, _ := fakeUpgrade(t, "v1.5.0", true, 1, fmt.Errorf("x: %w", remote.ErrConnectionLost),
-		oldLeader, errNotBack, oldLeader, newLeader)
+		oldLeader, oldLeader, errNotBack, oldLeader, newLeader)
 	code := executeArgs([]string{"upgrade"})
 	assert.Equal(t, 0, code)
 	require.Len(t, *fw, 1)
 	assert.Equal(t, []string{"upgrade", "--image", "ghcr.io/gr0-o-0t/homelab:v1.5.0", "--version", "v1.5.0"}, (*fw)[0],
 		"the leader gets this CLI's image, not its own default")
-	assert.Greater(t, *asks, 4, "waits while the leader is away or still old, then for it to stay up")
+	assert.Greater(t, *asks, 5, "waits while the leader is away or still old, then for it to stay up")
 }
 
 func TestUpgradeCLI_ReportsMismatch(t *testing.T) {
-	_, _, _ = fakeUpgrade(t, "v1.5.0", true, 0, nil, oldLeader, newLeader)
-	assert.Equal(t, 1, executeArgs([]string{"upgrade", "--version", "v1.6.0"}))
+	_, _, _ = fakeUpgrade(t, "v1.5.0", true, 0, nil, oldLeader, bootstrap.AgentID{Version: "v1.4.9", Boot: "new"})
+	assert.Equal(t, 1, executeArgs([]string{"upgrade", "--version", "v1.5.0"}))
 }
 
 func TestUpgradeCLI_LeaderNeverBack(t *testing.T) {
-	_, asks, _ := fakeUpgrade(t, "v1.5.0", true, 0, nil, oldLeader, errors.New("dial"))
+	_, asks, _ := fakeUpgrade(t, "v1.5.0", true, 0, nil, oldLeader, oldLeader, errors.New("dial"))
 	assert.Equal(t, 1, executeArgs([]string{"upgrade"}))
-	assert.Equal(t, 31, *asks, "the probe before, then 60 s of attempts 2 s apart")
+	assert.Equal(t, 32, *asks, "the version check, the probe before, then 60 s of attempts 2 s apart")
 }
 
 // Without a known version (--image only), the old agent still answering —
@@ -106,27 +109,37 @@ func TestUpgradeCLI_OldLeaderAnsweringIsNotAccepted(t *testing.T) {
 
 // A rollout that halted on the leader (a worker failed) is not waited on.
 func TestUpgradeCLI_HaltedRolloutNotVerified(t *testing.T) {
-	_, asks, _ := fakeUpgrade(t, "v1.5.0", false, 1, nil, oldLeader, newLeader)
+	_, asks, _ := fakeUpgrade(t, "v1.5.0", false, 1, nil, oldLeader, oldLeader, newLeader)
 	assert.Equal(t, 1, executeArgs([]string{"upgrade"}))
-	assert.Equal(t, 1, *asks, "only the probe before")
+	assert.Equal(t, 2, *asks, "only the version check and the probe before")
 }
 
 // A dropped connection before the leader announced its own replacement is
 // reported as such, not waited out as a restart.
 func TestUpgradeCLI_ConnectionLostBeforeTheMarker(t *testing.T) {
-	_, asks, _ := fakeUpgrade(t, "v1.5.0", false, 1, fmt.Errorf("x: %w", remote.ErrConnectionLost), oldLeader, newLeader)
+	_, asks, _ := fakeUpgrade(t, "v1.5.0", false, 1, fmt.Errorf("x: %w", remote.ErrConnectionLost), oldLeader, oldLeader, newLeader)
 	assert.Equal(t, 1, executeArgs([]string{"upgrade"}))
-	assert.Equal(t, 1, *asks)
+	assert.Equal(t, 2, *asks)
 }
 
+// A development CLI cannot be compared with a release: a bare upgrade
+// refuses (and asks GitHub nothing); --image rolls the agents only, the
+// CLI untouched.
 func TestUpgradeCLI_DevBuildNeedsImage(t *testing.T) {
 	fw, _, _ := fakeUpgrade(t, "v0.0.0-20261110-abc", true, 0, nil, oldLeader)
-	assert.Equal(t, 1, executeArgs([]string{"upgrade"}))
+	s := stubSelfUpgrade(t, "v0.0.0-20261110-abc", "v1.5.0")
+	stderr := captureStderr(func() { assert.Equal(t, 1, executeArgs([]string{"upgrade"})) })
+	assert.Contains(t, stderr, "development build")
+	assert.Contains(t, stderr, "--version <tag>")
 	assert.Empty(t, *fw)
+	assert.Zero(t, s.apiHits())
 
 	fw, _, _ = fakeUpgrade(t, "v0.0.0-20261110-abc", true, 0, nil, oldLeader, bootstrap.AgentID{Version: "v0.0.0-20261111-def", Boot: "new"})
+	s = stubSelfUpgrade(t, "v0.0.0-20261110-abc", "v1.5.0")
 	assert.Equal(t, 0, executeArgs([]string{"upgrade", "--image", "homelab:dev"}))
 	assert.Equal(t, []string{"upgrade", "--image", "homelab:dev"}, (*fw)[0], "no expected version: the leader reads the image label")
+	assert.Zero(t, s.apiHits(), "--image: no release lookup")
+	s.assertUntouched(t)
 }
 
 // workerScript stands in for the homelab binary a worker agent's remote

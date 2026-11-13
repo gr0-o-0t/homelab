@@ -50,7 +50,7 @@ homelab init [--import <dir>] [--image <ref>]      # first PC (minis): swarm ini
 homelab join [--endpoint <url>] [--secret-stdin]   # another PC: swarm join as a worker, start its agent
 homelab login [--endpoint <url>] [--secret-stdin]  # use this PC as a client only (no agent, no swarm)
 homelab logout                                     # forget the endpoint and the cluster secret here
-homelab upgrade [--version X] [--image REF]        # roll a new agent image: pull on every node, workers one by one, the leader last
+homelab upgrade [--version X] [--image REF]        # this PC's CLI to the latest release (or X), then the agents: pull on every node, workers one by one, the leader last
 ```
 
 `init`/`join` advertise the host's Tailscale IPv4 and refuse an address outside
@@ -58,9 +58,26 @@ homelab upgrade [--version X] [--image REF]        # roll a new agent image: pul
 (root and service config, exposure, routing, desired state, keyring secrets)
 into the new leader and reuses its named volumes.
 
-`upgrade` (forwarded; Mutating and Detached) resolves the image on the PC
-(default `ghcr.io/gr0-o-0t/homelab:<this CLI's version>`; a dev build needs
-`--image`), asks the leader `version --agent` (version + agent container ID)
+`upgrade` on a PC first upgrades this PC's CLI (`cmd/selfupdate.go`): the
+target is the latest GitHub release (`internal/release`), or `--version`'s.
+When the CLI is not the target it downloads that release's archive for this
+build, checks it against `SHA256SUMS` and renames the binary over the
+running executable (a temp file in the same directory, `os.Executable` +
+`EvalSymlinks`). A directory the user cannot write: `sudo -- <exe> upgrade
+--cli-only --version <tag>` (hidden, local, refused in the agent: replace the
+binary and exit) — only that step runs as root — then this process execs the
+new binary as `upgrade --version <tag>` so the agent rollout runs as the
+invoking user, with their client.yaml and keyring. Already root or no
+`sudo`: an error naming the path and the manual command. A bare upgrade
+whose CLI is not behind the latest release (never a downgrade) rolls the
+agents to the CLI's version only when the leader's is older ("everything is
+on vX" otherwise; a lagging worker with a current leader takes `--version`).
+A dev CLI build refuses a bare upgrade (`--version` or `--image`). `--image`
+leaves the CLI alone and rolls that image to the agents only.
+
+The agent step (forwarded; Mutating and Detached) resolves the image on the PC
+(`ghcr.io/gr0-o-0t/homelab:<tag>`, or `--image`),
+asks the leader `version --agent` (version + agent container ID)
 and sends `upgrade --image REF [--version V]` to the leader, which
 (`bootstrap.Upgrade`): makes the image available on its engine; asks every
 Ready worker's agent `version --agent` and has it pull (`agent self-replace

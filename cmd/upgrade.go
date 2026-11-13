@@ -14,28 +14,40 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/groot/homelab/internal/bootstrap"
+	"github.com/groot/homelab/internal/release"
 	"github.com/groot/homelab/internal/remote"
 )
 
 var upgradeFlags struct {
 	version string
 	image   string
+	cliOnly bool
 }
 
-// upgradeCmd rolls a new agent image across the cluster. On a PC it resolves
-// the image (default: this CLI's own version) and forwards `upgrade --image`
-// to the leader, then waits for the leader's agent to come back and checks
-// its version; on the leader (inside the agent) it does the rollout.
+// upgradeCmd upgrades this PC's CLI and the cluster's agents. On a PC it
+// finds the target release (the latest, or --version), replaces this
+// binary with it (selfupdate.go), then forwards `upgrade --image` to the
+// leader, waits for the leader's agent to come back and checks its
+// version; on the leader (inside the agent) it does the agents' rollout.
 var upgradeCmd = &cobra.Command{
 	Use:   "upgrade",
-	Short: "Roll a new homelab version across the cluster's agents: workers first, the leader last",
-	Long: `Pulls the agent image on every node, then replaces each worker's homelab-agent
-container (one by one, each back on the new version before the next) and the
-leader's last. Mounts, networks, env, labels and restart policy are kept;
-no volume is touched. An offline worker is skipped; rerun upgrade once it is
-back. The default image is the one matching this CLI's version.`,
+	Short: "Upgrade this PC's homelab CLI to the latest release, then the cluster's agents: workers first, the leader last",
+	Long: `Replaces this PC's homelab binary with the latest release's (or --version's),
+verified against the release's SHA256SUMS; a binary you cannot write is
+replaced through sudo. Then pulls the agent image on every node, replaces
+each worker's homelab-agent container (one by one, each back on the new
+version before the next) and the leader's last. Mounts, networks, env,
+labels and restart policy are kept; no volume is touched. An offline worker
+is skipped; rerun upgrade --version <tag> once it is back. --image rolls
+that image to the agents only and leaves the CLI alone.`,
 	Args: cobra.NoArgs,
 	RunE: func(_ *cobra.Command, _ []string) error {
+		if upgradeFlags.cliOnly {
+			if os.Getenv("HOMELAB_AGENT") == "1" {
+				return errors.New("--cli-only replaces a PC's homelab binary: it does not run in the agent")
+			}
+			return runCLIOnly(cmdContext(), os.Stdout)
+		}
 		img, err := bootstrap.ResolveImage(upgradeFlags.image, cmp.Or(upgradeFlags.version, Version))
 		if err != nil {
 			return err
@@ -66,9 +78,18 @@ back. The default image is the one matching this CLI's version.`,
 }
 
 func init() {
-	upgradeCmd.Flags().StringVar(&upgradeFlags.version, "version", "", "homelab version to roll out (default: this CLI's)")
-	upgradeCmd.Flags().StringVar(&upgradeFlags.image, "image", "", "agent image to roll out (default "+bootstrap.ImageRepo+":<version>)")
+	upgradeCmd.Flags().StringVar(&upgradeFlags.version, "version", "", "homelab release to upgrade to (default: the latest)")
+	upgradeCmd.Flags().StringVar(&upgradeFlags.image, "image", "",
+		"agent image to roll out to the agents only, the CLI left as it is (default "+bootstrap.ImageRepo+":<version>)")
+	upgradeCmd.Flags().BoolVar(&upgradeFlags.cliOnly, "cli-only", false, "replace this binary with --version's and exit (the step run under sudo)")
+	_ = upgradeCmd.Flags().MarkHidden("cli-only")
 	rootCmd.AddCommand(upgradeCmd)
+}
+
+// upgradeRunsLocally reports whether c is the hidden `upgrade --cli-only`:
+// it replaces this PC's binary, so it is never forwarded.
+func upgradeRunsLocally(c *cobra.Command) bool {
+	return c == upgradeCmd && upgradeFlags.cliOnly
 }
 
 // workerCaller runs a command on a worker's agent over the tailnet (through
@@ -124,22 +145,94 @@ var upgradeClient = func() (*remote.Client, error) { return remote.LoadClient(Ve
 // upgradeSleep waits between reconnection attempts; a var for tests.
 var upgradeSleep = bootstrap.Sleep
 
-// forwardUpgrade is `homelab upgrade` on a PC: the leader gets the resolved
-// image (it would otherwise default to its own, older version), and once
-// its agent has replaced itself this waits for a new agent and checks its
-// version.
+// forwardUpgrade is `homelab upgrade` on a PC. --image goes to the agents
+// only, as given. Otherwise the target is --version's release or the
+// latest: this CLI is replaced with it unless it already is it (a
+// development build needs --version: it cannot be compared with a
+// release), then the agents are rolled to its image. A bare upgrade with
+// no newer release still rolls agents behind this CLI.
 func forwardUpgrade(argv []string) (int, error) {
-	img, err := bootstrap.ResolveImage(upgradeFlags.image, cmp.Or(upgradeFlags.version, Version))
+	if upgradeFlags.image != "" {
+		return rollAgents(argv, upgradeFlags.image, upgradeFlags.version, Version)
+	}
+	ctx := cmdContext()
+	release.UserAgent = "homelab/" + Version
+	tag := upgradeFlags.version
+	var rel release.Release
+	switch {
+	case tag == "":
+		if reason, dev := release.DevBuild(Version); dev {
+			return 1, fmt.Errorf("%s: it cannot be compared with a release — pass --version <tag> to install a release, or --image <ref> to roll an image to the agents only", reason)
+		}
+		latest, err := release.Latest(ctx, releaseClient(), releaseAPI)
+		if err != nil {
+			return 1, fmt.Errorf("finding the latest release: %w", err)
+		}
+		if !release.Newer(Version, latest.Tag) {
+			return upgradeAgentsBehind(ctx, argv, latest.Tag)
+		}
+		tag, rel = latest.Tag, latest
+	case !semverRelease(tag):
+		return 1, fmt.Errorf("--version %q is not a release tag (vX.Y.Z); --image <ref> rolls another image to the agents", tag)
+	case tag != Version:
+		r, err := release.ByTag(ctx, releaseClient(), releaseAPI, tag)
+		if err != nil {
+			return 1, fmt.Errorf("finding release %s: %w", tag, err)
+		}
+		rel = r
+	}
+	if rel.Tag != "" {
+		execd, err := upgradeSelf(ctx, rel, rootFlagsOf(argv), os.Stdout)
+		switch {
+		case err != nil:
+			return 1, err
+		case execd:
+			return 0, nil // only a test's execSelf returns: this process is the new binary's
+		}
+	}
+	return rollAgents(argv, bootstrap.DefaultImage(tag), tag, tag)
+}
+
+// semverRelease: tag can name a published release (no development build).
+func semverRelease(tag string) bool {
+	_, dev := release.DevBuild(tag)
+	return !dev
+}
+
+// upgradeAgentsBehind is a bare upgrade with no newer release than this
+// CLI: the agents are rolled to this CLI's version when the leader's is
+// older, else there is nothing to do. (A worker that missed an upgrade
+// while the leader is current: `upgrade --version <tag>` rolls anyway.)
+func upgradeAgentsBehind(ctx context.Context, argv []string, latest string) (int, error) {
+	_, _ = fmt.Fprintf(os.Stdout, "this CLI is already %s (the latest release is %s)\n", Version, latest)
+	c, err := upgradeClient()
 	if err != nil {
 		return 1, err
 	}
-	want := upgradeFlags.version
-	if want == "" && upgradeFlags.image == "" {
-		want = Version
+	id, err := upgradeAsk(ctx, c)
+	if err != nil {
+		return 1, fmt.Errorf("asking the leader its version: %w", err)
 	}
+	switch {
+	case id.Version == Version:
+		_, _ = fmt.Fprintf(os.Stdout, "everything is on %s\n", Version)
+		return 0, nil
+	case !release.Newer(id.Version, Version):
+		_, _ = fmt.Fprintf(os.Stdout, "the leader agent runs %s: nothing to upgrade (`homelab upgrade --version <tag>` rolls a given release)\n", id.Version)
+		return 0, nil
+	}
+	_, _ = fmt.Fprintf(os.Stdout, "the leader agent runs %s: upgrading the agents to %s\n", id.Version, Version)
+	return rollAgents(argv, bootstrap.DefaultImage(Version), Version, Version)
+}
+
+// rollAgents forwards `upgrade --image img [--version want]` to the leader
+// (it would otherwise default to its own, older version), and once its
+// agent has replaced itself waits for a new agent and checks its version.
+// cli is this PC's CLI version, as it is now.
+func rollAgents(argv []string, img, want, cli string) (int, error) {
 	fwd := append(rootFlagsOf(argv), "upgrade", "--image", img)
 	if want != "" {
-		fwd = append(fwd, "--version", want)
+		fwd = append(fwd, versionFlag, want)
 	}
 	c, err := upgradeClient()
 	if err != nil {
@@ -166,7 +259,7 @@ func forwardUpgrade(argv []string) (int, error) {
 	default:
 		return code, err
 	}
-	return verifyLeader(ctx, c, before, want, os.Stderr)
+	return verifyLeader(ctx, c, before, want, cli, os.Stderr)
 }
 
 // markerWriter passes output through and notes whether marker went by
@@ -204,7 +297,7 @@ func rootFlagsOf(argv []string) []string {
 
 // verifyLeader waits for a new leader agent (bootstrap.WaitReplaced) and
 // reports its version: matching want (when known), or why not.
-func verifyLeader(ctx context.Context, c *remote.Client, before bootstrap.AgentID, want string, w io.Writer) (int, error) {
+func verifyLeader(ctx context.Context, c *remote.Client, before bootstrap.AgentID, want, cli string, w io.Writer) (int, error) {
 	_, _ = fmt.Fprintf(w, "agent restarting — reconnecting to the leader (up to %s) …\n", bootstrap.WaitBack)
 	got, err := bootstrap.WaitReplaced(ctx, func(ctx context.Context) (bootstrap.AgentID, error) { return upgradeAsk(ctx, c) },
 		before, want, upgradeSleep)
@@ -212,8 +305,8 @@ func verifyLeader(ctx context.Context, c *remote.Client, before bootstrap.AgentI
 		return 1, fmt.Errorf("the leader: %w", err)
 	}
 	_, _ = fmt.Fprintf(w, "The leader agent runs %s.\n", got.Version)
-	if got.Version != Version {
-		_, _ = fmt.Fprintf(w, "note: this CLI is %s — install the %s CLI on your PCs to match.\n", Version, got.Version)
+	if got.Version != cli {
+		_, _ = fmt.Fprintf(w, "note: this CLI is %s — install the %s CLI on your PCs to match.\n", cli, got.Version)
 	}
 	return 0, nil
 }
