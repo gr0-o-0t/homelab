@@ -51,6 +51,7 @@ type API interface {
 	SwarmInit(ctx context.Context, req swarm.InitRequest) (string, error)
 	SwarmJoin(ctx context.Context, req swarm.JoinRequest) error
 	SwarmInspect(ctx context.Context) (swarm.Swarm, error)
+	SwarmUpdate(ctx context.Context, version swarm.Version, spec swarm.Spec, flags swarm.UpdateFlags) error
 	SwarmLeave(ctx context.Context, force bool) error
 	Events(ctx context.Context, options events.ListOptions) (<-chan events.Message, <-chan error)
 	ContainerList(ctx context.Context, options container.ListOptions) ([]container.Summary, error)

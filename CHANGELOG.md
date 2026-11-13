@@ -3,6 +3,16 @@
 Notable changes per release. The release workflow publishes the section
 matching the pushed tag as the GitHub release notes.
 
+## v0.5.1 — 2026-11-13
+
+Patch release.
+
+### Fixed
+
+- Stopped and replaced task containers piled up: Swarm kept five finished
+  tasks per service. The leader now keeps one, and Swarm removes the older
+  ones.
+
 ## v0.5.0 — 2026-11-12
 
 The homelab moves from one Docker Compose host to a Docker Swarm cluster run

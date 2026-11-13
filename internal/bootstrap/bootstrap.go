@@ -532,10 +532,12 @@ func (in *Init) Do(ctx context.Context) (err error) {
 		return err
 	}
 
+	limit := swarm.TaskHistoryLimit
 	nodeID, err := in.API.SwarmInit(ctx, dswarm.InitRequest{
 		ListenAddr:    "0.0.0.0:" + ManagerPort,
 		AdvertiseAddr: ip.String(),
 		DataPathAddr:  ip.String(),
+		Spec:          dswarm.Spec{Orchestration: dswarm.OrchestrationConfig{TaskHistoryRetentionLimit: &limit}},
 	})
 	if err != nil {
 		return fmt.Errorf("creating the swarm on %s: %w", ip, err)

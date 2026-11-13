@@ -583,3 +583,12 @@ func TestJoin_RefusesComposeBridgeInUse(t *testing.T) {
 	assert.Empty(t, h.calls, "the secret is not sent before the check passes")
 	assert.Empty(t, h.fake.Joins())
 }
+
+func TestInit_TaskHistoryLimitOne(t *testing.T) {
+	in, h := newInit(t, testIP)
+	require.NoError(t, in.Do(context.Background()))
+	inits := h.fake.Inits()
+	require.Len(t, inits, 1)
+	require.NotNil(t, inits[0].Spec.Orchestration.TaskHistoryRetentionLimit)
+	assert.EqualValues(t, 1, *inits[0].Spec.Orchestration.TaskHistoryRetentionLimit)
+}

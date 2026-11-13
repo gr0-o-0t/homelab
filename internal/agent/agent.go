@@ -97,6 +97,7 @@ type Node interface {
 // Deployer is the part of swarm.Deployer startup uses.
 type Deployer interface {
 	EnsureNetwork(ctx context.Context) error
+	EnsureTaskHistory(ctx context.Context) error
 	EnsureCloudflared(ctx context.Context, token string) error
 	RemoveCloudflared(ctx context.Context) error
 	Up(ctx context.Context, svc string) error
@@ -386,6 +387,10 @@ func (a *Agent) runLeader(ctx context.Context, p agentstate.Paths, sm *secrets.M
 	// 1. network
 	if err := a.retry(ctx, "creating the home-services network", func() error { return dep.EnsureNetwork(ctx) }); err != nil {
 		return nil
+	}
+	// Swarm keeps 5 finished tasks per service by default; keep one.
+	if err := dep.EnsureTaskHistory(ctx); err != nil {
+		a.logf("agent: task history limit: %v", err)
 	}
 	// 2. shim
 	a.shim()

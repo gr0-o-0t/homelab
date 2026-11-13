@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	dswarm "github.com/docker/docker/api/types/swarm"
 	"github.com/groot/homelab/internal/agentstate"
 	"github.com/groot/homelab/internal/desired"
 	"github.com/groot/homelab/internal/edge"
@@ -110,7 +111,8 @@ func (d *fakeDeployer) Scale(_ context.Context, svc string, r map[string]uint64)
 	return nil
 }
 
-func (d *fakeDeployer) EnsureNetwork(context.Context) error { d.rec.add("network"); return nil }
+func (d *fakeDeployer) EnsureNetwork(context.Context) error     { d.rec.add("network"); return nil }
+func (d *fakeDeployer) EnsureTaskHistory(context.Context) error { return nil }
 func (d *fakeDeployer) EnsureCloudflared(_ context.Context, tok string) error {
 	d.rec.add("cloudflared " + tok)
 	return nil
@@ -744,4 +746,42 @@ func TestAgent_DefaultBinaryIsResolvedExecutable(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, want, got)
 	assert.True(t, filepath.IsAbs(got))
+}
+
+func taskHistoryHarness(t *testing.T, limit *int64) (*harness, *swarmtest.Fake) {
+	t.Helper()
+	h := newHarness(t, RoleLeader)
+	f := swarmtest.New()
+	sw := dswarm.Swarm{}
+	sw.Version.Index = 7
+	sw.Spec.Orchestration.TaskHistoryRetentionLimit = limit
+	f.SetSwarm(sw)
+	dep := &swarm.Deployer{API: f, Root: h.paths.StateDir, SM: h.sm}
+	h.a.NewDeployer = func(*secrets.Manager) Deployer { return dep }
+	return h, f
+}
+
+// A swarm created at Swarm's default of 5 is lowered to 1 at leader boot.
+func TestLeaderBoot_LowersTaskHistory(t *testing.T) {
+	five := int64(5)
+	h, f := taskHistoryHarness(t, &five)
+	_, stop := h.start()
+	require.NoError(t, stop())
+	ups := f.SwarmUpdates()
+	require.Len(t, ups, 1)
+	require.NotNil(t, ups[0].Orchestration.TaskHistoryRetentionLimit)
+	assert.EqualValues(t, 1, *ups[0].Orchestration.TaskHistoryRetentionLimit)
+	sw, err := f.SwarmInspect(context.Background())
+	require.NoError(t, err)
+	assert.EqualValues(t, 8, sw.Version.Index, "updated against the swarm's current version")
+}
+
+// A swarm already at 1 is not rewritten on every boot.
+func TestLeaderBoot_TaskHistoryAlreadyOne(t *testing.T) {
+	one := int64(1)
+	h, f := taskHistoryHarness(t, &one)
+	_, stop := h.start()
+	require.NoError(t, stop())
+	assert.Empty(t, f.SwarmUpdates())
+	assert.NotContains(t, f.CallLog(), "SwarmUpdate")
 }

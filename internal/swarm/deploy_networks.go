@@ -148,3 +148,27 @@ func sharedAliases(spec *swarm.ServiceSpec, shared []string) []string {
 	}
 	return out
 }
+
+// TaskHistoryLimit is how many finished tasks per service Swarm keeps (its
+// default is 5, each a stopped container on the node): the one before the
+// current is enough to see why a task failed.
+const TaskHistoryLimit int64 = 1
+
+// EnsureTaskHistory lowers the swarm's task history retention limit to
+// TaskHistoryLimit when it is not already; an existing limit of 1 is not
+// rewritten.
+func (d *Deployer) EnsureTaskHistory(ctx context.Context) error {
+	sw, err := d.API.SwarmInspect(ctx)
+	if err != nil {
+		return fmt.Errorf("inspecting the swarm: %w", err)
+	}
+	if l := sw.Spec.Orchestration.TaskHistoryRetentionLimit; l != nil && *l == TaskHistoryLimit {
+		return nil
+	}
+	limit := TaskHistoryLimit
+	sw.Spec.Orchestration.TaskHistoryRetentionLimit = &limit
+	if err := d.API.SwarmUpdate(ctx, sw.Version, sw.Spec, swarm.UpdateFlags{}); err != nil {
+		return fmt.Errorf("lowering the task history limit: %w", err)
+	}
+	return nil
+}

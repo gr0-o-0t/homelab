@@ -292,7 +292,7 @@ advertise and data-path address is its Tailscale IPv4. The overlay
 mounts `homelab-backups` at `/var/lib/homelab-backups`). It starts at boot
 with nobody logged in.
 
-The leader, in order: creates the overlay, installs the shim, starts the edge
+The leader, in order: creates the overlay, lowers Swarm's task history to one finished task per service (so stopped and replaced task containers do not pile up; `init` sets it too), installs the shim, starts the edge
 (Caddy on the tsnet node; admin API on a unix socket), points the wildcard DNS
 A record at the node's tailnet IP via the Cloudflare API, deploys or removes
 cloudflared (by `CF_TUNNEL_TOKEN`), serves the remote CLI on `:7443`, then

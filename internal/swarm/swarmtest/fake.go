@@ -41,39 +41,40 @@ type Fake struct {
 	EventsCh chan events.Message
 	ErrCh    chan error
 
-	mu          sync.Mutex
-	calls       []string
-	nodes       []swarm.Node
-	tasks       []swarm.Task
-	volumes     []*volume.Volume
-	images      map[string]image.InspectResponse
-	loadResults map[string]image.InspectResponse // applied to images by ImageLoad
-	loaded      []byte
-	loadStream  string // ImageLoad's answer instead of a successful load
-	containers  []container.Summary
-	swarm       swarm.Swarm
-	services    map[string]swarm.Service
-	networks    []network.Summary
-	secrets     []swarm.Secret
-	configs     []swarm.Config
-	seq         int
-	failUpdate  map[string]error // service ID → error for its next ServiceUpdate
-	info        system.Info
-	inits       []swarm.InitRequest
-	joins       []swarm.JoinRequest
-	execs       []*Exec
-	execExit    int
-	created     []*CreatedContainer
-	pulls       map[string]string // ref → ImagePull's JSON stream
-	stallPulls  map[string]bool   // ref → ImagePull's stream never ends until closed
-	leaves      int
-	copies      []Copy
-	restartErr  error
-	copyLimit   int64
-	removed     []Removed
-	startErr    map[string]error // image → ContainerStart error
-	crash       map[string]bool  // image → crash-looping once started
-	queries     []bool           // QueryRegistry of each ServiceCreate/Update, in order
+	mu           sync.Mutex
+	calls        []string
+	nodes        []swarm.Node
+	tasks        []swarm.Task
+	volumes      []*volume.Volume
+	images       map[string]image.InspectResponse
+	loadResults  map[string]image.InspectResponse // applied to images by ImageLoad
+	loaded       []byte
+	loadStream   string // ImageLoad's answer instead of a successful load
+	containers   []container.Summary
+	swarm        swarm.Swarm
+	services     map[string]swarm.Service
+	networks     []network.Summary
+	secrets      []swarm.Secret
+	configs      []swarm.Config
+	seq          int
+	failUpdate   map[string]error // service ID → error for its next ServiceUpdate
+	info         system.Info
+	inits        []swarm.InitRequest
+	swarmUpdates []swarm.Spec
+	joins        []swarm.JoinRequest
+	execs        []*Exec
+	execExit     int
+	created      []*CreatedContainer
+	pulls        map[string]string // ref → ImagePull's JSON stream
+	stallPulls   map[string]bool   // ref → ImagePull's stream never ends until closed
+	leaves       int
+	copies       []Copy
+	restartErr   error
+	copyLimit    int64
+	removed      []Removed
+	startErr     map[string]error // image → ContainerStart error
+	crash        map[string]bool  // image → crash-looping once started
+	queries      []bool           // QueryRegistry of each ServiceCreate/Update, in order
 }
 
 // New returns an empty Fake.
@@ -1187,4 +1188,25 @@ func (f *Fake) SetCopyReadLimit(n int64) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.copyLimit = n
+}
+
+// SwarmUpdate replaces the swarm's spec; the version must be the current one.
+func (f *Fake) SwarmUpdate(_ context.Context, version swarm.Version, spec swarm.Spec, _ swarm.UpdateFlags) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rec("SwarmUpdate")
+	if version.Index != f.swarm.Version.Index {
+		return errors.New("swarmtest: swarm update out of sequence")
+	}
+	f.swarm.Spec = spec
+	f.swarm.Version.Index++
+	f.swarmUpdates = append(f.swarmUpdates, spec)
+	return nil
+}
+
+// SwarmUpdates returns the specs passed to SwarmUpdate.
+func (f *Fake) SwarmUpdates() []swarm.Spec {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]swarm.Spec(nil), f.swarmUpdates...)
 }
