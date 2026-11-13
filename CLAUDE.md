@@ -189,7 +189,7 @@ resolved to the registry's current digests, tasks rolled.
 homelab                                            # interactive TUI (service browser)
 homelab --gui                                      # desktop GUI (giu; absent from -tags nogui builds)
 homelab ls [-q]                                    # list installed services (table, --json, -q names)
-homelab status [service]   (alias: ps)             # edge + services overview, or per-service detail (each task and its node); --json for front ends
+homelab status [service]   (alias: ps)             # edge + services overview, or per-service detail (each task and its node, each declared port); --json for front ends
 homelab logs [service]                             # a service's logs from every node, key-prefixed (-f, -n, -t, --since, -c, --tui); no service: the leader agent's
 homelab caddy status                               # whether the agent's Caddy answers on its admin socket
 homelab caddy logs                                 # follow the leader agent's logs (Caddy logs there)

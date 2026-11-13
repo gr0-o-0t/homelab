@@ -31,6 +31,7 @@ func runServiceStatus(dir, name string, env map[string]string) error {
 	if svc == nil {
 		return fmt.Errorf("service %q not found", name)
 	}
+	svc.Ports = configgen.PortStatuses(dir, name, env)
 
 	running := svc.Running > 0
 	priv, pub := svc.On("ts"), svc.On("cf")
@@ -101,6 +102,7 @@ func runServiceStatus(dir, name string, env map[string]string) error {
 			fmt.Printf("  %s  %s  %s\n", icon, label, styles.Muted.Render("—"))
 		}
 	}
+	printPortsSection(svc)
 	fmt.Println()
 
 	// Container-level detail table: one row per task Swarm wants running,

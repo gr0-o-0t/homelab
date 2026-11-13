@@ -29,6 +29,7 @@ func writeStatusJSON(dir string, args []string, w io.Writer) error {
 	if err != nil {
 		return err
 	}
+	withPorts(dir, svcs, env)
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	if len(args) > 0 {

@@ -19,6 +19,7 @@ import (
 
 	"github.com/groot/homelab/internal/actions"
 	"github.com/groot/homelab/internal/backup"
+	"github.com/groot/homelab/internal/configgen"
 	"github.com/groot/homelab/internal/docker"
 	"github.com/groot/homelab/internal/network"
 	"github.com/groot/homelab/internal/service"
@@ -58,6 +59,10 @@ type Service struct {
 	StateUnknown bool                                `json:"state_unknown,omitempty"`
 	Containers   []docker.ContainerDetail            `json:"containers,omitempty"`
 	Addresses    map[string][]network.ServiceAddress `json:"addresses,omitempty"`
+	// Ports is every port config.yaml declares, enabled or not; its shape
+	// is documented on configgen.PortStatus. (A container's "Ports" are its
+	// host-published ports, which Swarm services here never have.)
+	Ports []configgen.PortStatus `json:"ports,omitempty"`
 }
 
 // Status is `homelab status --json`.
@@ -77,7 +82,7 @@ type Status struct {
 func FromService(s *service.Service, addrs map[string][]network.ServiceAddress) Service {
 	return Service{
 		Name: s.Name, Layers: slices.Clone(s.Layers), Running: s.Running, Total: s.Total,
-		StateUnknown: s.StateUnknown, Containers: s.Containers, Addresses: addrs,
+		StateUnknown: s.StateUnknown, Containers: s.Containers, Addresses: addrs, Ports: s.Ports,
 	}
 }
 
@@ -85,7 +90,7 @@ func FromService(s *service.Service, addrs map[string][]network.ServiceAddress) 
 func (s Service) Service() service.Service {
 	return service.Service{
 		Name: s.Name, Installed: true, Layers: slices.Clone(s.Layers), Running: s.Running, Total: s.Total,
-		StateUnknown: s.StateUnknown, Containers: s.Containers, Addresses: s.Addresses,
+		StateUnknown: s.StateUnknown, Containers: s.Containers, Addresses: s.Addresses, Ports: s.Ports,
 	}
 }
 

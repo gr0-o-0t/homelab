@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/groot/homelab/internal/configgen"
 	"github.com/groot/homelab/internal/docker"
 	"github.com/groot/homelab/internal/exposure"
 	"github.com/groot/homelab/internal/network"
@@ -46,6 +47,11 @@ type Service struct {
 	// Addresses are the service's addresses per layer it is on, as the CLI
 	// reported them (internal/clistate); nil when discovered locally.
 	Addresses map[string][]network.ServiceAddress
+
+	// Ports are the ports its config.yaml declares, with what exposure.yaml
+	// enables (configgen.PortStatuses); set by `homelab status`, which has
+	// the env their addresses need.
+	Ports []configgen.PortStatus
 }
 
 // AggregateHealth reduces a multi-container service's per-container health

@@ -3,6 +3,24 @@
 Notable changes per release. The release workflow publishes the section
 matching the pushed tag as the GitHub release notes.
 
+## v0.5.4 — 2026-11-13
+
+Patch release.
+
+### Fixed
+
+- `homelab status` fills the PORTS column, which showed `–` for every
+  service (it listed host-published ports, and Swarm services publish
+  none). It now lists the ports a service is exposed on, honouring
+  exposure.yaml's `ports:` selection: a raw listen port as `2222/tcp`
+  (tailnet only), an HTTP port as its subdomain (`vault`) or `https` for
+  the default. `homelab status <service>` gains a Ports section with every
+  declared port: the name `enable --ports=` takes, where it answers
+  (`https://gitea.home.<domain>`, `gitea.home.<domain>:2222/tcp`) and
+  whether it is enabled. `status --json` and `status <service> --json`
+  carry the same as each service's `ports` (name, label, raw, port, listen,
+  protocols, target, enabled, note).
+
 ## v0.5.3 — 2026-11-13
 
 Patch release.

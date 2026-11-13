@@ -21,11 +21,17 @@ var statusCmd = &cobra.Command{
 	Long: `Display the status of the edge (the leader agent's Caddy, network extensions)
 and every installed service.
 
-With a service argument, show status for that specific service.
+With a service argument, show status for that specific service, including
+each port its config.yaml declares: the name ` + "`enable --ports=`" + ` takes, where
+it answers and whether it is enabled.
+
+PORTS lists the enabled ports: a raw listen port as "2222/tcp" (tailnet
+only), an HTTP port as its subdomain ("vault") or "https" for the default.
 
 With --json, print it as one document (internal/clistate): services with
-their tasks and addresses, the nodes, the extensions and the edge. The
-dashboard and the GUI read the cluster this way, from any PC.`,
+their tasks, addresses and ports ("ports": name, label, raw, port, listen,
+protocols, target, enabled, note), the nodes, the extensions and the edge.
+The dashboard and the GUI read the cluster this way, from any PC.`,
 	Args:              cobra.MaximumNArgs(1),
 	ValidArgsFunction: completeServiceNames,
 	RunE:              runStatus,
@@ -124,6 +130,7 @@ func runStatus(_ *cobra.Command, args []string) error {
 	if err != nil {
 		svcs = nil
 	}
+	withPorts(dir, svcs, env)
 
 	if len(svcs) == 0 {
 		fmt.Printf("  %s  No services installed.\n", styles.Muted.Render("!"))
@@ -177,13 +184,8 @@ func runStatus(_ *cobra.Command, args []string) error {
 		// first), from data discoverServices already fetched.
 		stateCol := styles.Width(12).Render(mergedState(*svc, service.AggregateHealth(svc.Containers)))
 
-		// PORTS column — always visible
-		var portsStr string
-		if len(svc.HostPorts) > 0 {
-			portsStr = styles.Width(styles.ColWidthPorts).Render(truncate(strings.Join(svc.HostPorts, ", "), styles.ColWidthPorts-1))
-		} else {
-			portsStr = styles.Width(styles.ColWidthPorts).Render(styles.Muted.Render("–"))
-		}
+		// PORTS column — the enabled ports: raw "2222/tcp", HTTP by host label
+		portsStr := portsColumn(svc)
 
 		// Collect active exposures with URLs
 		type expRow struct {
