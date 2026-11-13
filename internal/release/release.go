@@ -124,6 +124,13 @@ func FetchBinary(ctx context.Context, c *http.Client, rel Release) ([]byte, erro
 	if !ok {
 		return nil, fmt.Errorf("release %s has no %s: refusing an unverified download", rel.Tag, SumsAsset)
 	}
+	// The sums and the archive share a channel: over plain http the checksum
+	// would prove nothing.
+	for _, u := range []string{sumsURL, archiveURL} {
+		if err := requireHTTPS(u); err != nil {
+			return nil, err
+		}
+	}
 	sums, err := get(ctx, c, sumsURL, maxAPISize, "")
 	if err != nil {
 		return nil, err
@@ -148,6 +155,7 @@ func FetchBinary(ctx context.Context, c *http.Client, rel Release) ([]byte, erro
 // "<hex> *<name>" in binary mode).
 func sumFor(sums []byte, name string) (string, error) {
 	sc := bufio.NewScanner(bytes.NewReader(sums))
+	var digest string
 	for sc.Scan() {
 		fields := strings.Fields(sc.Text())
 		if len(fields) != 2 {
@@ -159,12 +167,18 @@ func sumFor(sums []byte, name string) (string, error) {
 		if b, err := hex.DecodeString(fields[0]); err != nil || len(b) != sha256.Size {
 			return "", fmt.Errorf("%s: malformed digest for %s", SumsAsset, name)
 		}
-		return fields[0], nil
+		if digest != "" {
+			return "", fmt.Errorf("%s lists %s more than once", SumsAsset, name)
+		}
+		digest = fields[0]
 	}
 	if err := sc.Err(); err != nil {
 		return "", fmt.Errorf("%s: %w", SumsAsset, err)
 	}
-	return "", fmt.Errorf("%s has no entry for %s", SumsAsset, name)
+	if digest == "" {
+		return "", fmt.Errorf("%s has no entry for %s", SumsAsset, name)
+	}
+	return digest, nil
 }
 
 // extract returns the regular file called want from a tar.gz. An entry whose
@@ -226,7 +240,23 @@ func unsafePath(name string) bool {
 	return false
 }
 
+func requireHTTPS(u string) error {
+	p, err := url.Parse(u)
+	if err != nil {
+		return fmt.Errorf("release: %w", err)
+	}
+	if p.Scheme != "https" {
+		return fmt.Errorf("release: refusing %s: not https", u)
+	}
+	return nil
+}
+
+// get fetches u over https only: u itself and, after any redirects, the URL
+// that answered.
 func get(ctx context.Context, c *http.Client, u string, limit int64, accept string) ([]byte, error) {
+	if err := requireHTTPS(u); err != nil {
+		return nil, err
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, fmt.Errorf("release: %w", err)
@@ -240,6 +270,9 @@ func get(ctx context.Context, c *http.Client, u string, limit int64, accept stri
 		return nil, fmt.Errorf("release: %w", err)
 	}
 	defer resp.Body.Close() //nolint:errcheck // read-only body
+	if final := resp.Request.URL; final.Scheme != "https" {
+		return nil, fmt.Errorf("release: GET %s: redirected to %s: not https", u, final.Redacted())
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("release: GET %s: %s", u, resp.Status)
 	}
@@ -262,7 +295,7 @@ func DevBuild(current string) (string, bool) {
 		return fmt.Sprintf("%q is not a release version (a development build)", current), true
 	case strings.HasPrefix(current, "v0.0.0-"):
 		return current + " is a development build", true
-	case strings.HasSuffix(current, "-dev") || strings.HasSuffix(semver.Prerelease(current), ".dev"):
+	case strings.HasSuffix(current, "-dev"):
 		return current + " is a development build", true
 	}
 	return "", false

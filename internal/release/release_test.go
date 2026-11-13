@@ -92,9 +92,12 @@ func server(t *testing.T, archive []byte, sums string) *httptest.Server {
 	}
 	mux.HandleFunc("/repo/releases/latest", rel)
 	mux.HandleFunc("/repo/releases/tags/"+tag, rel)
+	mux.HandleFunc("/repo/releases/tags/v0.9.0", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"tag_name": "v0.9.0", "draft": true})
+	})
 	mux.HandleFunc("/dl/archive", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(archive) })
 	mux.HandleFunc("/dl/sums", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(sums)) })
-	srv = httptest.NewServer(mux)
+	srv = httptest.NewTLSServer(mux)
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -211,6 +214,104 @@ func TestFetchBinaryWrongEntryName(t *testing.T) {
 	}
 }
 
+func TestFetchBinaryDuplicateSumsEntry(t *testing.T) {
+	archive := goodArchive(t)
+	err := fetchErr(t, archive, sumsLine(archive, AssetName(tag))+sumsLine([]byte("x"), AssetName(tag)))
+	if !strings.Contains(err.Error(), "more than once") {
+		t.Errorf("err = %v", err)
+	}
+}
+
+func TestFetchBinarySumsOverCap(t *testing.T) {
+	err := fetchErr(t, goodArchive(t), strings.Repeat("a", maxAPISize+1))
+	if !strings.Contains(err.Error(), "over 4194304 bytes") {
+		t.Errorf("err = %v", err)
+	}
+}
+
+func TestFetchBinaryDuplicateBinaryEntry(t *testing.T) {
+	dir := strings.TrimSuffix(AssetName(tag), ".tar.gz")
+	archive := tarGz(t,
+		entry{name: dir + "/homelab", body: "NEW-BINARY"},
+		entry{name: dir + "/homelab", body: "OTHER"},
+	)
+	err := fetchErr(t, archive, sumsLine(archive, AssetName(tag)))
+	if !strings.Contains(err.Error(), "appears twice") {
+		t.Errorf("err = %v", err)
+	}
+}
+
+func TestFetchBinaryBackslashEntry(t *testing.T) {
+	dir := strings.TrimSuffix(AssetName(tag), ".tar.gz")
+	archive := tarGz(t,
+		entry{name: `..\homelab`, body: "evil"},
+		entry{name: dir + "/homelab", body: "NEW-BINARY"},
+	)
+	err := fetchErr(t, archive, sumsLine(archive, AssetName(tag)))
+	if !strings.Contains(err.Error(), "escapes") {
+		t.Errorf("err = %v", err)
+	}
+}
+
+// Plain http for either asset: the checksum would travel the same unprotected
+// channel as the archive, so nothing is fetched.
+func TestFetchBinaryRefusesPlainHTTPAsset(t *testing.T) {
+	var hits int
+	plain := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { hits++ }))
+	t.Cleanup(plain.Close)
+	for _, which := range []string{"archive", "sums"} {
+		rel := Release{Tag: tag, Assets: map[string]string{
+			AssetName(tag): "https://example.invalid/archive",
+			SumsAsset:      "https://example.invalid/sums",
+		}}
+		if which == "archive" {
+			rel.Assets[AssetName(tag)] = plain.URL + "/archive"
+		} else {
+			rel.Assets[SumsAsset] = plain.URL + "/sums"
+		}
+		bin, err := FetchBinary(context.Background(), plain.Client(), rel)
+		if err == nil || bin != nil || !strings.Contains(err.Error(), "not https") {
+			t.Errorf("%s over http: bin=%q err=%v", which, bin, err)
+		}
+	}
+	if hits != 0 {
+		t.Errorf("plain http server was hit %d times", hits)
+	}
+}
+
+// An https asset redirecting to plain http is refused after the redirect.
+func TestFetchBinaryRefusesRedirectToHTTP(t *testing.T) {
+	archive := goodArchive(t)
+	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(sumsLine(archive, AssetName(tag))))
+	}))
+	t.Cleanup(plain.Close)
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/archive" {
+			_, _ = w.Write(archive)
+			return
+		}
+		http.Redirect(w, r, plain.URL+"/sums", http.StatusFound)
+	}))
+	t.Cleanup(srv.Close)
+	rel := Release{Tag: tag, Assets: map[string]string{
+		AssetName(tag): srv.URL + "/archive",
+		SumsAsset:      srv.URL + "/sums",
+	}}
+	bin, err := FetchBinary(context.Background(), srv.Client(), rel)
+	if err == nil || bin != nil || !strings.Contains(err.Error(), "redirected to http://") {
+		t.Errorf("bin=%q err=%v", bin, err)
+	}
+}
+
+func TestByTagRefusesDraft(t *testing.T) {
+	srv := server(t, nil, "")
+	if _, err := ByTag(context.Background(), srv.Client(), srv.URL+"/repo", "v0.9.0"); err == nil ||
+		!strings.Contains(err.Error(), "draft") {
+		t.Errorf("err = %v", err)
+	}
+}
+
 func TestFetchBinaryEntryNotRegular(t *testing.T) {
 	dir := strings.TrimSuffix(AssetName(tag), ".tar.gz")
 	archive := tarGz(t, entry{name: dir + "/homelab", typ: tar.TypeSymlink})
@@ -226,7 +327,7 @@ func TestFetchBinaryNoAsset(t *testing.T) {
 		t.Errorf("err = %v", err)
 	}
 	_, err = FetchBinary(context.Background(), http.DefaultClient,
-		Release{Tag: tag, Assets: map[string]string{AssetName(tag): "http://127.0.0.1:0/never"}})
+		Release{Tag: tag, Assets: map[string]string{AssetName(tag): "https://127.0.0.1:0/never"}})
 	if err == nil || !strings.Contains(err.Error(), "no SHA256SUMS") {
 		t.Errorf("err = %v", err)
 	}
