@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"syscall"
 
 	"github.com/groot/homelab/internal/release"
@@ -140,12 +141,27 @@ func replaceSelf(ctx context.Context, path string, rel release.Release, w io.Wri
 	return nil
 }
 
+// hostOS is runtime.GOOS; a var so tests play another OS.
+var hostOS = runtime.GOOS
+
+// linuxOnly refuses the CLI step off Linux: releases publish linux
+// binaries only (release.AssetName).
+func linuxOnly(tag string) error {
+	if hostOS == "linux" {
+		return nil
+	}
+	return fmt.Errorf("release binaries are linux-only: rebuild this CLI from source, then run `homelab upgrade --version %s` (agents) or `--image`", tag)
+}
+
 // upgradeSelf is upgrade's CLI step: this binary becomes rel's. When the
-// binary is not writable it is swapped under sudo (or doas), then this process execs
-// the new binary with `upgrade --version <tag>` and rootFlags (the CLI is
-// then the target, so it goes straight to the agents); execd reports that
-// the rollout is no longer this process's.
+// binary is not writable it is swapped under sudo (or doas), then this
+// process execs the new binary with `upgrade --version <tag>` and rootFlags
+// (the CLI is then the target, so it goes straight to the agents); execd
+// reports that the rollout is no longer this process's.
 func upgradeSelf(ctx context.Context, rel release.Release, rootFlags []string, w io.Writer) (execd bool, err error) {
+	if err := linuxOnly(rel.Tag); err != nil {
+		return false, err
+	}
 	path, err := selfExecutable()
 	if err != nil {
 		return false, fmt.Errorf("locating this homelab binary: %w", err)
@@ -181,6 +197,9 @@ func runCLIOnly(ctx context.Context, w io.Writer) error {
 	}
 	if upgradeFlags.image != "" {
 		return errors.New("--cli-only replaces the CLI only: --image is for the agents")
+	}
+	if err := linuxOnly(upgradeFlags.version); err != nil {
+		return err
 	}
 	release.UserAgent = "homelab/" + Version
 	rel, err := release.ByTag(ctx, releaseClient(), releaseAPI, upgradeFlags.version)

@@ -177,3 +177,14 @@ func TestDownloadClientTransportTimeouts(t *testing.T) {
 func trusting(srv *httptest.Server) func() *http.Transport {
 	return func() *http.Transport { return srv.Client().Transport.(*http.Transport).Clone() }
 }
+
+func TestUpdateCheck_NonLinuxSaysLinuxOnly(t *testing.T) {
+	stubUpdateCheck(t, "v0.5.0", "v0.5.1", "v0.5.0", nil)
+	prev := hostOS
+	t.Cleanup(func() { hostOS = prev })
+	hostOS = "darwin"
+	out := updateOut(t, false)
+	assert.Contains(t, out, "homelab v0.5.1 is available")
+	assert.Contains(t, out, "release binaries are linux-only")
+	assert.NotContains(t, out, "run homelab upgrade")
+}

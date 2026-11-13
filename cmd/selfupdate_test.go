@@ -451,3 +451,24 @@ func TestPickRootTool(t *testing.T) {
 		})
 	}
 }
+
+// Off Linux there is no release binary: the CLI step refuses (nothing
+// downloaded, no agent rolled), and says how to go on.
+func TestUpgradeCLI_NonLinuxRefuses(t *testing.T) {
+	fw, _, _ := fakeUpgrade(t, "v1.4.0", true, 0, nil, oldLeader, v150)
+	s := stubSelfUpgrade(t, "v1.4.0", "v1.5.0")
+	prev := hostOS
+	t.Cleanup(func() { hostOS = prev })
+	hostOS = "darwin"
+	for _, argv := range [][]string{{"upgrade"}, {"upgrade", "--cli-only", "--version", "v1.5.0"}} {
+		resetFlags()
+		var code int
+		stderr := captureStderr(func() { code = executeArgs(argv) })
+		assert.Equal(t, 1, code, "%q", argv)
+		assert.Contains(t, stderr, "release binaries are linux-only: rebuild this CLI from source, then run `homelab upgrade --version v1.5.0` (agents) or `--image`", "%q", argv)
+	}
+	assert.Zero(t, s.dl.Load())
+	assert.Empty(t, s.sudo)
+	assert.Empty(t, *fw)
+	s.assertUntouched(t)
+}

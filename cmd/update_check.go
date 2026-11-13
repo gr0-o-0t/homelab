@@ -92,6 +92,8 @@ func runUpdateCheck(ctx context.Context, w io.Writer) error {
 	switch reason, dev := release.DevBuild(Version); {
 	case dev:
 		_, _ = fmt.Fprintf(w, "this CLI is a development build (%s); the latest release is %s\n", reason, rel.Tag)
+	case release.Newer(Version, rel.Tag) && hostOS != "linux":
+		_, _ = fmt.Fprintf(w, "homelab %s is available (release binaries are linux-only: rebuild this CLI from source)\n%s\n", rel.Tag, releaseURL(rel.Tag))
 	case release.Newer(Version, rel.Tag):
 		_, _ = fmt.Fprintf(w, "homelab %s is available: run homelab upgrade\n%s\n", rel.Tag, releaseURL(rel.Tag))
 	default:
