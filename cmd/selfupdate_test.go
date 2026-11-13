@@ -3,6 +3,7 @@ package cmd
 import (
 	"archive/tar"
 	"bytes"
+	"cmp"
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/json"
@@ -11,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -40,6 +42,8 @@ type selfStub struct {
 	sudoErr   error
 	sudoUsed  bool
 	whyNoSudo string
+	tool      string   // the root tool found: "sudo" unless set
+	tools     []string // the tool each runAsRoot call used
 }
 
 func (s *selfStub) apiHits() int32 { return s.api.Load() }
@@ -116,10 +120,10 @@ func stubSelfUpgrade(t *testing.T, version, latest string, also ...string) *self
 	srv = httptest.NewTLSServer(mux)
 
 	prevV, prevC, prevA, prevExe, prevSudo, prevExec, prevUsable, prevUA, prevRename :=
-		Version, releaseTransport, releaseAPI, selfExecutable, runSudo, execSelf, sudoUsable, release.UserAgent, renameFile
+		Version, releaseTransport, releaseAPI, selfExecutable, runAsRoot, execSelf, rootTool, release.UserAgent, renameFile
 	t.Cleanup(func() {
 		srv.Close()
-		Version, releaseTransport, releaseAPI, selfExecutable, runSudo, execSelf, sudoUsable, release.UserAgent, renameFile =
+		Version, releaseTransport, releaseAPI, selfExecutable, runAsRoot, execSelf, rootTool, release.UserAgent, renameFile =
 			prevV, prevC, prevA, prevExe, prevSudo, prevExec, prevUsable, prevUA, prevRename
 		_ = os.Chmod(dir, 0o755) //nolint:gosec // let TempDir clean up
 	})
@@ -127,9 +131,10 @@ func stubSelfUpgrade(t *testing.T, version, latest string, also ...string) *self
 	releaseTransport = trusting(srv)
 	releaseAPI = srv.URL
 	selfExecutable = func() (string, error) { return s.exe, nil }
-	runSudo = func(args []string) error {
+	runAsRoot = func(tool string, args []string) error {
 		s.mu.Lock()
 		defer s.mu.Unlock()
+		s.tools = append(s.tools, tool)
 		s.sudo = append(s.sudo, append([]string(nil), args...))
 		return s.sudoErr
 	}
@@ -139,9 +144,12 @@ func stubSelfUpgrade(t *testing.T, version, latest string, also ...string) *self
 		s.execPath, s.execArgv, s.execEnv = path, append([]string(nil), argv...), append([]string(nil), env...)
 		return nil
 	}
-	sudoUsable = func() (string, bool) {
+	rootTool = func() (string, string) {
 		s.sudoUsed = true
-		return s.whyNoSudo, s.whyNoSudo == ""
+		if s.whyNoSudo != "" {
+			return "", s.whyNoSudo
+		}
+		return cmp.Or(s.tool, "sudo"), ""
 	}
 	return s
 }
@@ -287,14 +295,15 @@ func TestUpgradeCLI_ExecdLegWrongVersionStops(t *testing.T) {
 func TestUpgradeCLI_UnwritableWithoutSudoNamesThePath(t *testing.T) {
 	fw, _, _ := fakeUpgrade(t, "v1.4.0", true, 0, nil, oldLeader, v150)
 	s := stubSelfUpgrade(t, "v1.4.0", "v1.5.0")
-	s.whyNoSudo = "sudo is not installed"
+	s.whyNoSudo = "neither sudo nor doas is installed"
 	readOnlyDir(t, s)
 	var code int
 	stderr := captureStderr(func() { code = executeArgs([]string{"upgrade"}) })
 	assert.Equal(t, 1, code)
 	assert.Contains(t, stderr, s.exe+" is not writable")
-	assert.Contains(t, stderr, "sudo is not installed")
-	assert.Contains(t, stderr, "sudo "+s.exe+" upgrade --cli-only --version v1.5.0")
+	assert.Contains(t, stderr, "neither sudo nor doas is installed")
+	assert.Contains(t, stderr, "as root: `"+s.exe+" upgrade --cli-only --version v1.5.0`")
+	assert.NotContains(t, stderr, "sudo "+s.exe)
 	assert.Empty(t, s.sudo)
 	assert.Empty(t, s.execPath)
 	assert.Empty(t, *fw)
@@ -326,7 +335,6 @@ func TestUpgradeCLI_ChecksumFailureReplacesNothing(t *testing.T) {
 	assert.Empty(t, *fw)
 	assert.Zero(t, *asks)
 }
-
 
 // No newer release: the CLI stays, and the rollout is still forwarded —
 // the leader leaves alone every agent already on the CLI's version (itself
@@ -395,4 +403,51 @@ func TestUpgradeCLIOnly_RefusedInTheAgent(t *testing.T) {
 	assert.Equal(t, 1, executeArgs([]string{"upgrade", "--cli-only", "--version", "v1.5.0"}))
 	assert.Zero(t, s.apiHits())
 	s.assertUntouched(t)
+}
+
+// With doas but no sudo, the swap goes through doas.
+func TestUpgradeCLI_UnwritableGoesThroughDoas(t *testing.T) {
+	fw, _, _ := fakeUpgrade(t, "v1.4.0", true, 0, nil, oldLeader, v150)
+	s := stubSelfUpgrade(t, "v1.4.0", "v1.5.0")
+	s.tool = "doas"
+	readOnlyDir(t, s)
+	var code int
+	stderr := captureStderr(func() { code = executeArgs([]string{"upgrade"}) })
+	require.Equal(t, 0, code, stderr)
+	assert.Contains(t, stderr, "homelab: "+s.exe+" is not writable; re-running with doas…")
+	assert.Equal(t, []string{"doas"}, s.tools)
+	assert.Equal(t, [][]string{{s.exe, "upgrade", "--cli-only", "--version", "v1.5.0"}}, s.sudo)
+	assert.Equal(t, s.exe, s.execPath)
+	assert.Empty(t, *fw)
+}
+
+// pickRootTool takes the first of sudo, doas on PATH; never when already
+// root.
+func TestPickRootTool(t *testing.T) {
+	bin := func(names ...string) string {
+		dir := t.TempDir()
+		for _, n := range names {
+			require.NoError(t, os.WriteFile(filepath.Join(dir, n), []byte("#!/bin/sh\n"), 0o755)) //nolint:gosec // a fake tool
+		}
+		return dir
+	}
+	for _, tc := range []struct {
+		name      string
+		path      string
+		euid      int
+		tool, why string
+	}{
+		{"both", bin("sudo", "doas"), 1000, "sudo", ""},
+		{"sudo only", bin("sudo"), 1000, "sudo", ""},
+		{"doas only", bin("doas"), 1000, "doas", ""},
+		{"neither", bin(), 1000, "", "neither sudo nor doas is installed"},
+		{"root", bin("sudo"), 0, "", "this already runs as root"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("PATH", tc.path)
+			tool, why := pickRootTool(tc.euid, exec.LookPath)
+			assert.Equal(t, tc.tool, tool)
+			assert.Equal(t, tc.why, why)
+		})
+	}
 }

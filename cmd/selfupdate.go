@@ -18,7 +18,7 @@ import (
 // target release's before rolling the agents. The swap is atomic: a temp
 // file next to the resolved executable, renamed over it. A binary the user
 // cannot write (/usr/local/bin) is swapped by `sudo -- <exe> upgrade
-// --cli-only --version <tag>` — only that step runs as root — and this
+// --cli-only --version <tag>` (doas when there is no sudo) — only that step runs as root — and this
 // process then execs the new binary to roll the agents as the invoking
 // user, with their client.yaml and keyring (root's HOME, XDG dirs and D-Bus
 // session would find neither).
@@ -33,10 +33,11 @@ var selfExecutable = func() (string, error) {
 	return filepath.EvalSymlinks(p)
 }
 
-// runSudo runs `sudo -- args…` on this terminal (sudo prompts there; no
-// password passes through homelab); a var so tests never run sudo.
-var runSudo = func(args []string) error {
-	c := exec.Command("sudo", append([]string{"--"}, args...)...) //nolint:gosec // our own binary, fixed argv
+// runAsRoot runs `<tool> -- args…` (tool: sudo or doas) on this terminal
+// (the tool prompts there; no password passes through homelab); a var so
+// tests never run it.
+var runAsRoot = func(tool string, args []string) error {
+	c := exec.Command(tool, append([]string{"--"}, args...)...) //nolint:gosec // sudo or doas, our own binary, fixed argv
 	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
 	return c.Run()
 }
@@ -52,17 +53,25 @@ var execSelf = syscall.Exec
 // renameFile is os.Rename; a var so tests make it refuse.
 var renameFile = os.Rename
 
-// sudoUsable reports whether a non-writable binary can be swapped through
-// sudo: not when this already is root, nor without a sudo on PATH. A var
-// for tests.
-var sudoUsable = func() (string, bool) {
-	if os.Geteuid() == 0 {
-		return "this already runs as root", false
+// rootTool is the tool a non-writable binary is swapped through (sudo, else
+// doas), or why there is none. A var for tests.
+var rootTool = func() (tool, why string) { return pickRootTool(os.Geteuid(), exec.LookPath) }
+
+// rootTools are tried in order.
+var rootTools = []string{"sudo", "doas"}
+
+// pickRootTool: the first of rootTools on PATH; none when this already is
+// root (euid 0).
+func pickRootTool(euid int, lookPath func(string) (string, error)) (tool, why string) {
+	if euid == 0 {
+		return "", "this already runs as root"
 	}
-	if _, err := exec.LookPath("sudo"); err != nil {
-		return "sudo is not installed", false
+	for _, t := range rootTools {
+		if _, err := lookPath(t); err == nil {
+			return t, ""
+		}
 	}
-	return "", true
+	return "", "neither sudo nor doas is installed"
 }
 
 // versionFlag is upgrade's --version, in the argv built for the leader,
@@ -75,7 +84,9 @@ type notWritableError struct {
 	err  error
 }
 
-func (e *notWritableError) Error() string { return fmt.Sprintf("%s is not writable: %s", e.path, e.err) }
+func (e *notWritableError) Error() string {
+	return fmt.Sprintf("%s is not writable: %s", e.path, e.err)
+}
 func (e *notWritableError) Unwrap() error { return e.err }
 
 // replaceSelf downloads rel's binary for this build (verified against the
@@ -130,7 +141,7 @@ func replaceSelf(ctx context.Context, path string, rel release.Release, w io.Wri
 }
 
 // upgradeSelf is upgrade's CLI step: this binary becomes rel's. When the
-// binary is not writable it is swapped under sudo, then this process execs
+// binary is not writable it is swapped under sudo (or doas), then this process execs
 // the new binary with `upgrade --version <tag>` and rootFlags (the CLI is
 // then the target, so it goes straight to the agents); execd reports that
 // the rollout is no longer this process's.
@@ -144,13 +155,14 @@ func upgradeSelf(ctx context.Context, rel release.Release, rootFlags []string, w
 	if !errors.As(err, &nw) {
 		return false, err
 	}
-	if why, ok := sudoUsable(); !ok {
-		return false, fmt.Errorf("%w — and %s: replace it yourself (`sudo %s upgrade --cli-only --version %s`), then run `homelab upgrade --version %s`",
+	tool, why := rootTool()
+	if tool == "" {
+		return false, fmt.Errorf("%w — and %s: replace it yourself (as root: `%s upgrade --cli-only --version %s`), then run `homelab upgrade --version %s`",
 			nw, why, path, rel.Tag, rel.Tag)
 	}
-	_, _ = fmt.Fprintf(os.Stderr, "homelab: %s is not writable; re-running with sudo…\n", path)
-	if err := runSudo([]string{path, "upgrade", "--cli-only", versionFlag, rel.Tag}); err != nil {
-		return false, fmt.Errorf("replacing %s with sudo: %w", path, err)
+	_, _ = fmt.Fprintf(os.Stderr, "homelab: %s is not writable; re-running with %s…\n", path, tool)
+	if err := runAsRoot(tool, []string{path, "upgrade", "--cli-only", versionFlag, rel.Tag}); err != nil {
+		return false, fmt.Errorf("replacing %s with %s: %w", path, tool, err)
 	}
 	argv := append([]string{path, "upgrade", versionFlag, rel.Tag}, rootFlags...)
 	env := append(os.Environ(), upgradeSelfEnv+"="+rel.Tag)
