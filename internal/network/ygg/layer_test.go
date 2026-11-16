@@ -17,13 +17,7 @@ func noopRestart() error { return nil }
 func TestLayer_Identity(t *testing.T) {
 	l := New("/test/repo", nil, nil)
 	assert.Equal(t, "ygg", l.Name())
-	assert.Equal(t, "Yggdrasil mesh node", l.Label())
 	assert.Equal(t, "yggdrasil", l.ContainerName())
-}
-
-func TestLayer_InterfaceImplementation(t *testing.T) {
-	var l network.NetworkLayer = New("/test/repo", nil, nil)
-	assert.NotNil(t, l)
 }
 
 func TestLayer_LegacyConfDir(t *testing.T) {

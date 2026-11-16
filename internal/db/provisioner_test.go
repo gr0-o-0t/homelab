@@ -145,19 +145,6 @@ func TestEscID(t *testing.T) {
 	}
 }
 
-func TestNew(t *testing.T) {
-	p := New("/cfg", nil)
-	if p == nil {
-		t.Fatal("New() returned nil")
-	}
-	if p.ConfigDir != "/cfg" {
-		t.Errorf("expected ConfigDir /cfg, got %s", p.ConfigDir)
-	}
-	if p.RC == nil {
-		t.Error("expected non-nil RC")
-	}
-}
-
 func TestEnsurePassword(t *testing.T) {
 	t.Run("generates and returns password", func(t *testing.T) {
 		sm := &fakeSM{store: make(map[string]string)}

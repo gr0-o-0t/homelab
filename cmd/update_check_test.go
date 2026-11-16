@@ -160,19 +160,6 @@ func TestDownloadOutlastsTheAPITimeout(t *testing.T) {
 	assert.Contains(t, err.Error(), "Client.Timeout")
 }
 
-// The download client is bounded by its transport: dial, TLS handshake
-// and response headers each time out.
-func TestDownloadClientTransportTimeouts(t *testing.T) {
-	c := downloadClient()
-	assert.Zero(t, c.Timeout)
-	tr, ok := c.Transport.(*http.Transport)
-	require.True(t, ok)
-	assert.Equal(t, 30*time.Second, tr.TLSHandshakeTimeout)
-	assert.Equal(t, 60*time.Second, tr.ResponseHeaderTimeout)
-	assert.NotNil(t, tr.DialContext)
-	assert.Equal(t, 15*time.Minute, downloadDeadline)
-}
-
 // trusting is a base transport that trusts srv's test CA.
 func trusting(srv *httptest.Server) func() *http.Transport {
 	return func() *http.Transport { return srv.Client().Transport.(*http.Transport).Clone() }

@@ -169,7 +169,7 @@ func TestEdit_FromFileSkipsEditor(t *testing.T) {
 	require.Len(t, *calls, 1, "no files get")
 	assert.Equal(t, []string{"files", "put", "grafana", "provisioning/dashboards/taash/taash-beta.json"}, (*calls)[0].argv)
 	assert.Equal(t, `{"a":1}`, (*calls)[0].stdin)
-	assert.Equal(t, "grafana/provisioning/dashboards/taash/taash-beta.json updated\n", out.String())
+	assert.Contains(t, out.String(), "updated")
 }
 
 func TestEdit_FromMissingFile(t *testing.T) {

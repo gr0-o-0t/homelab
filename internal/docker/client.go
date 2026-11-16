@@ -44,12 +44,6 @@ func ShortID(id string) string {
 	return id
 }
 
-// ParseTime parses a Docker RFC3339Nano timestamp.
-func ParseTime(s string) time.Time {
-	t, _ := time.Parse(time.RFC3339Nano, s)
-	return t
-}
-
 // ContainerSummary holds lightweight container data from ContainerList.
 // Used for the service list view — no extra API calls needed per container.
 type ContainerSummary struct {

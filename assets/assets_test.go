@@ -24,31 +24,16 @@ func TestCoreFS_IsOnlyTheCaddyfile(t *testing.T) {
 	assert.Equal(t, []string{"caddy/Caddyfile"}, files)
 }
 
-func TestCatalogFS_ContainsServices(t *testing.T) {
+// docker-compose.yml is checked by TestCatalogServices_ComposeFileUsesYmlExtension.
+func TestCatalogService_HasConfig(t *testing.T) {
 	entries, err := assets.CatalogFS.ReadDir("services")
-	require.NoError(t, err, "should be able to read services directory")
-
-	serviceNames := make([]string, len(entries))
-	for i, e := range entries {
-		serviceNames[i] = e.Name()
-	}
-
-	assert.Contains(t, serviceNames, "immich")
-	assert.Contains(t, serviceNames, "jellyfin")
-	assert.Contains(t, serviceNames, "uptime-kuma")
-	assert.Contains(t, serviceNames, "vaultwarden")
-}
-
-func TestCatalogService_HasRequiredFiles(t *testing.T) {
-	services := []string{"immich", "jellyfin", "uptime-kuma", "vaultwarden"}
-	requiredFiles := []string{"docker-compose.yml", "config.yaml"}
-
-	for _, svc := range services {
-		for _, file := range requiredFiles {
-			path := "services/" + svc + "/" + file
-			_, err := assets.CatalogFS.Open(path)
-			require.NoError(t, err, "service %s should have %s", svc, file)
+	require.NoError(t, err)
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
 		}
+		_, err := assets.CatalogFS.Open("services/" + e.Name() + "/config.yaml")
+		assert.NoError(t, err, "service %s should have config.yaml", e.Name())
 	}
 }
 

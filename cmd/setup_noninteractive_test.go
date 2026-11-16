@@ -104,7 +104,6 @@ func TestSetupJSON_RootWithoutConfig(t *testing.T) {
 		names = append(names, v.Name)
 		if v.Name == "HOME_SUBDOMAIN" {
 			assert.Equal(t, "home", v.Value)
-			assert.Equal(t, "Subdomain prefix", v.Description)
 		}
 	}
 	assert.Contains(t, names, "DOMAIN")

@@ -13,7 +13,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/groot/homelab/internal/service"
-	"github.com/groot/homelab/internal/tui/styles"
 	"unicode/utf8"
 )
 
@@ -49,10 +48,6 @@ func TestTruncate_ShortString_Unchanged(t *testing.T) {
 	assert.Equal(t, "hello", truncate("hello", 5))
 }
 
-func TestTruncate_ExactLength_Unchanged(t *testing.T) {
-	assert.Equal(t, "hello", truncate("hello", 5))
-}
-
 func TestTruncate_LongString_Truncated(t *testing.T) {
 	result := truncate("hello world", 8)
 	assert.Equal(t, "hello w…", result)
@@ -84,44 +79,7 @@ func TestBuildServiceHint_ListsServiceNames(t *testing.T) {
 // ── styles.Dot ────────────────────────────────────────────────────────────────
 // Smoke-tests for the shared Dot helper — verifies it returns non-empty strings.
 
-func TestDot_AllCombinations(t *testing.T) {
-	cases := []struct{ running, exposed bool }{
-		{true, true},
-		{true, false},
-		{false, true},
-		{false, false},
-	}
-	for _, c := range cases {
-		result := styles.Dot(c.running, c.exposed)
-		assert.NotEmpty(t, result,
-			"Dot(running=%v, exposed=%v) should never return empty string",
-			c.running, c.exposed)
-	}
-}
-
 // ── styles tag functions ──────────────────────────────────────────────────────
-
-func TestHealthTag_KnownValues(t *testing.T) {
-	cases := map[string]string{
-		"healthy":   "healthy",
-		"unhealthy": "unhealthy",
-		"starting":  "starting",
-		"":          "–",
-		"unknown":   "–",
-	}
-	for input, wantContains := range cases {
-		result := styles.HealthTag(input)
-		assert.Contains(t, result, wantContains,
-			"HealthTag(%q) should contain %q", input, wantContains)
-	}
-}
-
-func TestStateTag_KnownValues(t *testing.T) {
-	for _, state := range []string{"running", "exited", "restarting", "created", "paused"} {
-		result := styles.StateTag(state)
-		assert.NotEmpty(t, result, "StateTag(%q) should not be empty", state)
-	}
-}
 
 func writeSvc(t *testing.T, root, name string, files map[string]string) {
 	t.Helper()

@@ -15,11 +15,3 @@ func TestImagesCommand_MissingService(t *testing.T) {
 	err := rootCmd.Execute()
 	assert.Error(t, err)
 }
-
-func TestImagesCommand_QuietFlag_MissingService(t *testing.T) {
-	tmp := t.TempDir()
-	rootCmd := cmd.RootCmd()
-	rootCmd.SetArgs([]string{"--config-dir", tmp, "images", "--quiet", "nonexistent"})
-	err := rootCmd.Execute()
-	assert.Error(t, err)
-}

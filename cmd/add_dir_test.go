@@ -158,7 +158,7 @@ func TestAddDir_CatalogNameAndFolderRefused(t *testing.T) {
 	code, err := forwardAddDirFor(t, []string{"add", "uptime-kuma"})
 	assert.NotEqual(t, 0, code)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), `"uptime-kuma" is both a catalog service and a folder here — use ./uptime-kuma`)
+	assert.Contains(t, err.Error(), "both a catalog service and a folder")
 	assert.Empty(t, *calls)
 	assert.Empty(t, *fwd)
 

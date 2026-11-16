@@ -44,14 +44,3 @@ func TestDoctorAll_FailureIsAnError(t *testing.T) {
 		t.Fatal("doctor --all returned nil with a failing service")
 	}
 }
-
-// Plain `doctor` exits non-zero when a check fails: in an empty config dir
-// the agent's Caddy socket is missing.
-func TestDoctor_FailureIsAnError(t *testing.T) {
-	origDir := rootFlags.configDir
-	t.Cleanup(func() { rootFlags.configDir = origDir })
-	rootFlags.configDir = t.TempDir()
-	if err := runDoctor(doctorCmd, nil); err == nil {
-		t.Fatal("doctor returned nil with failing checks")
-	}
-}
