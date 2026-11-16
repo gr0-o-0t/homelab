@@ -446,7 +446,7 @@ func RenderL4(e Exposure) string {
 			// The listener is a registered Caddy network: hl-ts for tcp, hl-tsu
 			// for udp (Caddy splits addresses on the first "/", so "udp/hl-ts/…"
 			// would mean network "udp"). The upstream is an ordinary OS socket,
-			// hence "udp/<svc>". Task 11 registers hl-tsu and verifies it.
+			// hence "udp/<svc>".
 			listen, upstream := network.TailnetBind, ""
 			if proto == protoUDP {
 				listen, upstream = network.TailnetBindUDP, "udp/"

@@ -14,6 +14,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/groot/homelab/internal/tui/styles"
+	"io"
+	"syscall"
 )
 
 const maxLines = 2000 // keep the last N lines to bound memory
@@ -54,8 +56,8 @@ type Model struct {
 }
 
 // New creates a Model titled title and starts streaming the output of argv —
-// in practice `homelab logs -f [service]`, so the CLI resolves the compose
-// file, profiles and environment exactly as `homelab logs` does.
+// in practice `homelab logs -f [service]`, so the CLI resolves the service
+// and reads its logs exactly as `homelab logs` does.
 func New(title string, argv []string) Model {
 	ch, stop := startLogStream(argv)
 	return Model{
@@ -230,6 +232,10 @@ func viewportHeight(total int) int {
 // used to write the full environment, keyring secrets included, to a temp
 // --env-file — on disk for as long as the viewer ran, and left behind if the
 // process was killed.
+// maxLogLine is the longest log line the viewer reads (bufio.Scanner's
+// default, 64 KiB, is short for JSON logs).
+const maxLogLine = 1 << 20
+
 func startLogStream(argv []string) (<-chan string, func()) {
 	ch := make(chan string, 256)
 	done := make(chan struct{})
@@ -240,7 +246,10 @@ func startLogStream(argv []string) (<-chan string, func()) {
 		if len(argv) == 0 {
 			return
 		}
-		cmd := exec.Command(argv[0], argv[1:]...) // nosec G204 -- argv is built by the CLI, not user input
+		cmd := exec.Command(argv[0], argv[1:]...) // #nosec G204 -- argv is built by the CLI, not user input
+		// Its own process group, so stop reaches what it runs (`docker
+		// service logs -f`), not just the CLI.
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 		stdout, err := cmd.StdoutPipe()
 		if err != nil {
@@ -265,12 +274,13 @@ func startLogStream(argv []string) (<-chan string, func()) {
 		go func() {
 			<-done
 			if cmd.Process != nil {
-				_ = cmd.Process.Kill()
+				_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 			}
 			reap()
 		}()
 
 		scanner := bufio.NewScanner(stdout)
+		scanner.Buffer(make([]byte, 0, 64*1024), maxLogLine)
 		for scanner.Scan() {
 			line := scanner.Text()
 			select {
@@ -278,6 +288,16 @@ func startLogStream(argv []string) (<-chan string, func()) {
 			case <-done:
 				return
 			}
+		}
+		if err := scanner.Err(); err != nil {
+			select {
+			case ch <- "log viewer: " + err.Error():
+			case <-done:
+				return
+			}
+			// Keep the pipe read until the process ends: a writer blocked
+			// on a full pipe would never exit, and reap would wait forever.
+			_, _ = io.Copy(io.Discard, stdout)
 		}
 		reap()
 	}()

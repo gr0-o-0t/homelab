@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/network"
@@ -167,15 +168,19 @@ func refuseLeftoverStateVolume(ctx context.Context, api swarm.API) error {
 		"`docker volume rm %s` (data volumes are untouched)", StateVolume, StateVolume)
 }
 
-// removeAgentAndState undoes a failed import: the agent container goes and,
-// when this run created it (ownVolume), its state volume (StateVolume), so a
-// retry starts clean. No other volume is ever removed — the services' data
-// volumes stay as they are.
+// removeAgentAndState undoes a failed init, join or import: the agent
+// container goes and, when this run created it (ownVolume), its state volume
+// (StateVolume), so a retry starts clean. No other volume is ever removed —
+// the services' data volumes stay as they are. A container that was never
+// created (StartAgent failed early) counts as removed.
 func removeAgentAndState(ctx context.Context, api swarm.API, out io.Writer, ownVolume bool) {
 	cerr := api.ContainerRemove(ctx, AgentContainer, container.RemoveOptions{Force: true})
+	if errdefs.IsNotFound(cerr) {
+		cerr = nil
+	}
 	verr := error(nil)
 	if cerr == nil && !ownVolume {
-		_, _ = fmt.Fprintf(out, "Import failed: removed the agent; its state volume %s predates this run and is kept.\n",
+		_, _ = fmt.Fprintf(out, "Setup failed: removed the agent; its state volume %s predates this run and is kept.\n",
 			StateVolume)
 		return
 	}
@@ -183,11 +188,11 @@ func removeAgentAndState(ctx context.Context, api swarm.API, out io.Writer, ownV
 		verr = api.VolumeRemove(ctx, StateVolume, true)
 	}
 	if cerr != nil || verr != nil {
-		_, _ = fmt.Fprintf(out, "warning: could not undo the import (%v) — run `docker rm -f %s && docker volume rm %s` "+
+		_, _ = fmt.Fprintf(out, "warning: could not remove the half-set-up agent (%v) — run `docker rm -f %s && docker volume rm %s` "+
 			"before retrying; data volumes are untouched\n", errors.Join(cerr, verr), AgentContainer, StateVolume)
 		return
 	}
-	_, _ = fmt.Fprintf(out, "Import failed: removed the agent and its state volume (%s) so a retry starts clean; "+
+	_, _ = fmt.Fprintf(out, "Setup failed: removed the agent and its state volume (%s) so a retry starts clean; "+
 		"data volumes are untouched.\n", StateVolume)
 }
 

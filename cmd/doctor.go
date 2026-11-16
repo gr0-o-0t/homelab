@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -73,9 +74,9 @@ func runDoctor(_ *cobra.Command, args []string) error {
 				fmt.Printf("  %s %s\n\n",
 					styles.Err.Render("Checks failed for:"),
 					strings.Join(failed, ", "))
-			} else {
-				fmt.Printf("  %s\n\n", styles.Success.Render(allServicesSummary(warns)))
+				return fmt.Errorf("checks failed for %s", strings.Join(failed, ", "))
 			}
+			fmt.Printf("  %s\n\n", styles.Success.Render(allServicesSummary(warns)))
 			return nil
 		}
 		// Single service
@@ -165,7 +166,7 @@ func runDoctor(_ *cobra.Command, args []string) error {
 		}
 	}
 
-	renderExtensionChecks(cfgFile, dc, &pass)
+	warns += renderExtensionChecks(cfgFile, dc)
 
 	fmt.Println()
 	if pass {
@@ -177,6 +178,7 @@ func runDoctor(_ *cobra.Command, args []string) error {
 		} else {
 			fmt.Printf("  %s\n\n", styles.Err.Render("Some checks failed — manual intervention may be required."))
 		}
+		return errors.New("some checks failed")
 	}
 	return nil
 }
@@ -240,10 +242,12 @@ func caddyRoutingCheck(dir string, fix bool, pass *bool) []diagnostics.CheckResu
 }
 
 // renderExtensionChecks iterates the registry and renders extension container states.
-func renderExtensionChecks(cfgFile string, dc *docker.Client, pass *bool) {
+// renderExtensionChecks prints the enabled network extensions' containers.
+// One that is not running is a warning, not a failure; it returns how many.
+func renderExtensionChecks(cfgFile string, dc *docker.Client) (warns int) {
 	cfg, _ := config.Load(cfgFile)
 	if cfg == nil {
-		return
+		return 0
 	}
 
 	var results []diagnostics.CheckResult
@@ -265,9 +269,6 @@ func renderExtensionChecks(cfgFile string, dc *docker.Client, pass *bool) {
 				Name: displayName, Status: diagnostics.StatusWarn,
 				Message: fmt.Sprintf("%s (%s) container %s", displayName, cName, stateLabel(cState)),
 			})
-			if pass != nil {
-				*pass = false
-			}
 		}
 	}
 
@@ -278,13 +279,12 @@ func renderExtensionChecks(cfgFile string, dc *docker.Client, pass *bool) {
 			case diagnostics.StatusPass:
 				fmt.Printf("  %s  %s\n", styles.Success.Render("✓"), r.Message)
 			case diagnostics.StatusWarn:
-				fmt.Printf("  %s  %s\n", styles.Err.Render("✗"), r.Message)
-				if pass != nil {
-					*pass = false
-				}
+				fmt.Printf("  %s  %s\n", styles.Warning.Render("!"), r.Message)
+				warns++
 			}
 		}
 	}
+	return warns
 }
 
 func runServiceDoctorFor(dir, name string, fix bool) bool {

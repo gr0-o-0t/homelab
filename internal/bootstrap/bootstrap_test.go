@@ -17,6 +17,7 @@ import (
 	"github.com/docker/docker/api/types/network"
 	dswarm "github.com/docker/docker/api/types/swarm"
 	"github.com/docker/docker/api/types/system"
+	"github.com/docker/docker/api/types/volume"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -406,6 +407,42 @@ func TestInit_LeavesSwarmWhenLaterStepFails(t *testing.T) {
 	require.Error(t, in.Do(context.Background()))
 	assert.Len(t, h.fake.Inits(), 1)
 	assert.Equal(t, 1, h.fake.Leaves())
+}
+
+// A failure after the agent started takes the agent (and the state volume
+// this run created) away again: checkEngine refuses any engine that still
+// has a homelab-agent container, so leaving it would block every retry.
+func TestInit_LateFailureRemovesAgent(t *testing.T) {
+	in, h := newInit(t, testIP)
+	h.fake.SetExecExitCode(1) // agent-seed fails
+	require.Error(t, in.Do(context.Background()))
+	log := h.fake.CallLog()
+	assert.Contains(t, log, "ContainerRemove "+AgentContainer)
+	assert.Contains(t, log, "VolumeRemove "+StateVolume)
+	assert.Empty(t, h.fake.Created(), "no agent container is left behind")
+	assert.Contains(t, h.out.String(), "removed the agent and its state volume")
+}
+
+func TestJoin_LateFailureRemovesAgent(t *testing.T) {
+	j, h := newJoin(t)
+	h.fake.SetExecExitCode(1) // agent-seed fails
+	require.Error(t, j.Do(context.Background()))
+	log := h.fake.CallLog()
+	assert.Contains(t, log, "ContainerRemove "+AgentContainer)
+	assert.Contains(t, log, "VolumeRemove "+StateVolume)
+	assert.Empty(t, h.fake.Created(), "no agent container is left behind")
+	assert.Equal(t, 1, h.fake.Leaves(), "and the swarm is left")
+}
+
+// The join rollback keeps a state volume that predates the run.
+func TestJoin_LateFailureKeepsPreexistingVolume(t *testing.T) {
+	j, h := newJoin(t)
+	h.fake.SetVolumes(&volume.Volume{Name: StateVolume})
+	h.fake.SetExecExitCode(1)
+	require.Error(t, j.Do(context.Background()))
+	log := h.fake.CallLog()
+	assert.Contains(t, log, "ContainerRemove "+AgentContainer)
+	assert.NotContains(t, log, "VolumeRemove "+StateVolume)
 }
 
 func TestResolveImage(t *testing.T) {

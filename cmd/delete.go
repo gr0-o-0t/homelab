@@ -44,7 +44,27 @@ var sharedDBServices = map[string]bool{"postgres": true, "mariadb": true, "redis
 
 func runDelete(_ *cobra.Command, args []string) error {
 	root := configDir()
-	return forEachService(root, args, func(name string) error { return deleteOne(root, name) })
+	return eachService(args, func(name string) error { return validateDeletable(root, name) },
+		func(name string) error { return deleteOne(root, name) })
+}
+
+// validateDeletable is validateService, except that a service whose
+// directory was removed by hand can still be deleted while the desired state
+// lists it: its Swarm services and exposure remain to be cleaned up.
+func validateDeletable(root, name string) error {
+	err := validateService(root, name)
+	if err == nil || validName(name) != nil {
+		return err
+	}
+	if _, serr := os.Stat(filepath.Join(root, "services", name)); !os.IsNotExist(serr) {
+		return err
+	}
+	if d, _, derr := desired.LoadDesired(root); derr == nil {
+		if _, ok := d.Services[name]; ok {
+			return nil
+		}
+	}
+	return err
 }
 
 func deleteOne(root, svcName string) error {

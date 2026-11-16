@@ -129,18 +129,6 @@ func TestLayerTarget(t *testing.T) {
 	assert.NotContains(t, on, "layer.stop", "cloudflared is deployed by ext enable, not started separately")
 }
 
-func TestChoices_Groups(t *testing.T) {
-	root := t.TempDir()
-	require.NoError(t, os.WriteFile(root+"/config.yaml", []byte("groups:\n  media: [a]\n  infra: [b]\n"), 0o600))
-	got, err := Choices(root, Input{Kind: Choice, Source: SourceGroups})
-	require.NoError(t, err)
-	assert.Equal(t, []string{"infra", "media"}, got)
-
-	got, err = Choices(root, Input{Kind: Choice, Source: SourceBackups})
-	require.NoError(t, err)
-	assert.Empty(t, got)
-}
-
 func TestBuild_MultiSelection(t *testing.T) {
 	sel := Target{Scope: Service, Names: []string{"web", "db"}}
 	prune, _ := ByID("service.prune")

@@ -219,7 +219,7 @@ func defaultInputs(a actions.Action) actions.Inputs {
 	return out
 }
 
-// stateOf summarises a service's container state for its dot and pill.
+// runState summarises a service's container state for its dot and pill.
 type runState int
 
 const (

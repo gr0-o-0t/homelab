@@ -179,13 +179,19 @@ func (e *Engine) Backup(p Plan, destDir string, live bool) (ServiceRecord, error
 	return rec, nil
 }
 
-// dumpDatabase streams a logical dump out of the shared instance.
-func (e *Engine) dumpDatabase(d DatabaseTarget, path string) error {
+// dumpDatabase streams a logical dump out of the shared instance. A dump
+// that fails is removed rather than left truncated.
+func (e *Engine) dumpDatabase(d DatabaseTarget, path string) (err error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600) // #nosec G304 -- path is built by Engine, not by input
 	if err != nil {
 		return fmt.Errorf("creating dump file: %w", err)
 	}
-	defer func() { _ = f.Close() }()
+	defer func() {
+		_ = f.Close()
+		if err != nil {
+			_ = os.Remove(path)
+		}
+	}()
 
 	container, err := e.container(d.Type)
 	if err != nil {

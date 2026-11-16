@@ -32,7 +32,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case tea.WindowSizeMsg:
 			m.width, m.height = msg.Width, msg.Height
-		case refreshedMsg, backupsMsg, actionDoneMsg, coreTickMsg, logTickMsg, inspectTickMsg, spinner.TickMsg:
+		case refreshedMsg, refreshErrMsg, backupsMsg, actionDoneMsg, logTailMsg, containerDetailMsg,
+			coreTickMsg, logTickMsg, inspectTickMsg, spinner.TickMsg:
 			return m.update(msg)
 		}
 		lm, cmd := m.logv.Update(msg)

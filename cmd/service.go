@@ -290,9 +290,14 @@ func validName(name string) error { return config.ValidServiceName(name) }
 // way `docker compose` does: one broken service must not leave the rest of a
 // `down --all` running. Failures are reported inline and returned together.
 func forEachService(root string, names []string, fn func(name string) error) error {
+	return eachService(names, func(name string) error { return validateService(root, name) }, fn)
+}
+
+// eachService is forEachService with the check each name must pass.
+func eachService(names []string, validate, fn func(name string) error) error {
 	var errs []error
 	for _, name := range names {
-		err := validateService(root, name)
+		err := validate(name)
 		if err == nil {
 			err = fn(name)
 		}
@@ -325,8 +330,6 @@ func validateService(root, name string) error {
 	}
 	return nil
 }
-
-// buildServiceHint returns a styled list of known services for error messages.
 
 func completeServiceNames(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 	if len(args) != 0 {

@@ -15,7 +15,6 @@ import (
 	"github.com/groot/homelab/internal/db"
 	"github.com/groot/homelab/internal/desired"
 	"github.com/groot/homelab/internal/run"
-	"github.com/groot/homelab/internal/secrets"
 	"github.com/groot/homelab/internal/swarm"
 	"github.com/groot/homelab/internal/tui/styles"
 )
@@ -72,7 +71,7 @@ func ensureDBDependencies(ctx context.Context, root, name string) error {
 	// A real secrets manager, not nil: provisioning stores the generated role
 	// password in the keyring, and the same password is what buildEnv injects
 	// into the service.
-	sm, err := secrets.Open()
+	sm, err := openSecrets()
 	if err != nil {
 		return fmt.Errorf("opening keyring: %w", err)
 	}
@@ -194,13 +193,13 @@ func ensureGeneratedSecrets(p *db.Provisioner, name string) error {
 	return nil
 }
 
-// prepareService is what `up` does before compose for any service: generate
-// its own secrets, then start and provision what it depends on.
 // provisionDBs is ensureDBDependencies; a var so tests can observe it.
 var provisionDBs = ensureDBDependencies
 
+// prepareService is what `up` does before deploying any service: generate
+// its own secrets, then start and provision what it depends on.
 func prepareService(ctx context.Context, root, name string) error {
-	sm, err := secrets.Open()
+	sm, err := openSecrets()
 	if err != nil {
 		return fmt.Errorf("opening keyring: %w", err)
 	}

@@ -88,3 +88,15 @@ func TestDisable_TorOnlyService(t *testing.T) {
 	require.NoError(t, rootCmd.Execute())
 	assert.Empty(t, stateOf(t, root, "gitea").Layers)
 }
+
+// Enabling a service that has no config.yaml did nothing: it must fail, not
+// exit 0 as if the service were now exposed.
+func TestEnable_NoConfigIsAnError(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "services", "gitea"), 0o750))
+	rootCmd := cmd.RootCmd()
+	rootCmd.SetArgs([]string{"--config-dir", root, "enable", "gitea"})
+	err := rootCmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "homelab setup gitea")
+}

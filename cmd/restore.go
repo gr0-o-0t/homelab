@@ -83,6 +83,14 @@ func runRestore(_ *cobra.Command, args []string) error {
 		records = []backup.ServiceRecord{rec}
 	}
 
+	// Every service must be installed before anything is asked or touched.
+	for _, rec := range records {
+		if err := validateService(root, rec.Name); err != nil {
+			return fmt.Errorf("%w\n  Install it first: homelab add %s && homelab setup %s",
+				err, rec.Name, rec.Name)
+		}
+	}
+
 	fmt.Printf("\n%s\n\n", styles.Header.Render("Restore"))
 	fmt.Printf("  %s %s\n", styles.Muted.Render("from"), src)
 	fmt.Printf("  %s %s\n\n", styles.Muted.Render("taken"), manifest.Created.Format("2006-01-02 15:04:05 MST"))
@@ -109,13 +117,6 @@ func runRestore(_ *cobra.Command, args []string) error {
 		}
 	}
 	fmt.Println()
-
-	for _, rec := range records {
-		if err := validateService(root, rec.Name); err != nil {
-			return fmt.Errorf("%w\n  Install it first: homelab add %s && homelab setup %s",
-				err, rec.Name, rec.Name)
-		}
-	}
 
 	// Scaling back needs no secrets (replica counts only); readying the
 	// shared databases opens them itself.

@@ -92,12 +92,7 @@ func runEnable(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("reading service config: %w", err)
 	}
 	if !info.HasVars {
-		fmt.Printf("  %s  No config.yaml found for %s\n",
-			styles.Warning.Render("!"), svcName)
-		fmt.Printf("  %s  Run %s first\n\n",
-			styles.Muted.Render("→"),
-			styles.Primary.Render(fmt.Sprintf("homelab setup %s", svcName)))
-		return nil
+		return fmt.Errorf("no config.yaml found for %s: run `homelab setup %s` first", svcName, svcName)
 	}
 
 	if err := requireMigrated(root, svcName); err != nil {

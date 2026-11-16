@@ -7,6 +7,7 @@ import (
 
 	"github.com/groot/homelab/internal/caddy"
 	"github.com/groot/homelab/internal/desired"
+	"github.com/groot/homelab/internal/edge"
 	"github.com/groot/homelab/internal/exposure"
 	"github.com/groot/homelab/internal/network"
 	"github.com/groot/homelab/internal/network/layers"
@@ -137,20 +138,35 @@ func runDisable(cmd *cobra.Command, args []string) error {
 			}
 		}
 	}
-	if err != nil {
-		fmt.Printf("  %s  Caddy reload: %v\n", styles.Warning.Render("!"), explain(err))
-	}
+	reloadErr := disableReloadErr(explain(err))
 
 	if disableStop {
 		recordService(root, svcName, desired.Stopped)
 		fmt.Printf("  %s  Stopping container…\n", styles.Muted.Render("→"))
 		if err := stopService(root, svcName); err != nil {
-			return err
+			return errors.Join(reloadErr, err)
 		}
 	}
 
 	fmt.Println()
-	return nil
+	return reloadErr
+}
+
+// disableReloadErr judges the reload after disable changed the exposure
+// state. With the agent down the change applies when it starts: a warning.
+// Any other failure leaves the live edge still serving the service, which
+// must not pass as success.
+func disableReloadErr(err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, edge.ErrAgentDown):
+		fmt.Printf("  %s  Caddy reload: %v\n     The change applies when the agent starts.\n",
+			styles.Warning.Render("!"), err)
+		return nil
+	default:
+		return fmt.Errorf("removed from the exposure state, but the edge did not reload and still serves it: %w", err)
+	}
 }
 
 // stopService takes a service down: its Swarm services scale to zero.

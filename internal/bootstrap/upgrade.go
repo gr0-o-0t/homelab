@@ -92,7 +92,7 @@ func WaitReplaced(ctx context.Context, ask func(context.Context) (AgentID, error
 	case last.Version == "":
 		return last, fmt.Errorf("did not answer within %s of being replaced — see `docker logs %s` there", WaitBack, AgentContainer)
 	case before.Boot != "" && last.Boot == before.Boot:
-		return last, fmt.Errorf("still the old agent (%s): its replacement failed and was rolled back — see `docker logs %s` there",
+		return last, fmt.Errorf("still the old agent (%s): it was not replaced (the replacement failed and was rolled back, or never ran) — see `docker logs %s` there",
 			last.Version, HelperContainer)
 	default:
 		return last, fmt.Errorf("the new agent did not answer steadily within %s — see `docker logs %s` there", WaitBack, HelperContainer)

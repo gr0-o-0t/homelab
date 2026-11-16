@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/groot/homelab/internal/fsutil"
 )
 
 // Shared-service credentials and state that are not per-database passwords.
@@ -79,15 +81,10 @@ func saveRedisDBs(configDir string, m map[string]int) error {
 	header := "# Managed by homelab: the shared redis database number each service owns.\n" +
 		"# A number stays reserved until its service is deleted. Do not hand-edit\n" +
 		"# while services are running.\n"
-	path := RedisDBFile(configDir)
-	if err := os.MkdirAll(configDir, 0o750); err != nil {
-		return err
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, append([]byte(header), data...), 0o600); err != nil {
+	if err := fsutil.WriteFile(RedisDBFile(configDir), append([]byte(header), data...)); err != nil {
 		return fmt.Errorf("writing redis allocations: %w", err)
 	}
-	return os.Rename(tmp, path)
+	return nil
 }
 
 // AllocateRedisDB returns the database number owned by (svc, name), assigning

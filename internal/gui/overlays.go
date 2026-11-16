@@ -440,8 +440,8 @@ func (a *app) toastsWindow() {
 			c, g = cError, glyphFail
 		}
 		msg := t.Text
-		if len(msg) > 90 {
-			msg = msg[:87] + "…"
+		if r := []rune(msg); len(r) > 90 {
+			msg = string(r[:87]) + "…"
 		}
 		imgui.PushStyleColorVec4(imgui.ColChildBg, vec4(cRaised))
 		imgui.PushStyleColorVec4(imgui.ColBorder, vec4(c.alpha(0.7)))

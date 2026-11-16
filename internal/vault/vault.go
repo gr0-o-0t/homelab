@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"github.com/99designs/keyring"
+
+	"github.com/groot/homelab/internal/fsutil"
 )
 
 const (
@@ -188,27 +190,7 @@ func (v *Vault) save(m map[string]entry) error {
 	}
 	out := v.aead.Seal(nonce, nonce, plain, nil)
 
-	tmp, err := os.CreateTemp(filepath.Dir(v.path), ".vault-*")
-	if err != nil {
-		return err
-	}
-	defer func() { _ = os.Remove(tmp.Name()) }()
-	if err := tmp.Chmod(0o600); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if _, err := tmp.Write(out); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmp.Name(), v.path)
+	return fsutil.WriteFile(v.path, out)
 }
 
 // Get returns the item for key or keyring.ErrKeyNotFound.

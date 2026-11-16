@@ -159,3 +159,37 @@ func TestLifecycle_NoServiceMakesNoSwarmCall(t *testing.T) {
 	runCLI(t, root, "stop")
 	assert.Empty(t, f.CallLog())
 }
+
+// A service whose folder was removed by hand still has its Swarm services
+// and desired entry: delete cleans them up instead of answering "not found".
+func TestDelete_ServiceDirAlreadyGone(t *testing.T) {
+	f := fakeSwarm(t)
+	root := webFixture(t)
+	runCLI(t, root, "up", "alpha")
+	require.Len(t, alphaServices(t, f), 1)
+	require.NoError(t, os.RemoveAll(filepath.Join(root, "services", "alpha")))
+
+	rootFlags.configDir = root
+	t.Cleanup(func() { rootFlags.configDir = "" })
+	deleteFlags.yes = true
+	t.Cleanup(func() { deleteFlags.yes = false })
+	require.NoError(t, runDelete(deleteCmd, []string{"alpha"}))
+	assert.Empty(t, alphaServices(t, f))
+	d, _, err := desired.LoadDesired(root)
+	require.NoError(t, err)
+	_, ok := d.Services["alpha"]
+	assert.False(t, ok)
+}
+
+// A name nothing knows (a typo) is still refused.
+func TestDelete_UnknownServiceRefused(t *testing.T) {
+	fakeSwarm(t)
+	root := webFixture(t)
+	rootFlags.configDir = root
+	t.Cleanup(func() { rootFlags.configDir = "" })
+	deleteFlags.yes = true
+	t.Cleanup(func() { deleteFlags.yes = false })
+	err := runDelete(deleteCmd, []string{"alhpa"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+}

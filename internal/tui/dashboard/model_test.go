@@ -509,6 +509,20 @@ func Test_Stream_EmbeddedLogViewer(t *testing.T) {
 	assert.Equal(t, modeNormal, out.(Model).mode)
 }
 
+// A failed status read that lands while the log viewer is open must still
+// clear the in-flight flag, or every later refresh is skipped for good.
+func Test_Logs_RefreshErrorClearsRefreshing(t *testing.T) {
+	m := selectNamed(newTestModel(stubServices()), "caddy")
+	m.opt.CLI = []string{"true"}
+	m, _ = pressCmd(m, "l")
+	require.Equal(t, modeLogs, m.mode)
+	m.refreshing = true
+	out, _ := m.Update(refreshErrMsg{err: errors.New("leader unreachable")})
+	m = out.(Model)
+	assert.False(t, m.refreshing)
+	assert.Equal(t, "leader unreachable", m.staleErr)
+}
+
 // ── setup form ────────────────────────────────────────────────────────────────
 
 func testSetupInfo() setupInfo {

@@ -21,6 +21,7 @@ import (
 
 	"github.com/groot/homelab/internal/configgen"
 	"github.com/groot/homelab/internal/exposure"
+	"github.com/groot/homelab/internal/fsutil"
 	"github.com/groot/homelab/internal/network"
 )
 
@@ -204,10 +205,7 @@ func writeOrRemove(path, content string) error {
 		}
 		return nil
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
-		return err
-	}
-	return os.WriteFile(path, []byte(content), 0o600)
+	return fsutil.WriteFile(path, []byte(content))
 }
 
 // RemoveSites removes a service's sites file and layer4 file. An absent file

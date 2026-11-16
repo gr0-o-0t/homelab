@@ -14,6 +14,7 @@ import (
 
 	"github.com/groot/homelab/internal/service"
 	"github.com/groot/homelab/internal/tui/styles"
+	"unicode/utf8"
 )
 
 // ── formatUptime ──────────────────────────────────────────────────────────────
@@ -129,4 +130,13 @@ func writeSvc(t *testing.T, root, name string, files map[string]string) {
 	for f, content := range files {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, f), []byte(content), 0o600))
 	}
+}
+
+// Truncation counts runes, not bytes: a cut must not split a character.
+func TestTruncate_MultiByte(t *testing.T) {
+	got := truncate("héllo wörld", 6)
+	assert.Equal(t, "héllo…", got)
+	assert.True(t, utf8.ValidString(truncate("ääääää", 3)))
+	assert.Equal(t, "…", truncate("hello", 1))
+	assert.Equal(t, "", truncate("hello", 0), "a zero width must not panic")
 }

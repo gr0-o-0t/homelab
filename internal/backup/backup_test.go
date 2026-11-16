@@ -30,7 +30,9 @@ type fakeExec struct {
 	// dumpBody is written to the stdout writer of RunTo, standing in for the
 	// bytes a real pg_dump would emit.
 	dumpBody string
-	err      error
+	// dumpErr fails RunTo after dumpBody is written: a dump cut short.
+	dumpErr error
+	err     error
 	// missing volumes fail `docker volume inspect`.
 	missing map[string]bool
 	// ps is what `docker ps` prints for helpers on a volume.
@@ -49,8 +51,10 @@ func (f *fakeExec) RunTo(w io.Writer, name string, args ...string) error {
 	if f.err != nil {
 		return f.err
 	}
-	_, err := io.WriteString(w, f.dumpBody)
-	return err
+	if _, err := io.WriteString(w, f.dumpBody); err != nil {
+		return err
+	}
+	return f.dumpErr
 }
 
 func (f *fakeExec) RunFrom(r io.Reader, name string, args ...string) error {
@@ -142,7 +146,6 @@ func TestPlanFor(t *testing.T) {
 	assert.Equal(t, []string{"app_cache", "app_data"}, p.Volumes, "named volumes, sorted")
 	require.Len(t, p.Databases, 1, "postgres is dumpable")
 	assert.Equal(t, "appdb", p.Databases[0].Database)
-	assert.Equal(t, "homelab-postgres", p.Databases[0].Container)
 
 	// Redis is a cache/queue here, never a system of record. Restoring a stale
 	// queue is worse than starting empty, so it is counted, not dumped.
@@ -203,6 +206,21 @@ func TestBackup_WritesEverything(t *testing.T) {
 	assert.Len(t, rec.Databases, 1)
 	assert.Equal(t, 1, rec.SkippedRedis)
 	assert.False(t, rec.Live)
+}
+
+// A dump cut short is removed: a truncated file must not sit in the backup
+// looking like a database.
+func TestBackup_FailedDumpLeavesNoFile(t *testing.T) {
+	fx := &fakeExec{dumpBody: "PGDMP-half", dumpErr: errors.New("pg_dump: connection lost")}
+	e, backups := newSwarmEngine(t, fx)
+	dest := filepath.Join(backups, "b")
+	p, err := PlanFor(e.ConfigDir, "app")
+	require.NoError(t, err)
+
+	_, err = e.Backup(p, dest, false)
+	require.ErrorContains(t, err, "connection lost")
+	_, statErr := os.Stat(filepath.Join(dest, "databases", "app-appdb.dump"))
+	assert.True(t, os.IsNotExist(statErr), "partial dump left behind: %v", statErr)
 }
 
 // Docker rejects relative bind-mount sources, and the failure surfaces as an

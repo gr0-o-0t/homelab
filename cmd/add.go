@@ -63,6 +63,10 @@ func runServiceAdd(_ *cobra.Command, args []string) error {
 			"  Edit the files directly or remove the directory to reinstall", name, dir)
 	}
 
+	if err := config.CheckNameClash(dir, name); err != nil {
+		return err
+	}
+
 	// Verify the catalog entry exists.
 	srcDir := "services/" + name
 	if _, err := assets.CatalogFS.Open(srcDir); err != nil {
@@ -152,9 +156,6 @@ func printCatalog() error {
 	fmt.Printf("\n%s\n\n",
 		styles.Muted.Render("Install with: homelab add <name>"))
 	return nil
-}
-
-func init() {
 }
 
 // catalogNames returns the list of service names in the embedded catalog.

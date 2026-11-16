@@ -5,7 +5,6 @@ package gui
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"slices"
 	"sort"
 	"strconv"
@@ -238,9 +237,6 @@ func (a *app) sidebar(w, h float32) {
 		if c := counts[id]; c != "" && c != "0" {
 			cw := imgui.CalcTextSize(c).X
 			dl.AddTextVec2(v2(p.X+width-cw-a.px(12), ty), u32(cDim), c)
-		}
-		if i == 0 {
-			continue
 		}
 	}
 
@@ -892,7 +888,7 @@ func (a *app) addressTable(addrs []layerAddrs) {
 		if len(la.Addrs) == 0 {
 			textC(cDim, "no address yet")
 		}
-		for i, ad := range la.Addrs {
+		for _, ad := range la.Addrs {
 			if ad.URL != "" {
 				a.link(ad.URL, ad.URL)
 			}
@@ -902,7 +898,6 @@ func (a *app) addressTable(addrs []layerAddrs) {
 				}
 				textC(cMuted, "("+ad.Note+")")
 			}
-			_ = i
 		}
 	}
 	imgui.EndTable()
@@ -1466,20 +1461,16 @@ func (a *app) backupsView() {
 				tip(restore.Help)
 				imgui.SameLine()
 			}
-			if button(glyphFolder+"##o"+b.Dir, toneGhost, false) {
-				a.openURL(b.Dir)
+			// Backups live on the leader: only a folder this PC has can open.
+			if _, err := os.Stat(b.Dir); err == nil {
+				if button(glyphFolder+"##o"+b.Dir, toneGhost, false) {
+					a.openURL(b.Dir)
+				}
+				tip("Open " + b.Dir)
 			}
-			tip("Open " + b.Dir)
 		}
 		imgui.EndTable()
 	}
-}
-
-func shortPath(p string) string {
-	if home, err := filepath.Abs(os.Getenv("HOME")); err == nil && home != "" && strings.HasPrefix(p, home) {
-		return "~" + strings.TrimPrefix(p, home)
-	}
-	return p
 }
 
 // ── Health ────────────────────────────────────────────────────────────────────

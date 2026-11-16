@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -139,7 +140,7 @@ func runStatus(_ *cobra.Command, args []string) error {
 			styles.Muted.Render("→"),
 			styles.Primary.Render("homelab add <name>"),
 			styles.Primary.Render("homelab new"))
-		return nil
+		return runStatusChecks(cfgFile)
 	}
 
 	runningCount := 0
@@ -238,41 +239,47 @@ func runStatus(_ *cobra.Command, args []string) error {
 		}
 	}
 
-	// ── Diagnostics (--check) ─────────────────────────────────────────────────────
-	if statusCheckFlag {
-		dc, _ := docker.New()
-		if dc != nil {
-			defer func() { _ = dc.Close() }()
+	return runStatusChecks(cfgFile)
+}
+
+// runStatusChecks runs the --check diagnostics, when asked, and fails when
+// any check does.
+func runStatusChecks(cfgFile string) error {
+	if !statusCheckFlag {
+		return nil
+	}
+	dc, _ := docker.New()
+	if dc != nil {
+		defer func() { _ = dc.Close() }()
+	}
+	var pass = true
+	fmt.Println()
+	groups := []diagnostics.CheckGroup{
+		diagnostics.RunConfigChecks(cfgFile),
+		diagnostics.RunInfraChecks(dc),
+	}
+	for _, g := range groups {
+		if len(g.Results) == 0 {
+			continue
 		}
-		var pass = true
-		fmt.Println()
-		groups := []diagnostics.CheckGroup{
-			diagnostics.RunConfigChecks(cfgFile),
-			diagnostics.RunInfraChecks(dc),
-		}
-		for _, g := range groups {
-			if len(g.Results) == 0 {
-				continue
+		fmt.Printf("\n  %s\n", styles.Bold.Render(g.Title))
+		for _, r := range g.Results {
+			switch r.Status {
+			case diagnostics.StatusPass:
+				fmt.Printf("  %s  %s\n", styles.Success.Render("✓"), r.Message)
+			case diagnostics.StatusFail:
+				fmt.Printf("  %s  %s\n", styles.Err.Render("✗"), r.Message)
+				pass = false
+			case diagnostics.StatusWarn:
+				fmt.Printf("  %s  %s\n", styles.Warning.Render("!"), r.Message)
 			}
-			fmt.Printf("\n  %s\n", styles.Bold.Render(g.Title))
-			for _, r := range g.Results {
-				switch r.Status {
-				case diagnostics.StatusPass:
-					fmt.Printf("  %s  %s\n", styles.Success.Render("✓"), r.Message)
-				case diagnostics.StatusFail:
-					fmt.Printf("  %s  %s\n", styles.Err.Render("✗"), r.Message)
-					pass = false
-				case diagnostics.StatusWarn:
-					fmt.Printf("  %s  %s\n", styles.Warning.Render("!"), r.Message)
-				}
-			}
-		}
-		fmt.Println()
-		if !pass {
-			fmt.Printf("  %s\n", styles.Err.Render("Some checks failed."))
 		}
 	}
-
+	fmt.Println()
+	if !pass {
+		fmt.Printf("  %s\n", styles.Err.Render("Some checks failed."))
+		return errors.New("some checks failed")
+	}
 	return nil
 }
 

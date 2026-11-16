@@ -553,27 +553,25 @@ func (in *Init) Do(ctx context.Context) (err error) {
 	if err := (&swarm.Deployer{API: in.API}).EnsureNetwork(ctx); err != nil {
 		return err
 	}
-	// Whether StartAgent creates the state volume or reuses one: the import
+	// Whether StartAgent creates the state volume or reuses one: the
 	// rollback only removes a volume this run created.
-	volumeExisted := false
-	if imp != nil {
-		if volumeExisted, err = stateVolumeExists(ctx, in.API); err != nil {
-			return err
-		}
-	}
-	if err := StartAgent(ctx, in.API, in.Image, true); err != nil {
+	volumeExisted, err := stateVolumeExists(ctx, in.API)
+	if err != nil {
 		return err
 	}
-	// Until the agent has restarted on the imported state, a failure takes
-	// the agent and its state volume away again: otherwise every retry is
-	// refused because the volume already has services.
+	// A failure from here on takes the agent (and a state volume this run
+	// created) away again: checkEngine refuses every retry while a
+	// homelab-agent container exists, and an imported volume would be
+	// refused for already having services. Once the agent has restarted on
+	// imported state it is kept (restarted is only set on that path).
 	restarted := false
-	if imp != nil {
-		defer func() {
-			if err != nil && !restarted {
-				removeAgentAndState(context.WithoutCancel(ctx), in.API, in.Out, !volumeExisted)
-			}
-		}()
+	defer func() {
+		if err != nil && !restarted {
+			removeAgentAndState(context.WithoutCancel(ctx), in.API, in.Out, !volumeExisted)
+		}
+	}()
+	if err := StartAgent(ctx, in.API, in.Image, true); err != nil {
+		return err
 	}
 	secret, err := NewClusterSecret(in.Rand)
 	if err != nil {
@@ -727,6 +725,17 @@ func (j *Join) Do(ctx context.Context) (err error) {
 	if _, err := j.Leader(ctx, endpoint, j.Secret, []string{"cluster", "label", info.Swarm.NodeID, string(swarm.RoleWorker)}); err != nil {
 		return fmt.Errorf("asking the leader to label this node a worker: %w", err)
 	}
+	volumeExisted, err := stateVolumeExists(ctx, j.API)
+	if err != nil {
+		return err
+	}
+	// As in Init: a failure from here on removes the agent so a retry is not
+	// refused by checkEngine.
+	defer func() {
+		if err != nil {
+			removeAgentAndState(context.WithoutCancel(ctx), j.API, j.Out, !volumeExisted)
+		}
+	}()
 	if err := StartAgent(ctx, j.API, j.Image, false); err != nil {
 		return err
 	}

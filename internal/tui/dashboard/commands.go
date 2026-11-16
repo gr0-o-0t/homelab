@@ -174,8 +174,10 @@ func (m Model) setupLoadCmd(svc string) tea.Cmd {
 		if len(m.opt.CLI) == 0 {
 			return setupLoadedMsg{svc: svc, err: errNoCLI}
 		}
+		ctx, cancel := context.WithTimeout(context.Background(), clistate.DefaultTimeout)
+		defer cancel()
 		var stderr bytes.Buffer
-		c := exec.Command(argv[0], argv[1:]...) // #nosec G204
+		c := exec.CommandContext(ctx, argv[0], argv[1:]...) // #nosec G204 -- argv is the CLI plus fixed args
 		c.Stderr = &stderr
 		out, err := c.Output()
 		if err != nil {

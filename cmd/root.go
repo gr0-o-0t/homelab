@@ -7,7 +7,6 @@ import (
 	"sync"
 
 	"github.com/groot/homelab/internal/config"
-	"github.com/groot/homelab/internal/secrets"
 	"github.com/spf13/cobra"
 )
 
@@ -138,7 +137,7 @@ func extEnabled(cfgDir, name string) bool {
 // Non-fatal errors (keyring unavailable, missing config) are logged to stderr
 // so a partially-configured setup still starts containers.
 func buildEnv(cfgDir, svcName string) map[string]string {
-	sm, err := secrets.Open()
+	sm, err := openSecrets()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: keyring unavailable (%v)\n", err)
 	}
@@ -150,11 +149,8 @@ func buildEnv(cfgDir, svcName string) map[string]string {
 		env = make(map[string]string)
 	}
 	// Ensure critical vars always have a value, even when config loading
-	// fails or the YAML is missing entries. Docker Compose variable
-	// substitution (:-default) is a secondary fallback, but not all
-	// versions handle empty-string values identically â€” being explicit
-	// here prevents the fragile case where {$HOME_SUBDOMAIN} resolves to
-	// "" and Caddy produces an invalid double-dot domain.
+	// fails or the YAML is missing entries: an empty {$HOME_SUBDOMAIN}
+	// would make Caddy produce an invalid double-dot domain.
 	if env["HOME_SUBDOMAIN"] == "" {
 		env["HOME_SUBDOMAIN"] = "home"
 	}

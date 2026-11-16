@@ -126,6 +126,7 @@ func addressesOf(svc *service.Service, layers []network.NetworkLayer) []layerAdd
 	return out
 }
 
+// layerAddrs are a service's addresses on one layer.
 type layerAddrs struct {
 	Layer, Label string
 	Addrs        []network.ServiceAddress

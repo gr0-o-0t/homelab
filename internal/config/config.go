@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/groot/homelab/internal/fsutil"
 	"github.com/groot/homelab/internal/secrets"
 	"gopkg.in/yaml.v3"
 )
@@ -586,6 +587,26 @@ func DBPasswordKey(svcName string) string {
 	return "DB_PASSWORD_" + strings.ToUpper(strings.ReplaceAll(svcName, "-", "_"))
 }
 
+// CheckNameClash refuses name when an installed service other than name maps
+// to the same DBPasswordKey (a-b and a_b both give DB_PASSWORD_A_B): the
+// password lives in the root namespace, so the two would share it.
+func CheckNameClash(root, name string) error {
+	entries, err := os.ReadDir(filepath.Join(root, "services"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	key := DBPasswordKey(name)
+	for _, e := range entries {
+		if e.IsDir() && e.Name() != name && DBPasswordKey(e.Name()) == key {
+			return fmt.Errorf("service %q clashes with the installed %q: both would use the database password %s; pick another name", name, e.Name(), key)
+		}
+	}
+	return nil
+}
+
 // SharedDBName returns the service name for a shared DB type.
 func SharedDBName(t DBType) string {
 	switch t {
@@ -706,7 +727,7 @@ const configFileName = "config.yaml"
 // Load reads a config.yaml at path. Returns (nil, nil) if the file does not
 // exist — callers treat absence as an empty config, not an error.
 func Load(path string) (*Config, error) {
-	data, err := os.ReadFile(path) // nosec G304 -- path is CLI config path, never user-controlled
+	data, err := os.ReadFile(path) // #nosec G304 -- path is CLI config path, never user-controlled
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -733,14 +754,11 @@ func Load(path string) (*Config, error) {
 
 // Save writes cfg to path, creating parent directories as needed.
 func Save(path string, cfg *Config) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
-		return fmt.Errorf("creating config dir: %w", err)
-	}
 	data, err := yaml.Marshal(cfg)
 	if err != nil {
 		return fmt.Errorf("encoding config: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+	if err := fsutil.WriteFile(path, data); err != nil {
 		return fmt.Errorf("writing %s: %w", path, err)
 	}
 	return nil

@@ -11,6 +11,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/groot/homelab/internal/fsutil"
 	"github.com/groot/homelab/internal/secrets"
 )
 
@@ -90,10 +91,7 @@ func SaveCluster(p Paths, sm *secrets.Manager, c Cluster) error {
 	if err := os.MkdirAll(filepath.Dir(p.ClusterFile), 0o700); err != nil {
 		return err
 	}
-	if err := os.WriteFile(p.ClusterFile, b, 0o600); err != nil {
-		return err
-	}
-	if err := os.Chmod(p.ClusterFile, 0o600); err != nil {
+	if err := fsutil.WriteFile(p.ClusterFile, b); err != nil {
 		return err
 	}
 	return sm.Set("", clusterSecretVar, c.Secret)

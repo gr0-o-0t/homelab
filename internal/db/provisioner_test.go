@@ -215,6 +215,21 @@ func TestEnsurePassword(t *testing.T) {
 	})
 }
 
+// An extension name is an SQL identifier: a double quote inside it doubles,
+// as escID does — Go's %q would emit a backslash, which postgres keeps
+// literally and then reads the next quote as the end of the name.
+func TestProvision_ExtensionNameIsSQLQuoted(t *testing.T) {
+	fc := &fakeCommander{}
+	p := &Provisioner{ContainerFor: fixedNames, RC: fc, SM: &fakeSM{store: map[string]string{}}}
+	decl := config.ServiceDBDecl{Database: "testdb", User: "testuser", Extensions: []string{`we"ird`}}
+	if err := p.Provision(context.Background(), config.DBPostgres, "mysvc", decl); err != nil {
+		t.Fatal(err)
+	}
+	if sql := allSQL(fc); !strings.Contains(sql, `CREATE EXTENSION IF NOT EXISTS "we""ird"`) {
+		t.Errorf("extension not quoted as an identifier:\n%s", sql)
+	}
+}
+
 func TestProvision(t *testing.T) {
 	ctx := context.Background()
 	decl := config.ServiceDBDecl{
@@ -563,21 +578,36 @@ func TestDeprovision(t *testing.T) {
 		User:     "testuser",
 	}
 
-	t.Run("postgres drops user", func(t *testing.T) {
+	// The owner role owns its database, which postgres will not drop out from
+	// under it (DROP ROLE fails with "some objects depend on it"), and the data
+	// is kept. Deprovision therefore revokes the login instead: the role stays
+	// the owner, so a later Provision's ALTER USER ... LOGIN restores access
+	// with the ownership of every table intact.
+	t.Run("postgres revokes the owner role's login, keeping it", func(t *testing.T) {
+		fc := &fakeCommander{outputData: map[string][]byte{
+			`docker exec homelab-postgres psql -U postgres -d postgres -t -A -c SELECT 1 FROM pg_roles WHERE rolname='testuser'`: []byte("1\n"),
+		}}
+		p := &Provisioner{ContainerFor: fixedNames, RC: fc}
+		if err := p.Deprovision(ctx, config.DBPostgres, "mysvc", decl); err != nil {
+			t.Fatal(err)
+		}
+		sql := allSQL(fc)
+		if strings.Contains(sql, "DROP") {
+			t.Errorf("the owner role must not be dropped:\n%s", sql)
+		}
+		if !strings.Contains(sql, `ALTER ROLE "testuser" WITH NOLOGIN PASSWORD NULL;`) {
+			t.Errorf("login not revoked:\n%s", sql)
+		}
+	})
+
+	t.Run("postgres with no such role does nothing", func(t *testing.T) {
 		fc := &fakeCommander{}
 		p := &Provisioner{ContainerFor: fixedNames, RC: fc}
 		if err := p.Deprovision(ctx, config.DBPostgres, "mysvc", decl); err != nil {
 			t.Fatal(err)
 		}
-		found := false
-		for _, call := range fc.runCalls {
-			line := call.Name + " " + call.line()
-			if strings.Contains(line, "DROP USER") && strings.Contains(line, "testuser") {
-				found = true
-			}
-		}
-		if !found {
-			t.Error("missing DROP USER for postgres")
+		if len(fc.runCalls) != 0 {
+			t.Errorf("nothing may run:\n%s", allSQL(fc))
 		}
 	})
 

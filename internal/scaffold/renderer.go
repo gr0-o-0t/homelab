@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"text/template"
+
+	"github.com/groot/homelab/internal/config"
 )
 
 //go:embed templates/*
@@ -61,6 +63,9 @@ func Write(repoRoot string, files []File) error {
 	svcDir := filepath.Dir(filepath.Join(repoRoot, files[0].RelPath))
 	if _, err := os.Stat(svcDir); err == nil {
 		return fmt.Errorf("directory already exists: %s", svcDir)
+	}
+	if err := config.CheckNameClash(repoRoot, filepath.Base(svcDir)); err != nil {
+		return err
 	}
 	for _, f := range files {
 		path := filepath.Join(repoRoot, f.RelPath)

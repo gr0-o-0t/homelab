@@ -1,10 +1,14 @@
 package cmd
 
 import (
+	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/groot/homelab/internal/edge"
 )
 
 // TestDisableFlags_ShorthandAMapsToAll guards -a as the shorthand for --all
@@ -40,4 +44,14 @@ func TestDisableAll_DoesNotStop(t *testing.T) {
 
 func TestDisable_RejectsPathNames(t *testing.T) {
 	assert.Error(t, runDisable(disableCmd, []string{"../core"}))
+}
+
+// A reload the live agent refused leaves the service exposed: disable must
+// fail. With the agent down the change applies at its start: a warning.
+func TestDisableReloadErr(t *testing.T) {
+	assert.NoError(t, disableReloadErr(nil))
+	assert.NoError(t, disableReloadErr(fmt.Errorf("%w (sock): refused", edge.ErrAgentDown)))
+	err := disableReloadErr(errors.New("load: 500"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "load: 500")
 }

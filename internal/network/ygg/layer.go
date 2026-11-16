@@ -96,6 +96,11 @@ func (l *Layer) Teardown(svcName string) error {
 	return l.reload()
 }
 
+// dockerBridgeRanges are the private IPv4 ranges docker allocates bridge
+// networks from. Tailscale's 100.64.0.0/10 and fd7a:115c:a1e0::/48 are not
+// in them.
+var dockerBridgeRanges = []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"}
+
 // Sites returns one `:<mesh port>` site per port. The mesh has no naming, so
 // clients reach a service at [<node address>]:<port> and Caddy routes by
 // listening port, not Host header. A port-only site address serves plain HTTP:
@@ -103,11 +108,6 @@ func (l *Layer) Teardown(svcName string) error {
 // what we want, since yggdrasil already encrypts the transport.
 //
 // The mesh ports are the ones Configure recorded in exposure.yaml.
-// dockerBridgeRanges are the private IPv4 ranges docker allocates bridge
-// networks from. Tailscale's 100.64.0.0/10 and fd7a:115c:a1e0::/48 are not
-// in them.
-var dockerBridgeRanges = []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"}
-
 func (l *Layer) Sites(svcName, _ string, ports []network.PortSelection) ([]network.Site, error) {
 	st, err := exposure.Load(l.repoRoot, svcName)
 	if err != nil {

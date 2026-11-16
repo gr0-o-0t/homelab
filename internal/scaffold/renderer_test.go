@@ -144,3 +144,16 @@ func findFile(t *testing.T, files []scaffold.File, relPath string) string {
 	t.Fatalf("file not found in render output: %s", relPath)
 	return ""
 }
+
+// A name whose DB password key an installed service already uses is refused.
+func TestWrite_RefusesNameClash(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "services", "my-app"), 0o750))
+	files, err := scaffold.Render(scaffold.ServiceData{Name: "my_app", Container: "c", Port: "80"})
+	require.NoError(t, err)
+	err = scaffold.Write(dir, files)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "my-app")
+	_, statErr := os.Stat(filepath.Join(dir, "services", "my_app"))
+	assert.True(t, os.IsNotExist(statErr), "nothing written")
+}

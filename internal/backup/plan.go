@@ -28,10 +28,9 @@ type Executor interface {
 
 // DatabaseTarget is one dumpable database on a shared instance.
 type DatabaseTarget struct {
-	Type      config.DBType
-	Database  string
-	User      string
-	Container string // shared container to exec into
+	Type     config.DBType
+	Database string
+	User     string
 }
 
 // DumpFile returns this database's filename inside a backup directory.
@@ -115,10 +114,9 @@ func PlanFor(configDir, svcName string) (Plan, error) {
 			switch d.Type {
 			case config.DBPostgres, config.DBMariaDB:
 				p.Databases = append(p.Databases, DatabaseTarget{
-					Type:      d.Type,
-					Database:  d.Database,
-					User:      d.User,
-					Container: config.SharedDBContainer(d.Type),
+					Type:     d.Type,
+					Database: d.Database,
+					User:     d.User,
 				})
 			case config.DBRedis:
 				p.SkippedRedis++

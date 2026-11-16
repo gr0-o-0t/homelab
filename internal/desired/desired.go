@@ -11,6 +11,8 @@ import (
 	"sort"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/groot/homelab/internal/fsutil"
 )
 
 // State is what a lifecycle command asks of a target.
@@ -116,18 +118,5 @@ var SharedServices = map[string]bool{"postgres": true, "mariadb": true, "redis":
 // WriteAtomic writes data to path through a temp file in the same directory
 // and a rename, so a reader never sees a partial file.
 func WriteAtomic(path string, data []byte) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*")
-	if err != nil {
-		return err
-	}
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		_ = os.Remove(tmp.Name())
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmp.Name())
-		return err
-	}
-	return os.Rename(tmp.Name(), path)
+	return fsutil.WriteFile(path, data)
 }

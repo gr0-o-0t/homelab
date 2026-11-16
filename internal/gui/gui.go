@@ -73,8 +73,6 @@ const (
 	toastFail
 )
 
-// layerAddrs are a service's addresses on one layer.
-
 type setupResult struct {
 	Form *setupForm
 	Err  string
@@ -217,7 +215,9 @@ func (a *app) resolveAddrs(name string) {
 func (a *app) loadSetup(svc string) {
 	go func() {
 		argv := append(slices.Clone(a.opt.CLI), loadSetupArgs(svc)...)
-		cmd := exec.Command(argv[0], argv[1:]...) // #nosec G204 -- argv is the CLI plus registry args
+		ctx, cancel := context.WithTimeout(context.Background(), clistate.DefaultTimeout)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, argv[0], argv[1:]...) // #nosec G204 -- argv is the CLI plus registry args
 		var stderr bytes.Buffer
 		cmd.Stderr = &stderr
 		out, err := cmd.Output()
@@ -329,11 +329,9 @@ func (a *app) start(label string, args []string, stdin []byte, stream bool, done
 
 // pump copies output lines into the job.
 func (a *app) pump(id int, r io.Reader) {
-	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 64*1024), 1024*1024)
 	last := time.Now()
-	for sc.Scan() {
-		line := cleanLine(sc.Text())
+	readLines(r, func(line string) {
+		line = cleanLine(line)
 		a.mu.Lock()
 		if i := a.jobIndex(id); i >= 0 {
 			jobs := slices.Clone(a.jobs)
@@ -345,8 +343,23 @@ func (a *app) pump(id int, r io.Reader) {
 			last = time.Now()
 			g.Update()
 		}
-	}
+	})
 	g.Update()
+}
+
+// readLines calls emit for each line of r. A line over 1 MiB ends the
+// scan; the rest of r is then read and dropped, with a note, so the writer
+// is never left blocked on a full pipe.
+func readLines(r io.Reader, emit func(string)) {
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 64*1024), 1024*1024)
+	for sc.Scan() {
+		emit(sc.Text())
+	}
+	if errors.Is(sc.Err(), bufio.ErrTooLong) {
+		emit("(output line too long; the rest of the output is not shown)")
+		_, _ = io.Copy(io.Discard, r)
+	}
 }
 
 func (a *app) jobIndex(id int) int {

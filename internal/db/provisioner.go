@@ -104,9 +104,10 @@ func (p *Provisioner) Provision(ctx context.Context, dbType config.DBType, svcNa
 	}
 }
 
-// Deprovision undoes Provision's access grant, keeping data: the SQL engines
-// drop the role, Garage deletes the access key (the bucket and its objects
-// stay), and redis frees the database number for reuse.
+// Deprovision undoes Provision's access grant, keeping data: a postgres owner
+// role loses its login (it still owns the database), a read-only role and a
+// MariaDB account are dropped, Garage deletes the access key (the bucket and
+// its objects stay), and redis frees the database number for reuse.
 func (p *Provisioner) Deprovision(ctx context.Context, dbType config.DBType, svcName string, decl config.ServiceDBDecl) error {
 	switch dbType {
 	case config.DBPostgres:
@@ -370,7 +371,7 @@ func (p *Provisioner) provisionPostgres(ctx context.Context, svcName string, dec
 	// (e.g. cube before earthdistance).
 	for _, ext := range decl.Extensions {
 		if err := p.RC.Run("docker", "exec", container, "psql", "-U", "postgres", "-d", decl.Database,
-			"-c", fmt.Sprintf("CREATE EXTENSION IF NOT EXISTS %q", ext)); err != nil {
+			"-c", fmt.Sprintf("CREATE EXTENSION IF NOT EXISTS %s", escID(ext))); err != nil {
 			return fmt.Errorf("creating extension %s: %w", ext, err)
 		}
 	}
@@ -574,13 +575,30 @@ func (p *Provisioner) deprovisionPostgresReadOnly(decl config.ServiceDBDecl) err
 	return nil
 }
 
-func (p *Provisioner) deprovisionPostgres(ctx context.Context, decl config.ServiceDBDecl) error {
+// deprovisionPostgres revokes a service's own role's login, keeping the role.
+// It owns the service's database (and everything in it), so postgres refuses
+// to drop it; reassigning that ownership away would leave a re-added service
+// unable to alter its own tables. Keeping the role as a NOLOGIN owner keeps
+// the data intact and usable: Provision's ALTER USER ... LOGIN PASSWORD
+// restores access. A role that is not there leaves nothing to do.
+func (p *Provisioner) deprovisionPostgres(_ context.Context, decl config.ServiceDBDecl) error {
 	container, err := p.Container(config.DBPostgres)
 	if err != nil {
 		return err
 	}
-	sql := fmt.Sprintf(`DROP USER IF EXISTS %s;`, escID(decl.User))
-	return p.execSQL(config.DBPostgres, container, "postgres", sql)
+	out, err := p.execPSQL(container, "postgres", "postgres",
+		"-c", fmt.Sprintf("SELECT 1 FROM pg_roles WHERE rolname=%s", escLit(decl.User)))
+	if err != nil {
+		return fmt.Errorf("checking for user %s: %w", decl.User, err)
+	}
+	if strings.TrimSpace(string(out)) == "" {
+		return nil
+	}
+	sql := fmt.Sprintf("ALTER ROLE %s WITH NOLOGIN PASSWORD NULL;", escID(decl.User))
+	if err := p.execSQL(config.DBPostgres, container, "postgres", sql); err != nil {
+		return fmt.Errorf("revoking login of %s: %w", decl.User, err)
+	}
+	return nil
 }
 
 // mariaAnyHost is MariaDB's "connect from anywhere" host pattern. Provision and

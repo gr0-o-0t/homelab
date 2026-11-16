@@ -82,9 +82,6 @@ func printServiceTable(svcs []service.Service, env map[string]string, wide bool)
 	fmt.Println()
 }
 
-// discoverServices tries the Docker SDK first for live container data, then
-// falls back to plain filesystem discovery if the daemon is unavailable.
-
 // formatUptime converts a duration into a human-readable uptime string.
 func formatUptime(d time.Duration) string {
 	if d < 0 {
@@ -105,10 +102,14 @@ func formatUptime(d time.Duration) string {
 
 // truncate shortens s to max chars, appending … if needed.
 func truncate(s string, max int) string {
-	if len(s) <= max {
+	r := []rune(s)
+	switch {
+	case len(r) <= max:
 		return s
+	case max < 1:
+		return ""
 	}
-	return s[:max-1] + "…"
+	return string(r[:max-1]) + "…"
 }
 
 // serviceJSON is the machine-readable shape of a service entry.
@@ -142,10 +143,6 @@ func printServiceJSON(svcs []service.Service) error {
 	enc.SetIndent("", "  ")
 	return enc.Encode(out)
 }
-
-// ── validation ────────────────────────────────────────────────────────────────
-
-// validateService checks that services/<name>/ and its docker-compose.yml exist.
 
 // buildServiceHint returns a styled list of known services for error messages.
 func buildServiceHint(svcs []service.Service) string {

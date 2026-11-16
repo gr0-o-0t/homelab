@@ -21,6 +21,8 @@ import (
 	"slices"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/groot/homelab/internal/fsutil"
 )
 
 // FileName is the state file's name inside a service directory.
@@ -78,10 +80,7 @@ func Save(root, svc string, s State) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
-		return err
-	}
-	return os.WriteFile(path, append([]byte(header), data...), 0o600)
+	return fsutil.WriteFile(path, append([]byte(header), data...))
 }
 
 // Update loads a service's state, applies fn and saves the result.

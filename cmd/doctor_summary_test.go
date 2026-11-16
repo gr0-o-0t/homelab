@@ -1,6 +1,10 @@
 package cmd
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestPassedSummary(t *testing.T) {
 	for _, tc := range []struct {
@@ -22,5 +26,32 @@ func TestAllServicesSummary(t *testing.T) {
 		if got := allServicesSummary(warns); got != want {
 			t.Errorf("allServicesSummary(%d) = %q, want %q", warns, got, want)
 		}
+	}
+}
+
+// `doctor --all` exits non-zero when a service fails its checks, so scripts
+// and front ends can tell.
+func TestDoctorAll_FailureIsAnError(t *testing.T) {
+	origAll, origDir := doctorAllFlag, rootFlags.configDir
+	t.Cleanup(func() { doctorAllFlag, rootFlags.configDir = origAll, origDir })
+	rootFlags.configDir = t.TempDir()
+	// A service folder without docker-compose.yml fails its config checks.
+	if err := os.MkdirAll(filepath.Join(rootFlags.configDir, "services", "broken"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	doctorAllFlag = true
+	if err := runDoctor(doctorCmd, nil); err == nil {
+		t.Fatal("doctor --all returned nil with a failing service")
+	}
+}
+
+// Plain `doctor` exits non-zero when a check fails: in an empty config dir
+// the agent's Caddy socket is missing.
+func TestDoctor_FailureIsAnError(t *testing.T) {
+	origDir := rootFlags.configDir
+	t.Cleanup(func() { rootFlags.configDir = origDir })
+	rootFlags.configDir = t.TempDir()
+	if err := runDoctor(doctorCmd, nil); err == nil {
+		t.Fatal("doctor returned nil with failing checks")
 	}
 }

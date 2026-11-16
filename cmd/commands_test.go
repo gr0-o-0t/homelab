@@ -159,10 +159,10 @@ func TestServiceDoctor_NoArgsNoAll(t *testing.T) {
 	tmp := t.TempDir()
 
 	rootCmd := cmd.RootCmd()
-	rootCmd.SetArgs([]string{"--config-dir", tmp, "doctor"})
+	rootCmd.SetArgs([]string{"--config-dir", tmp, "doctor", "--all=false"}) // flags persist across Execute calls
 
 	err := rootCmd.Execute()
-	assert.NoError(t, err) // root doctor runs health checks, succeeds
+	assert.Error(t, err) // root doctor runs the health checks; an empty dir fails them
 }
 
 func TestServiceDoctor_AllNoServices(t *testing.T) {
@@ -290,14 +290,12 @@ func TestServiceUpdate_GroupNotFound(t *testing.T) {
 
 // ── enable/disable ───────────────────────────────────────────────────────────
 
-func TestEnableCommand_NoErrorOnMissingInEmptyDir(t *testing.T) {
-	// Enable on a missing service prints a message but doesn't error
-	// (it falls through gracefully when services dir is empty).
+func TestEnableCommand_MissingServiceIsAnError(t *testing.T) {
+	// Nothing was enabled, so the exit status must say so.
 	tmp := t.TempDir()
 	rootCmd := cmd.RootCmd()
 	rootCmd.SetArgs([]string{"--config-dir", tmp, "enable", "nonexistent"})
-	err := rootCmd.Execute()
-	assert.NoError(t, err)
+	assert.Error(t, rootCmd.Execute())
 }
 
 func TestDisableCommand_MissingService(t *testing.T) {
@@ -325,9 +323,9 @@ func TestDoctorCommand_AllNoServices(t *testing.T) {
 func TestDoctorCommand_RunsHealthCheckOnEmptyDir(t *testing.T) {
 	tmp := t.TempDir()
 	rootCmd := cmd.RootCmd()
-	rootCmd.SetArgs([]string{"--config-dir", tmp, "doctor"})
+	rootCmd.SetArgs([]string{"--config-dir", tmp, "doctor", "--all=false"}) // flags persist across Execute calls
 	err := rootCmd.Execute()
-	assert.NoError(t, err) // runs health checks, reports failures but doesn't error
+	assert.Error(t, err) // runs every check, reports the failures, then exits non-zero
 }
 
 // ── completion ────────────────────────────────────────────────────────────────
@@ -347,4 +345,16 @@ func TestCompletionCommand_InvalidShell(t *testing.T) {
 	err := rootCmd.Execute()
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported")
+}
+
+// `status --check` exits non-zero when a check fails, like doctor.
+func TestStatusCommand_CheckFailureIsAnError(t *testing.T) {
+	tmp := t.TempDir()
+	rootCmd := cmd.RootCmd()
+	rootCmd.SetArgs([]string{"--config-dir", tmp, "status", "--check"})
+	t.Cleanup(func() {
+		rootCmd.SetArgs([]string{"--config-dir", tmp, "status", "--check=false"})
+		_ = rootCmd.Execute()
+	})
+	assert.Error(t, rootCmd.Execute()) // no config.yaml, no Docker
 }

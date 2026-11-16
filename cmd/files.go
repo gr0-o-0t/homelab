@@ -118,6 +118,9 @@ var filesInstallCmd = &cobra.Command{
 			return err
 		}
 		root := configDir()
+		if err := config.CheckNameClash(root, svc); err != nil {
+			return err
+		}
 		// The secrets manager is required: validation checks no secret value
 		// ends up in a spec.
 		if err := withDeployer(root, true, func(_ context.Context, d *swarm.Deployer) error {

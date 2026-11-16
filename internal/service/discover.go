@@ -20,10 +20,6 @@ import (
 type Service struct {
 	Name string
 	Dir  string // absolute path to services/<name>/
-	// HasCaddyConf is always false: static caddy.conf files are no longer
-	// shipped or read. Kept only because internal/tui tests still set it.
-	HasCaddyConf bool
-
 	// Layers lists the network layers the service is exposed on, in registry
 	// order — read from its exposure.yaml.
 	Layers []LayerName
