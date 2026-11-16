@@ -7,6 +7,10 @@ updates:
     commit-message: {prefix: "build(deps)"}
     groups:
       go-minor-patch: {patterns: ["*"], update-types: [minor, patch]}
+    # giu (the GUI) is built against one cimgui-go release and breaks on any
+    # other: cimgui-go moves only when a giu release does.
+    ignore:
+      - dependency-name: github.com/AllenDang/cimgui-go
   - package-ecosystem: github-actions
     directory: /
     schedule: {interval: weekly}

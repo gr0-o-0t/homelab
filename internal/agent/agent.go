@@ -581,7 +581,8 @@ func (a *Agent) serve(ctx context.Context, ln net.Listener, cfg remote.ServerCon
 	select {
 	case <-ctx.Done():
 		_ = ln.Close()
-		<-done
+		err := <-done
+		_ = err // serve fails because its listener was just closed
 		a.logf("agent: stopped serving")
 		return nil
 	case err := <-done:

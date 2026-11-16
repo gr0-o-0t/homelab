@@ -107,7 +107,8 @@ func startRebalancer(t *testing.T, f *swarmtest.Fake, clk *fakeClock) {
 	t.Cleanup(func() {
 		cancel()
 		select {
-		case <-done:
+		case err := <-done:
+			_ = err // only that Run returns is checked here
 		case <-time.After(5 * time.Second):
 			t.Error("Run did not return after cancel")
 		}

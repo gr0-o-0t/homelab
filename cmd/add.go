@@ -250,7 +250,7 @@ func packServiceDir(dir string) (string, []byte, error) {
 	if err != nil {
 		return "", nil, err
 	}
-	if i, err := os.Stat(root); err != nil {
+	if i, err := os.Stat(root); err != nil { // #nosec G703 -- the operator's own folder, named on the command line
 		return "", nil, err
 	} else if !i.IsDir() {
 		return "", nil, fmt.Errorf("%s is not a directory", dir)
@@ -266,7 +266,7 @@ func packServiceDir(dir string) (string, []byte, error) {
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
 	var total int64
-	err = filepath.WalkDir(root, func(p string, e fs.DirEntry, err error) error {
+	err = filepath.WalkDir(root, func(p string, e fs.DirEntry, err error) error { // #nosec G703 -- as above; reads go through rt
 		if err != nil || p == root {
 			return err
 		}
@@ -313,7 +313,7 @@ func packServiceDir(dir string) (string, []byte, error) {
 		return "", nil, fmt.Errorf("not sending %s: %w", dir, err)
 	}
 	for _, f := range slices.Sorted(maps.Keys(swarm.SpecFiles)) {
-		if i, err := os.Lstat(filepath.Join(root, f)); err != nil || !i.Mode().IsRegular() {
+		if i, err := os.Lstat(filepath.Join(root, f)); err != nil || !i.Mode().IsRegular() { // #nosec G703 -- as above
 			return "", nil, fmt.Errorf("not sending %s: %s is missing", dir, f)
 		}
 	}
