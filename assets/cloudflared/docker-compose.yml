@@ -3,4 +3,4 @@
 # lives here so Dependabot's docker-compose ecosystem can bump the tag.
 services:
   cloudflared:
-    image: cloudflare/cloudflared:2026.10.7
+    image: cloudflare/cloudflared:2026.11.0
