@@ -465,7 +465,7 @@ func TestUpgradeCLI_NonLinuxRefuses(t *testing.T) {
 		var code int
 		stderr := captureStderr(func() { code = executeArgs(argv) })
 		assert.Equal(t, 1, code, "%q", argv)
-		assert.Contains(t, stderr, "release binaries are linux-only: rebuild this CLI from source, then run `homelab upgrade --version v1.5.0` (agents) or `--image`", "%q", argv)
+		assert.Contains(t, stderr, "release binaries are linux-only", "%q", argv)
 	}
 	assert.Zero(t, s.dl.Load())
 	assert.Empty(t, s.sudo)

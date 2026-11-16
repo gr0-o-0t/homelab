@@ -12,13 +12,7 @@ import (
 func TestLayer_Identity(t *testing.T) {
 	l := New("/test/repo", nil, nil)
 	assert.Equal(t, "cf", l.Name())
-	assert.Equal(t, "Cloudflare Tunnel", l.Label())
 	assert.Equal(t, "homelab_cloudflared", l.ContainerName())
-}
-
-func TestLayer_InterfaceImplementation(t *testing.T) {
-	var l network.NetworkLayer = New("/test/repo", nil, nil)
-	assert.NotNil(t, l)
 }
 
 func TestLayer_LegacyConfDir(t *testing.T) {

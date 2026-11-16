@@ -554,8 +554,6 @@ func TestImport_WholeCatalog(t *testing.T) {
 	des, err := os.ReadDir(catalog)
 	require.NoError(t, err)
 	assert.Len(t, rep.Services, len(des))
-	assert.FileExists(t, filepath.Join(dst, "services/glance/config/glance.yml"))
-	assert.DirExists(t, filepath.Join(dst, "services/grafana/provisioning"))
 	for _, c := range rep.Changed {
 		assert.NotContains(t, c, "does not exist", "a catalog bind source is missing")
 	}

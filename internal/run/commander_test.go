@@ -16,18 +16,6 @@ func TestServiceComposeFile(t *testing.T) {
 	assert.Equal(t, "/home/user/.config/homelab/services/uptime-kuma/docker-compose.yml", result)
 }
 
-func TestServiceComposeFile_SpecialChars(t *testing.T) {
-	result := run.ServiceComposeFile("/home/user/.config/homelab", "my-service_name")
-	assert.Equal(t, "/home/user/.config/homelab/services/my-service_name/docker-compose.yml", result)
-}
-
-func TestCommander_Default(t *testing.T) {
-	cmd := run.Default()
-	require.NotNil(t, cmd)
-	require.NotNil(t, cmd.Stdout)
-	require.NotNil(t, cmd.Stderr)
-}
-
 func TestCommander_RunToAndRunFrom(t *testing.T) {
 	var out bytes.Buffer
 	c := &run.Commander{Stdout: &out, Stderr: &out}

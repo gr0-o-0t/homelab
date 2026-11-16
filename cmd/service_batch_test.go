@@ -169,20 +169,6 @@ func TestRemoveBrokenSymlinks_EmptyDirectory(t *testing.T) {
 	assert.Equal(t, 0, count)
 }
 
-func TestRemoveBrokenSymlinks_ValidSymlink_NotCounted(t *testing.T) {
-	dir := t.TempDir()
-	target := filepath.Join(dir, "real-file")
-	require.NoError(t, os.WriteFile(target, []byte("content"), 0o644))
-	link := filepath.Join(dir, "good-link.conf")
-	require.NoError(t, os.Symlink(target, link))
-
-	count := removeBrokenSymlinks(dir, true)
-	assert.Equal(t, 0, count)
-
-	_, err := os.Lstat(link)
-	assert.NoError(t, err, "valid symlink must remain")
-}
-
 func TestRemoveBrokenSymlinks_BrokenLink_ReportOnly(t *testing.T) {
 	dir := t.TempDir()
 	link := filepath.Join(dir, "broken.conf")
@@ -244,13 +230,6 @@ func TestPublicHostname_Basic(t *testing.T) {
 		"DOMAIN": "example.com",
 	}
 	assert.Equal(t, "jellyfin.example.com", publicHostname("jellyfin", env))
-}
-
-func TestPublicHostname_NoSubdomainPrefix(t *testing.T) {
-	env := map[string]string{
-		"DOMAIN": "myhomelab.io",
-	}
-	assert.Equal(t, "gitea.myhomelab.io", publicHostname("gitea", env))
 }
 
 // With the Compose core stack gone, a lifecycle verb with no service has

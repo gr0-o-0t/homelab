@@ -39,9 +39,7 @@ func TestRegistry_RegisterAndGet(t *testing.T) {
 
 	got, ok := r.Get("test")
 	require.True(t, ok, "Get should find registered layer")
-	assert.Equal(t, "test", got.Name())
-	assert.Equal(t, "Test Layer", got.Label())
-	assert.Equal(t, "test", got.ContainerName())
+	assert.Same(t, layer, got)
 }
 
 func TestRegistry_RegisterDuplicatePanics(t *testing.T) {

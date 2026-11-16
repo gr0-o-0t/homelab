@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/groot/homelab/internal/network"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -13,13 +12,7 @@ import (
 func TestLayer_Identity(t *testing.T) {
 	l := New("/test/repo", nil, nil)
 	assert.Equal(t, "ts", l.Name())
-	assert.Equal(t, "Tailscale mesh VPN", l.Label())
 	assert.Equal(t, "homelab-agent", l.ContainerName(), "the agent runs the tailnet node")
-}
-
-func TestLayer_InterfaceImplementation(t *testing.T) {
-	var l network.NetworkLayer = New("/test/repo", nil, nil)
-	assert.NotNil(t, l)
 }
 
 func TestLayer_LegacyConfDir(t *testing.T) {

@@ -30,12 +30,6 @@ const (
 	// is CloudflaredLabel.
 	CloudflaredService = "homelab_cloudflared"
 	CloudflaredLabel   = "cloudflared"
-
-	// CloudflaredOrigin is where the tunnel's ingress (configured in the
-	// Cloudflare dashboard) must point: the agent's plain-HTTP listener, which
-	// answers on the overlay under the alias homelab-edge. Caddy's cf sites
-	// listen on :80 inside the agent (R25).
-	CloudflaredOrigin = "http://homelab-edge:80"
 )
 
 // EnsureCloudflared runs cloudflared as a core-pinned Swarm service on

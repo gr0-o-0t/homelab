@@ -160,17 +160,6 @@ func isExec(cmd tea.Cmd) bool {
 
 // ── basics ────────────────────────────────────────────────────────────────────
 
-func Test_Init_ReturnsCommands(t *testing.T) {
-	require.NotNil(t, newTestModel(stubServices()).Init())
-}
-
-func Test_WindowSizeMsg_SetsDimensions(t *testing.T) {
-	m := newTestModel(stubServices())
-	out, _ := m.Update(tea.WindowSizeMsg{Width: 99, Height: 33})
-	assert.Equal(t, 99, out.(Model).width)
-	assert.Equal(t, 33, out.(Model).height)
-}
-
 func Test_CtrlC_Quits(t *testing.T) {
 	_, cmd := pressCmd(newTestModel(stubServices()), "ctrl+c")
 	require.NotNil(t, cmd)

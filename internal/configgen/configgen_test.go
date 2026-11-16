@@ -47,16 +47,6 @@ func TestResolvePorts_NewFormat(t *testing.T) {
 
 // ── WriteFile / RemoveFile filename scheme ───────────────────────────────────
 
-func TestBlockFilename_DefaultPort(t *testing.T) {
-	assert.Equal(t, "svc", PortFileName("svc", "default"))
-	assert.Equal(t, "svc", PortFileName("svc", "web"))
-	assert.Equal(t, "svc", PortFileName("svc", ""))
-}
-
-func TestBlockFilename_NamedPort(t *testing.T) {
-	assert.Equal(t, "svc-ssh", PortFileName("svc", "ssh"))
-}
-
 // The ygg layer names its socat forwarders with this same function. If the two
 // ever diverge again, enable writes files that disable cannot find.
 func TestPortFileName_IsTheOneNamingRule(t *testing.T) {

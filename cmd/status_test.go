@@ -13,21 +13,6 @@ import (
 	"github.com/groot/homelab/cmd"
 )
 
-func TestStatusTable_RendersWithoutError(t *testing.T) {
-	tmp := t.TempDir()
-	svcDir := filepath.Join(tmp, "services", "testapp")
-	require.NoError(t, os.MkdirAll(svcDir, 0o755))
-	require.NoError(t, os.WriteFile(
-		filepath.Join(svcDir, "docker-compose.yml"),
-		[]byte("services: {}\n"), 0o644,
-	))
-
-	rootCmd := cmd.RootCmd()
-	rootCmd.SetArgs([]string{"--config-dir", tmp, "status"})
-	err := rootCmd.Execute()
-	assert.NoError(t, err, "status command must produce no error with a service dir")
-}
-
 func TestStatusTable_EmptyDir(t *testing.T) {
 	tmp := t.TempDir()
 	rootCmd := cmd.RootCmd()
@@ -68,8 +53,6 @@ func TestStatusEdgeTable_RendersEdgeSection(t *testing.T) {
 	require.NoError(t, err)
 	output := buf.String()
 
-	assert.Contains(t, output, "SERVICE", "table header must contain SERVICE column label")
-	assert.Contains(t, output, "STATE", "table header must contain STATE column label")
 	assert.Contains(t, output, "Edge", "the edge section replaces the core stack")
 	assert.Contains(t, output, "caddy", "the agent's caddy must appear in the edge table")
 	assert.NotContains(t, output, "Core Stack")

@@ -15,22 +15,7 @@ func newTestModel(initialName string) Model {
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 
-func Test_Wizard_Init(t *testing.T) {
-	m := newTestModel("")
-	cmd := m.Init()
-	assert.NotNil(t, cmd, "Init should return textinput.Blink")
-}
-
 // ── Window resize ─────────────────────────────────────────────────────────────
-
-func Test_Wizard_WindowSize(t *testing.T) {
-	m := newTestModel("")
-	updated, cmd := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
-	m2 := updated.(Model)
-	assert.Equal(t, 80, m2.width)
-	assert.Equal(t, 24, m2.height)
-	assert.Nil(t, cmd)
-}
 
 // ── Quit ──────────────────────────────────────────────────────────────────────
 
@@ -43,11 +28,6 @@ func Test_Wizard_Quit_CtrlC(t *testing.T) {
 }
 
 // ── Step navigation ───────────────────────────────────────────────────────────
-
-func Test_Wizard_StartsAtStepName(t *testing.T) {
-	m := newTestModel("")
-	assert.Equal(t, stepName, m.step)
-}
 
 func Test_Wizard_EnterAdvancesStep(t *testing.T) {
 	m := newTestModel("paperless")

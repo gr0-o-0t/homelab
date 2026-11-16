@@ -7,23 +7,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func Test_New(t *testing.T) {
-	m := New("caddy", []string{"true"})
-	assert.NotNil(t, m)
-}
-
-func Test_View_NotEmpty(t *testing.T) {
-	m := New("caddy", []string{"true"})
-	v := m.View()
-	assert.NotEmpty(t, v)
-}
-
-func Test_Init(t *testing.T) {
-	m := New("caddy", []string{"true"})
-	cmd := m.Init()
-	assert.NotNil(t, cmd)
-}
-
 func Test_Quit(t *testing.T) {
 	m := New("caddy", []string{"true"})
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})

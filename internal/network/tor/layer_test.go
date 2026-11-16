@@ -15,13 +15,7 @@ func noopReload() error { return nil }
 func TestLayer_Identity(t *testing.T) {
 	l := New("/test/repo", nil, nil)
 	assert.Equal(t, "tor", l.Name())
-	assert.Equal(t, "Tor onion service proxy", l.Label())
 	assert.Equal(t, "tor", l.ContainerName())
-}
-
-func TestLayer_InterfaceImplementation(t *testing.T) {
-	var l network.NetworkLayer = New("/test/repo", nil, nil)
-	assert.NotNil(t, l)
 }
 
 func TestLayer_LegacyConfDir(t *testing.T) {

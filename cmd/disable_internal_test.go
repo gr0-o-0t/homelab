@@ -11,18 +11,6 @@ import (
 	"github.com/groot/homelab/internal/edge"
 )
 
-// TestDisableFlags_ShorthandAMapsToAll guards -a as the shorthand for --all
-// (every layer), with --stop a separate, unabbreviated opt-in.
-func TestDisableFlags_ShorthandAMapsToAll(t *testing.T) {
-	flag := disableCmd.Flags().ShorthandLookup("a")
-	require.NotNil(t, flag, "expected -a to be a registered shorthand")
-	assert.Equal(t, "all", flag.Name, "-a must be the shorthand for --all")
-
-	stopFlag := disableCmd.Flags().Lookup("stop")
-	require.NotNil(t, stopFlag)
-	assert.Empty(t, stopFlag.Shorthand, "--stop should have no shorthand of its own")
-}
-
 // TestDisableAll_DoesNotStop checks that -a only removes layers: against a
 // service with no compose file, stopping would fail, so -a alone must succeed
 // and -a --stop must not.

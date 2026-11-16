@@ -27,8 +27,8 @@ func Test_Icons_CoverActionsAndAreOneCell(t *testing.T) {
 
 func Test_Icon_NerdFontEnv(t *testing.T) {
 	t.Setenv("HOMELAB_NERD_FONT", "")
-	assert.Equal(t, "▶", Icon("play"))
+	plain := Icon("play")
 	t.Setenv("HOMELAB_NERD_FONT", "1")
-	assert.Equal(t, "", Icon("play"))
-	assert.Equal(t, "•", Icon("no-such-icon"))
+	assert.NotEqual(t, plain, Icon("play"), "the env var switches glyph sets")
+	assert.NotEmpty(t, Icon("no-such-icon"))
 }

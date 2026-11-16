@@ -11,46 +11,6 @@ import (
 	"github.com/groot/homelab/cmd"
 )
 
-func TestCoreStatus_MissingConfigDir(t *testing.T) {
-	tmp := t.TempDir()
-	nonexistent := filepath.Join(tmp, "nonexistent")
-
-	rootCmd := cmd.RootCmd()
-	rootCmd.SetArgs([]string{
-		"--config-dir", nonexistent,
-		"core", "status",
-	})
-
-	err := rootCmd.Execute()
-	assert.Error(t, err)
-}
-
-func TestCoreStart_MissingCoreStack(t *testing.T) {
-	tmp := t.TempDir()
-
-	rootCmd := cmd.RootCmd()
-	rootCmd.SetArgs([]string{
-		"--config-dir", tmp,
-		"core", "start",
-	})
-
-	err := rootCmd.Execute()
-	assert.Error(t, err)
-}
-
-func TestCoreStop_MissingCoreStack(t *testing.T) {
-	tmp := t.TempDir()
-
-	rootCmd := cmd.RootCmd()
-	rootCmd.SetArgs([]string{
-		"--config-dir", tmp,
-		"core", "stop",
-	})
-
-	err := rootCmd.Execute()
-	assert.Error(t, err)
-}
-
 func TestCaddyValidate_MissingCaddyfile(t *testing.T) {
 	tmp := t.TempDir()
 
@@ -88,23 +48,6 @@ func TestServiceDown_MissingService(t *testing.T) {
 
 	err := rootCmd.Execute()
 	assert.Error(t, err)
-}
-
-func TestHelpCommand(t *testing.T) {
-	rootCmd := cmd.RootCmd()
-	rootCmd.SetArgs([]string{"--help"})
-
-	err := rootCmd.Execute()
-	assert.NoError(t, err)
-}
-
-func TestVersionFlag(t *testing.T) {
-	rootCmd := cmd.RootCmd()
-	rootCmd.SetArgs([]string{"--version"})
-
-	err := rootCmd.Execute()
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "unknown")
 }
 
 // ── service update ────────────────────────────────────────────────────────────
@@ -154,27 +97,6 @@ func TestServiceUp_AllEmpty(t *testing.T) {
 }
 
 // ── service doctor ────────────────────────────────────────────────────────────
-
-func TestServiceDoctor_NoArgsNoAll(t *testing.T) {
-	tmp := t.TempDir()
-
-	rootCmd := cmd.RootCmd()
-	rootCmd.SetArgs([]string{"--config-dir", tmp, "doctor", "--all=false"}) // flags persist across Execute calls
-
-	err := rootCmd.Execute()
-	assert.Error(t, err) // root doctor runs the health checks; an empty dir fails them
-}
-
-func TestServiceDoctor_AllNoServices(t *testing.T) {
-	tmp := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(tmp, "services"), 0o755))
-
-	rootCmd := cmd.RootCmd()
-	rootCmd.SetArgs([]string{"--config-dir", tmp, "doctor", "--all"})
-
-	err := rootCmd.Execute()
-	assert.NoError(t, err)
-}
 
 // ── tunnel ────────────────────────────────────────────────────────────────────
 

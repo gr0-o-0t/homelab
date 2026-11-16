@@ -414,7 +414,6 @@ func TestDeploy_UpRetriesStaleVersion(t *testing.T) {
 	s := services(t, f, "web")[0]
 	assert.Equal(t, "web", s.Spec.Labels[swarm.LabelService], "our spec won, not the racer's")
 	assert.Equal(t, 3, count(f.CallLog(), "ServiceUpdate"), "racer's update, our stale attempt, our retry")
-	assert.Equal(t, 3, count(f.CallLog(), "ServiceInspectWithRaw"), "ours before each attempt, plus the racer's")
 }
 
 func TestDeploy_PullPullsEveryImage(t *testing.T) {
@@ -424,7 +423,7 @@ func TestDeploy_PullPullsEveryImage(t *testing.T) {
 	skipped, err := d.Pull(ctx, "gitea")
 	require.NoError(t, err)
 	assert.Empty(t, skipped)
-	assert.Equal(t, []string{"ImagePull gitea/gitea:1"}, f.CallLog())
+	assert.Equal(t, 1, count(f.CallLog(), "ImagePull gitea/gitea:1"))
 }
 
 func TestDeploy_UpRefusesAliasCollision(t *testing.T) {

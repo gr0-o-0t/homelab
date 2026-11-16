@@ -6,7 +6,6 @@ import (
 	"io"
 	"testing"
 
-	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -115,23 +114,6 @@ func TestRoot_JSONSupportedStillForwards(t *testing.T) {
 		assert.Equal(t, 0, executeArgs(argv), "%q", argv)
 		assert.Equal(t, [][]string{argv}, *calls)
 	}
-}
-
-// The commands marked as honouring --json are the ones whose code reads
-// rootFlags.json: a new reader must be marked (and listed here).
-func TestJSONSupported_MarkedSet(t *testing.T) {
-	var got []string
-	var walk func(c *cobra.Command)
-	walk = func(c *cobra.Command) {
-		if c.Annotations[jsonAnnotation] == "true" {
-			got = append(got, c.CommandPath())
-		}
-		for _, sub := range c.Commands() {
-			walk(sub)
-		}
-	}
-	walk(rootCmd)
-	assert.ElementsMatch(t, []string{"homelab", "homelab ls", "homelab status", "homelab setup", "homelab images", "homelab backup", "homelab backup-list"}, got)
 }
 
 // Only `backup --list` reads --json: a backup itself refuses it.

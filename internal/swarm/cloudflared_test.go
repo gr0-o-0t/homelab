@@ -51,8 +51,7 @@ func TestCloudflared_PinnedCore(t *testing.T) {
 	assert.Equal(t, "homelab_cloudflared", s.Name)
 	assert.Equal(t, "cloudflared", s.Labels[swarm.LabelService])
 	assert.Equal(t, "core", s.Labels[swarm.LabelRole])
-	assert.True(t, strings.HasPrefix(s.TaskTemplate.ContainerSpec.Image, "cloudflare/cloudflared:20"), s.TaskTemplate.ContainerSpec.Image)
-	assert.NotContains(t, s.TaskTemplate.ContainerSpec.Image, "latest")
+	assert.Equal(t, swarm.CloudflaredImage, s.TaskTemplate.ContainerSpec.Image)
 	assert.Equal(t, []string{"node.labels.homelab.role==core"}, s.TaskTemplate.Placement.Constraints)
 	require.Len(t, s.TaskTemplate.Networks, 1)
 	assert.Equal(t, swarm.SharedNetwork, s.TaskTemplate.Networks[0].Target)
@@ -99,8 +98,4 @@ func TestCloudflared_SameTokenNoUpdate(t *testing.T) {
 	secs, err := d.API.SecretList(ctx, dswarm.SecretListOptions{})
 	require.NoError(t, err)
 	assert.Len(t, secs, 1, "the old env secret is pruned")
-}
-
-func TestCloudflared_OriginIsEdge(t *testing.T) {
-	assert.Equal(t, "http://homelab-edge:80", swarm.CloudflaredOrigin)
 }

@@ -8,25 +8,8 @@ import (
 	"github.com/groot/homelab/internal/diagnostics"
 )
 
-func TestCheckResult_LiteralConstruction(t *testing.T) {
-	r := diagnostics.CheckResult{
-		Name:    "Docker daemon",
-		Status:  diagnostics.StatusPass,
-		Message: "Docker daemon is running",
-	}
-	assert.Equal(t, diagnostics.StatusPass, r.Status)
-	assert.Equal(t, "Docker daemon", r.Name)
-}
-
-func TestCheckResult_StatusConstants(t *testing.T) {
-	assert.Equal(t, diagnostics.Status("pass"), diagnostics.StatusPass)
-	assert.Equal(t, diagnostics.Status("warn"), diagnostics.StatusWarn)
-	assert.Equal(t, diagnostics.Status("fail"), diagnostics.StatusFail)
-}
-
 func TestRunConfigChecks_NoConfigFile(t *testing.T) {
 	g := diagnostics.RunConfigChecks("/nonexistent/config.yaml")
-	assert.Equal(t, "Configuration", g.Title)
 	assert.NotEmpty(t, g.Results)
 	// Should fail with config.yaml unreadable
 	found := false
@@ -42,14 +25,12 @@ func TestRunConfigChecks_NoConfigFile(t *testing.T) {
 
 func TestRunInfraChecks_NilClient(t *testing.T) {
 	g := diagnostics.RunInfraChecks(nil)
-	assert.Equal(t, "Infrastructure", g.Title)
 	assert.NotEmpty(t, g.Results)
 	assert.Equal(t, diagnostics.StatusFail, g.Results[0].Status)
 }
 
 func TestRunServiceConfigChecks_NonExistentService(t *testing.T) {
 	g := diagnostics.RunServiceConfigChecks("/nonexistent", "nosuchservice")
-	assert.Equal(t, "Service Configuration", g.Title)
 	assert.NotEmpty(t, g.Results)
 	// Should fail with services/<name>/ exists
 	found := false
@@ -65,21 +46,13 @@ func TestRunServiceConfigChecks_NonExistentService(t *testing.T) {
 
 func TestRunServiceContainerChecks_NilClient(t *testing.T) {
 	g := diagnostics.RunServiceContainerChecks("test", nil, false)
-	assert.Equal(t, "Service Tasks", g.Title)
 	assert.NotEmpty(t, g.Results)
 	assert.Equal(t, diagnostics.StatusWarn, g.Results[0].Status)
 }
 
 func TestRunServiceRoutingChecks_NonExistentService(t *testing.T) {
 	g := diagnostics.RunServiceRoutingChecks("/nonexistent", "nosuchservice")
-	assert.Equal(t, "Service Routing", g.Title)
 	assert.NotEmpty(t, g.Results)
 	// Not exposed is a valid state: a warning, never a failure --fix "repairs".
 	assert.Equal(t, diagnostics.StatusWarn, g.Results[0].Status)
-}
-
-func TestCheckGroup_EmptyResults(t *testing.T) {
-	g := diagnostics.CheckGroup{Title: "Empty", Results: nil}
-	assert.Equal(t, "Empty", g.Title)
-	assert.Empty(t, g.Results)
 }

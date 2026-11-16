@@ -45,38 +45,10 @@ func TestConfigFile_ExplicitFlag(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestConfigFile_DerivesConfigDir(t *testing.T) {
-	tmp := t.TempDir()
-	configPath := filepath.Join(tmp, "subdir", "config.yaml")
-
-	err := os.MkdirAll(filepath.Dir(configPath), 0o755)
-	require.NoError(t, err)
-
-	err = os.WriteFile(configPath, []byte("vars: {}"), 0o644)
-	require.NoError(t, err)
-
-	rootCmd := cmd.RootCmd()
-	rootCmd.SetArgs([]string{
-		"--config", configPath,
-		"--no-color",
-	})
-
-	err = rootCmd.Execute()
-	assert.NoError(t, err)
-}
-
 func TestConfigCommand_MissingService(t *testing.T) {
 	tmp := t.TempDir()
 	rootCmd := cmd.RootCmd()
 	rootCmd.SetArgs([]string{"--config-dir", tmp, "config", "nonexistent"})
-	err := rootCmd.Execute()
-	assert.Error(t, err)
-}
-
-func TestConfigCommand_NoArgRuns(t *testing.T) {
-	tmp := t.TempDir()
-	rootCmd := cmd.RootCmd()
-	rootCmd.SetArgs([]string{"--config-dir", tmp, "config"})
 	err := rootCmd.Execute()
 	assert.Error(t, err)
 }

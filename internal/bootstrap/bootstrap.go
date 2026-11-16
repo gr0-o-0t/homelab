@@ -46,7 +46,10 @@ const (
 	// ImageRepo is the agent image; the tag is the CLI's version.
 	ImageRepo = "ghcr.io/gr0-o-0t/homelab"
 	// EdgeAlias is the leader agent's name on home-services: Caddy's
-	// upstream for every service reaches it there.
+	// upstream for every service reaches it there. The Cloudflare Tunnel's
+	// ingress, set in the Cloudflare dashboard, must point at
+	// http://homelab-edge:80, the agent's plain-HTTP listener where Caddy's
+	// cf sites answer (R25).
 	EdgeAlias = "homelab-edge"
 	// ManagerPort is Swarm's control-plane port.
 	ManagerPort = "2377"

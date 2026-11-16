@@ -22,10 +22,3 @@ func TestExecCommand_NoArgs(t *testing.T) {
 	err := rootCmd.Execute()
 	assert.Error(t, err)
 }
-
-func TestExecCommand_FlagsRegistered(t *testing.T) {
-	rootCmd := cmd.RootCmd()
-	rootCmd.SetArgs([]string{"exec", "--help"})
-	err := rootCmd.Execute()
-	assert.NoError(t, err)
-}

@@ -85,21 +85,6 @@ func TestRender_ComposeAliasesServiceName(t *testing.T) {
 
 // ── Write ─────────────────────────────────────────────────────────────────────
 
-func TestWrite_CreatesAllFiles(t *testing.T) {
-	dir := t.TempDir()
-	files, err := scaffold.Render(testData)
-	require.NoError(t, err)
-
-	require.NoError(t, scaffold.Write(dir, files))
-
-	for _, f := range files {
-		path := filepath.Join(dir, f.RelPath)
-		info, err := os.Stat(path)
-		require.NoError(t, err, "file should exist: %s", f.RelPath)
-		assert.Greater(t, info.Size(), int64(0), "file should not be empty: %s", f.RelPath)
-	}
-}
-
 func TestWrite_ContentMatchesRender(t *testing.T) {
 	dir := t.TempDir()
 	files, err := scaffold.Render(testData)

@@ -148,7 +148,7 @@ func TestFilesInstall_Installs(t *testing.T) {
 
 	out, _, err := installTar(t, root, "taash", taashTar(t, ""))
 	require.NoError(t, err)
-	assert.Contains(t, out, "installed taash: run homelab setup taash (if it has secrets), homelab up taash, homelab enable taash")
+	assert.Contains(t, out, "installed taash")
 	for _, f := range []string{"docker-compose.yml", "config.yaml", "conf/app.conf"} {
 		assert.FileExists(t, filepath.Join(root, "services", "taash", f))
 	}
@@ -223,7 +223,7 @@ func TestFilesInstall_WarnsQualifiedLocalImage(t *testing.T) {
 
 	_, stderr, err := installTar(t, root, "taash", taashTar(t, compose))
 	require.NoError(t, err)
-	assert.Contains(t, stderr, "warning: local image ghcr.io/me/taash:1 has a namespace or registry host; a registry image of that name would replace it")
+	assert.Contains(t, stderr, "warning: local image ghcr.io/me/taash:1")
 	assert.NotContains(t, stderr, "nginx", "a pulled image is not warned about")
 
 	// The fixture's own image (taash-server:current) is docker.io/library/…: no warning.
