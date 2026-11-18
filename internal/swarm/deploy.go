@@ -168,8 +168,10 @@ func (d *Deployer) deploy(ctx context.Context, svc string, refresh bool) error {
 		if c := Constraints(Role(spec.Labels[LabelRole]), workerReady); len(c) > 0 {
 			spec.TaskTemplate.Placement = &swarm.Placement{Constraints: c}
 		}
-		one := uint64(1)
-		spec.Mode = swarm.ServiceMode{Replicated: &swarm.ReplicatedService{Replicas: &one}}
+		if spec.Mode.Global == nil {
+			one := uint64(1)
+			spec.Mode = swarm.ServiceMode{Replicated: &swarm.ReplicatedService{Replicas: &one}}
+		}
 
 		// No registry has a local image: asking one only fails or warns.
 		queryRegistry := refresh && !local
@@ -209,8 +211,24 @@ func (d *Deployer) deploy(ctx context.Context, svc string, refresh bool) error {
 
 // Down scales every container of svc to zero. The specs, their secrets and
 // the volumes stay, so Up brings the service back as it was. Swarm has no
-// stopped-but-kept container, so stop is Down too.
+// stopped-but-kept container, so stop is Down too. A global service has no
+// count and Swarm will not change its mode, so Down removes it instead; Up
+// creates it again from the compose file.
 func (d *Deployer) Down(ctx context.Context, svc string) error {
+	if err := config.ValidServiceName(svc); err != nil {
+		return err
+	}
+	list, err := d.services(ctx, svc)
+	if err != nil {
+		return err
+	}
+	for i := range list {
+		if list[i].Spec.Mode.Global != nil {
+			if err := d.API.ServiceRemove(ctx, list[i].ID); err != nil {
+				return fmt.Errorf("removing %s: %w", list[i].Spec.Name, err)
+			}
+		}
+	}
 	return d.eachService(ctx, svc, false, func(spec *swarm.ServiceSpec) {
 		zero := uint64(0)
 		spec.Mode = swarm.ServiceMode{Replicated: &swarm.ReplicatedService{Replicas: &zero}}
@@ -218,7 +236,8 @@ func (d *Deployer) Down(ctx context.Context, svc string) error {
 }
 
 // Replicas is the replica count of each Swarm service of svc, by name (a
-// service that is down has zeros, one never deployed an empty map).
+// service that is down has zeros, one never deployed an empty map). Global
+// services have no count and are left out: a backup leaves them running.
 func (d *Deployer) Replicas(ctx context.Context, svc string) (map[string]uint64, error) {
 	if err := config.ValidServiceName(svc); err != nil {
 		return nil, err
@@ -229,10 +248,13 @@ func (d *Deployer) Replicas(ctx context.Context, svc string) (map[string]uint64,
 	}
 	out := make(map[string]uint64, len(list))
 	for i := range list {
+		if list[i].Spec.Mode.Global != nil {
+			continue
+		}
 		r := list[i].Spec.Mode.Replicated
 		if r == nil {
-			// Global (or job) mode has no count to set to zero: refused
-			// here rather than as a stop that never finishes.
+			// Job mode has no count to set to zero: refused here rather
+			// than as a stop that never finishes.
 			return nil, fmt.Errorf("%s is not a replicated Swarm service, so it cannot be scaled to zero "+
 				"to stop it — back it up with --live, or stop it by hand first", list[i].Spec.Name)
 		}
@@ -279,6 +301,9 @@ func (d *Deployer) WaitStopped(ctx context.Context, svc string, timeout time.Dur
 	for {
 		busy := ""
 		for i := range list {
+			if list[i].Spec.Mode.Global != nil { // never scaled down (see Replicas)
+				continue
+			}
 			tasks, err := d.API.TaskList(ctx, swarm.TaskListOptions{Filters: filters.NewArgs(filters.Arg("service", list[i].ID))})
 			if err != nil {
 				return err
@@ -315,8 +340,8 @@ func taskStopped(s swarm.TaskState) bool {
 }
 
 // Restart replaces every task of svc with a fresh one. A service that was
-// stopped (scaled to zero) comes back with one replica: restart means
-// running afterwards.
+// stopped (scaled to zero) is started as Up starts it, which also brings
+// back the global services Down removed: restart means running afterwards.
 func (d *Deployer) Restart(ctx context.Context, svc string) error {
 	if err := config.ValidServiceName(svc); err != nil {
 		return err
@@ -324,12 +349,15 @@ func (d *Deployer) Restart(ctx context.Context, svc string) error {
 	if d.SM == nil {
 		return ErrNoSecrets
 	}
+	reps, err := d.Replicas(ctx, svc)
+	if err != nil {
+		return err
+	}
+	if slices.Contains(slices.Collect(maps.Values(reps)), 0) {
+		return d.Up(ctx, svc)
+	}
 	return d.eachService(ctx, svc, true, func(spec *swarm.ServiceSpec) {
 		spec.TaskTemplate.ForceUpdate++
-		if r := spec.Mode.Replicated; r != nil && (r.Replicas == nil || *r.Replicas == 0) {
-			one := uint64(1)
-			r.Replicas = &one
-		}
 	})
 }
 

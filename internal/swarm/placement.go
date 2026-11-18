@@ -24,10 +24,14 @@ const dockerSock = "/var/run/docker.sock"
 // paths, the docker socket or a shared database pins to core, and that wins
 // over a placement override of worker.
 // A pull_policy: never image (built locally) pins to core too, unless the
-// service config names a placement.
+// service config names a placement. A global service runs on every node:
+// its host paths and volumes are each node's own.
 func Place(svc types.ServiceConfig, cfg *config.Config, isDBProvider bool) Role {
 	if isDBProvider {
 		return RoleCore
+	}
+	if IsGlobal(svc) {
+		return RoleAny
 	}
 	var cache []string
 	override := ""
@@ -68,4 +72,10 @@ func Constraints(r Role, workerReady bool) []string {
 		}
 	}
 	return nil
+}
+
+// IsGlobal reports whether a compose service asks for one task per node
+// (deploy.mode: global).
+func IsGlobal(svc types.ServiceConfig) bool {
+	return svc.Deploy != nil && svc.Deploy.Mode == "global"
 }

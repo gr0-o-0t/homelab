@@ -68,13 +68,21 @@ worker PC. Override per container in `config.yaml` with `placement:`
 (`core`, `worker`, `any`), and list re-creatable volumes (model caches) under
 `cache_volumes:` so they do not pin.
 
+**One container per node.** `deploy: {mode: global}` makes a Swarm global
+service: one task on every node, joining nodes included (a monitoring agent:
+see `netdata` and `beszel-hub`). Its host paths, docker socket and volumes are
+each node's own, so it is never pinned. Swarm cannot scale it to zero, so
+`down`/`stop` remove it (volumes kept) and `up` creates it again; a backup
+leaves it running. `hostname: "{{.Node.Hostname}}"` gives each task its node's name.
+
 **What Swarm honours.** Only the keys the translator maps are deployed:
 `image`, `entrypoint`, `command`, `environment` (delivered through the Swarm
 secret), `volumes` (a writable `./` bind mount is refused; read-only ones become configs) and `tmpfs` (long-form `size` is kept; short-form `path:options` drops its options), `networks` (and
 `container_name` as an alias), `labels`, `hostname`, `working_dir`, `user`,
 `group_add`, `tty`, `stdin_open`, `read_only`, `init`, `stop_signal`,
 `stop_grace_period`, `healthcheck`, `extra_hosts`, `sysctls`, `cap_add`,
-`cap_drop`, `ulimits`, `security_opt: no-new-privileges`, and `restart`.
+`cap_drop`, `ulimits`, `security_opt: no-new-privileges` and
+`apparmor:unconfined`, `deploy.mode: global`, and `restart`.
 Everything else in the compose file is **ignored, without an error**, notably `ports:`
 (publish through `config.yaml`'s `ports:` and `homelab enable` instead — nothing is
 published on a host), `deploy.resources` / `mem_limit` / `cpus`, `depends_on`

@@ -241,6 +241,31 @@ func TestTranslate_HostBindStays(t *testing.T) {
 	assert.Empty(t, st.Configs)
 }
 
+// deploy.mode: global runs one task on every node. Its host binds and
+// volumes are each node's own, so they do not pin it to core.
+func TestTranslate_GlobalModeRunsOnEveryNode(t *testing.T) {
+	st := translate(t, "pernode")
+	agent := specByName(t, st, "pernode_agent")
+	assert.NotNil(t, agent.Mode.Global, "global mode")
+	assert.Equal(t, "any", agent.Labels["homelab.role"])
+	assert.Equal(t, "{{.Node.Hostname}}", agent.TaskTemplate.ContainerSpec.Hostname)
+
+	hub := specByName(t, st, "pernode_hub")
+	assert.Nil(t, hub.Mode.Global)
+	assert.Equal(t, "core", hub.Labels["homelab.role"])
+}
+
+func TestTranslate_AppArmorUnconfined(t *testing.T) {
+	st := translate(t, "pernode")
+	p := specByName(t, st, "pernode_agent").TaskTemplate.ContainerSpec.Privileges
+	require.NotNil(t, p)
+	require.NotNil(t, p.AppArmor)
+	assert.Equal(t, dswarm.AppArmorModeDisabled, p.AppArmor.Mode)
+	assert.False(t, p.NoNewPrivileges)
+
+	assert.Nil(t, specByName(t, st, "pernode_hub").TaskTemplate.ContainerSpec.Privileges)
+}
+
 func TestTranslate_PrivilegedUnsupported(t *testing.T) {
 	_, err := swarm.Translate(filepath.Join("testdata", "privileged"), nil, nil, nil, false)
 	require.Error(t, err)

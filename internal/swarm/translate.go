@@ -260,9 +260,7 @@ func translateService(stack, dir string, proj *types.Project, svc types.ServiceC
 		Ulimits:         ulimits(svc.Ulimits),
 		StopGracePeriod: (*time.Duration)(svc.StopGracePeriod),
 	}
-	if slices.ContainsFunc(svc.SecurityOpt, isNoNewPrivileges) {
-		cs.Privileges = &swarm.Privileges{NoNewPrivileges: true}
-	}
+	cs.Privileges = privileges(svc.SecurityOpt)
 	rp, err := restartPolicy(svc.Restart)
 	if err != nil {
 		return swarm.ServiceSpec{}, nil, nil, fmt.Errorf("%s/%s: %w", stack, key, err)
@@ -280,12 +278,29 @@ func translateService(stack, dir string, proj *types.Project, svc types.ServiceC
 			Networks:      nets.attachments(svc),
 		},
 	}
+	if IsGlobal(svc) {
+		spec.Mode = swarm.ServiceMode{Global: &swarm.GlobalService{}}
+	}
 	return spec, cfgs, vols, nil
 }
 
-func isNoNewPrivileges(opt string) bool {
-	opt = strings.ReplaceAll(opt, "=", ":")
-	return opt == "no-new-privileges" || opt == "no-new-privileges:true"
+// privileges carries the security_opt entries Swarm can express:
+// no-new-privileges and apparmor:unconfined. Nil when neither is set.
+func privileges(opts []string) *swarm.Privileges {
+	var p swarm.Privileges
+	set := false
+	for _, opt := range opts {
+		switch strings.ReplaceAll(opt, "=", ":") {
+		case "no-new-privileges", "no-new-privileges:true":
+			p.NoNewPrivileges, set = true, true
+		case "apparmor:unconfined":
+			p.AppArmor, set = &swarm.AppArmorOpts{Mode: swarm.AppArmorModeDisabled}, true
+		}
+	}
+	if !set {
+		return nil
+	}
+	return &p
 }
 
 // restartPolicy maps compose's restart: onto Swarm's. Unset means "no", as

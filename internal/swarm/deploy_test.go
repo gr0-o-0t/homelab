@@ -306,9 +306,7 @@ func TestDeploy_RestartRevivesStoppedService(t *testing.T) {
 	require.NoError(t, d.Up(ctx, "web"))
 	require.NoError(t, d.Down(ctx, "web"))
 	require.NoError(t, d.Restart(ctx, "web"))
-	s := services(t, f, "web")[0]
-	assert.Equal(t, uint64(1), replicas(s), "restart means running afterwards")
-	assert.Equal(t, uint64(1), s.Spec.TaskTemplate.ForceUpdate)
+	assert.Equal(t, uint64(1), replicas(services(t, f, "web")[0]), "restart means running afterwards")
 }
 
 // R23: no secrets manager, no deploy — Up would rotate a working env secret
@@ -564,18 +562,107 @@ func TestDeploy_ScaleChangesOnlyReplicas(t *testing.T) {
 	}
 }
 
-// A global-mode service has no count to scale to zero: refused up front,
-// not after a stop that never finishes.
-func TestDeploy_ReplicasRefusesGlobalMode(t *testing.T) {
+// perNodeCompose is a hub with data plus an agent on every node.
+const perNodeCompose = `
+networks:
+  home-services:
+    name: home-services
+    external: true
+services:
+  hub:
+    image: gitea/gitea:1
+    container_name: hub
+    restart: always
+    volumes:
+      - hub-data:/data
+    networks: [home-services]
+  agent:
+    image: nginx:1
+    container_name: agent
+    restart: always
+    volumes:
+      - /proc:/host/proc:ro
+    networks: [home-services]
+    deploy:
+      mode: global
+volumes:
+  hub-data:
+    name: mon_hub_data
+`
+
+func byName(t *testing.T, f *swarmtest.Fake, svc string) map[string]dswarm.Service {
+	t.Helper()
+	out := map[string]dswarm.Service{}
+	for _, s := range services(t, f, svc) {
+		out[s.Spec.Name] = s
+	}
+	return out
+}
+
+func TestDeploy_UpKeepsGlobalModeUnconstrained(t *testing.T) {
 	ctx := context.Background()
-	d, f, _ := newDeployer(t)
-	_, err := f.ServiceCreate(ctx, dswarm.ServiceSpec{
-		Annotations: dswarm.Annotations{Name: "agentish_agent", Labels: map[string]string{swarm.LabelService: "agentish"}},
-		Mode:        dswarm.ServiceMode{Global: &dswarm.GlobalService{}},
-	}, dswarm.ServiceCreateOptions{})
+	d, f, root := newDeployer(t)
+	f.SetNodes([]dswarm.Node{node("w1", "worker", dswarm.NodeStateReady, dswarm.NodeAvailabilityActive)})
+	writeService(t, root, "mon", perNodeCompose)
+
+	require.NoError(t, d.Up(ctx, "mon"))
+	require.NoError(t, d.Up(ctx, "mon"), "a second up updates the global service in place")
+
+	agent := byName(t, f, "mon")["mon_agent"]
+	assert.NotNil(t, agent.Spec.Mode.Global)
+	assert.Nil(t, agent.Spec.Mode.Replicated)
+	assert.Nil(t, agent.Spec.TaskTemplate.Placement, "every node, workers and core alike")
+	assert.Equal(t, uint64(1), replicas(byName(t, f, "mon")["mon_hub"]))
+}
+
+// Swarm can neither scale a global service to zero nor change its mode:
+// down removes it (its volumes stay) and up creates it again.
+func TestDeploy_DownRemovesGlobalAndUpRecreatesIt(t *testing.T) {
+	ctx := context.Background()
+	d, f, root := newDeployer(t)
+	writeService(t, root, "mon", perNodeCompose)
+	f.SetVolumes(&volume.Volume{Name: "mon_hub_data"})
+	require.NoError(t, d.Up(ctx, "mon"))
+
+	require.NoError(t, d.Down(ctx, "mon"))
+	svcs := byName(t, f, "mon")
+	assert.NotContains(t, svcs, "mon_agent")
+	assert.Equal(t, uint64(0), replicas(svcs["mon_hub"]))
+	assert.Equal(t, 0, count(f.CallLog(), "VolumeRemove"))
+
+	require.NoError(t, d.Up(ctx, "mon"))
+	assert.NotNil(t, byName(t, f, "mon")["mon_agent"].Spec.Mode.Global)
+}
+
+func TestDeploy_RestartAfterDownBringsGlobalBack(t *testing.T) {
+	ctx := context.Background()
+	d, f, root := newDeployer(t)
+	writeService(t, root, "mon", perNodeCompose)
+	require.NoError(t, d.Up(ctx, "mon"))
+	require.NoError(t, d.Down(ctx, "mon"))
+
+	require.NoError(t, d.Restart(ctx, "mon"))
+	svcs := byName(t, f, "mon")
+	assert.Contains(t, svcs, "mon_agent")
+	assert.Equal(t, uint64(1), replicas(svcs["mon_hub"]))
+}
+
+// A backup stops the replicated containers and leaves the per-node agents
+// running: they have no count to record, and their tasks never stop.
+func TestDeploy_BackupLifecycleIgnoresGlobal(t *testing.T) {
+	ctx := context.Background()
+	d, f, root := newDeployer(t)
+	writeService(t, root, "mon", perNodeCompose)
+	require.NoError(t, d.Up(ctx, "mon"))
+
+	reps, err := d.Replicas(ctx, "mon")
 	require.NoError(t, err)
-	_, err = d.Replicas(ctx, "agentish")
-	assert.ErrorContains(t, err, "agentish_agent is not a replicated Swarm service")
+	assert.Equal(t, map[string]uint64{"mon_hub": 1}, reps)
+
+	agent := byName(t, f, "mon")["mon_agent"]
+	f.SetTasks([]dswarm.Task{{ID: "a1", ServiceID: agent.ID, DesiredState: dswarm.TaskStateRunning,
+		Status: dswarm.TaskStatus{State: dswarm.TaskStateRunning}}})
+	assert.NoError(t, d.WaitStopped(ctx, "mon", 50*time.Millisecond))
 }
 
 // taashCompose is a service whose image is built locally (pull_policy:

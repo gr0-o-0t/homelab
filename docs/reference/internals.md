@@ -167,6 +167,12 @@ the docker socket, or a shared-database provider role is pinned to
 constraint is `role == worker` while a worker is Ready, none otherwise, and the
 rebalancer force-updates preferred services when a worker returns.
 
+A container with `deploy.mode: global` is a Swarm global service: one task on
+every node, no constraint, role `any` (its host paths and volumes are per node).
+`Down` removes it (Swarm can neither scale it to zero nor change its mode) and
+`Up` recreates it; `Restart` of a stopped stack therefore goes through `Up`.
+`Replicas`/`WaitStopped` skip it, so a backup stops the rest and leaves it running.
+
 ## Network Flow
 
 ```

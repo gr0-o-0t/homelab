@@ -1,0 +1,35 @@
+# A hub on the core node and an agent on every node (deploy.mode: global).
+networks:
+  home-services:
+    name: home-services
+    external: true
+
+services:
+  hub:
+    image: example/hub:1
+    container_name: hub
+    restart: always
+    volumes:
+      - hub-data:/data
+    networks: [home-services]
+  agent:
+    image: example/agent:1
+    container_name: agent
+    hostname: "{{.Node.Hostname}}"
+    restart: always
+    cap_add: [SYS_ADMIN]
+    security_opt:
+      - apparmor:unconfined
+    volumes:
+      - agent-lib:/var/lib/agent
+      - /proc:/host/proc:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks: [home-services]
+    deploy:
+      mode: global
+
+volumes:
+  hub-data:
+    name: pernode_hub_data
+  agent-lib:
+    name: pernode_agent_lib
