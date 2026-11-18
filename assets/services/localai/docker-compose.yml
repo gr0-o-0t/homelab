@@ -24,6 +24,8 @@ services:
     restart: always
     environment:
       LOCALAI_API_KEY: ${LOCALAI_API_KEY}
+      # Private and gated Hugging Face models; backends read it too.
+      HF_TOKEN: ${HF_TOKEN:-}
       # One llama.cpp thread per physical core; SMT siblings slow it down.
       LOCALAI_THREADS: ${THREADS:-16}
       # Keep at most this many models in RAM; the least recently used one is

@@ -28,6 +28,9 @@ secrets:
   LOCALAI_API_KEY:
     required: true
     description: "Bearer key for the API and the web UI login"
+  HF_TOKEN:
+    required: false
+    description: "Hugging Face read token, for importing private or gated models"
 
 ports:
   - 8080
