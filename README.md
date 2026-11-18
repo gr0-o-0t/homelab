@@ -347,6 +347,7 @@ lists the catalog; `homelab status <service>` shows what a service declares.
 | `jellyfin` | `jellyfin.home.*` | Jellyfin (open-source media server) |
 | `kavita` | `kavita.home.*` | Kavita (self-hosted digital library for manga, comics, and books) |
 | `litellm` | `litellm.home.*` | LiteLLM (OpenAI-compatible LLM proxy/gateway + usage dashboard) |
+| `localai` | `localai.home.*` | LocalAI (OpenAI-compatible API for local LLMs, embeddings, images and audio; CPU) |
 | `mariadb` | – | shared, installed on demand |
 | `mattermost` | `mattermost.home.*` | Mattermost (self-hosted team messaging platform) |
 | `mealie` | `mealie.home.*` | Mealie (self-hosted recipe manager and meal planner) |

@@ -39,6 +39,7 @@ Tor, I2P and Yggdrasil are not available in cluster mode yet, so only the tailne
 | it-tools | [ ] | [ ] |
 | jellyfin | [ ] | [ ] |
 | kavita | [ ] | [ ] |
+| localai | [ ] | [ ] |
 | mattermost | [ ] | [ ] |
 | mealie | [ ] | [ ] |
 | metube | [ ] | [ ] |

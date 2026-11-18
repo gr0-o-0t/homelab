@@ -1,0 +1,68 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Service: LocalAI (OpenAI-compatible API for local LLMs, embeddings, images,
+# speech-to-text and text-to-speech)
+# https://localai.io/docs/start/install/containers/
+#
+# CPU image on purpose: Swarm cannot pass GPUs or devices through, and the
+# core node's only GPU is a 2-CU iGPU. The CPU image downloads the llama.cpp
+# backend on first use and picks the build that matches the host CPU
+# (AVX-512 on minis), so no per-CPU image tag is needed.
+#
+# The data volumes pin it to the core node, the strongest CPU in the cluster.
+# Install models from the web UI's gallery, or list them in PRELOAD_MODELS.
+# ─────────────────────────────────────────────────────────────────────────────
+
+networks:
+  home-services:
+    name: home-services
+    external: true
+
+services:
+  localai:
+    image: localai/localai:latest
+    container_name: localai
+    restart: always
+    environment:
+      LOCALAI_API_KEY: ${LOCALAI_API_KEY}
+      # One llama.cpp thread per physical core; SMT siblings slow it down.
+      LOCALAI_THREADS: ${THREADS:-16}
+      # Keep at most this many models in RAM; the least recently used one is
+      # unloaded to make room for the next (RAM is shared with other services).
+      LOCALAI_MAX_ACTIVE_BACKENDS: ${MAX_ACTIVE_BACKENDS:-2}
+      # Free RAM when a model sits idle, and kill a backend that hangs.
+      LOCALAI_WATCHDOG_IDLE: "true"
+      LOCALAI_WATCHDOG_IDLE_TIMEOUT: ${IDLE_TIMEOUT:-30m}
+      LOCALAI_WATCHDOG_BUSY: "true"
+      LOCALAI_WATCHDOG_BUSY_TIMEOUT: ${BUSY_TIMEOUT:-15m}
+      LOCALAI_PRELOAD_MODELS: ${PRELOAD_MODELS:-}
+      # Audio and image uploads (transcription, vision) beyond the 15 MB default.
+      LOCALAI_UPLOAD_LIMIT: ${UPLOAD_LIMIT_MB:-100}
+      LOCALAI_MODELS_PATH: /models
+      LOCALAI_BACKENDS_PATH: /backends
+      LOCALAI_CONFIG_DIR: /configuration
+      LOCALAI_DATA_PATH: /data
+      DEBUG: "false"
+    volumes:
+      - localai-models:/models
+      - localai-backends:/backends
+      - localai-config:/configuration
+      - localai-data:/data
+    networks:
+      - home-services
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/readyz"]
+      interval: 1m
+      timeout: 10s
+      retries: 3
+      # Preloaded models download before the API is ready.
+      start_period: 30m
+
+volumes:
+  localai-models:
+    name: localai_models
+  localai-backends:
+    name: localai_backends
+  localai-config:
+    name: localai_config
+  localai-data:
+    name: localai_data

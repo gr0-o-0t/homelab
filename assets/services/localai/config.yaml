@@ -1,0 +1,33 @@
+vars:
+  THREADS:
+    value: "16"
+    required: false
+    description: "llama.cpp threads: the core node's physical core count"
+  MAX_ACTIVE_BACKENDS:
+    value: "2"
+    required: false
+    description: "Models kept loaded at once; the least recently used is unloaded"
+  IDLE_TIMEOUT:
+    value: "30m"
+    required: false
+    description: "Unload a model after this long without requests"
+  BUSY_TIMEOUT:
+    value: "15m"
+    required: false
+    description: "Kill a backend stuck on one request this long"
+  PRELOAD_MODELS:
+    value: ""
+    required: false
+    description: "JSON list of gallery models installed at start, e.g. [{\"id\":\"localai@qwen3-8b\"}]"
+  UPLOAD_LIMIT_MB:
+    value: "100"
+    required: false
+    description: "Max upload size in MB (audio transcription, images)"
+
+secrets:
+  LOCALAI_API_KEY:
+    required: true
+    description: "Bearer key for the API and the web UI login"
+
+ports:
+  - 8080
