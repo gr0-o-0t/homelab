@@ -1,0 +1,6 @@
+vars: {}
+
+# No admin secret: the first visit to /admin sets the admin password.
+secrets: {}
+ports:
+  - 8334

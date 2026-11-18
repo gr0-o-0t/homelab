@@ -1,0 +1,54 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Service: Filestash (web file manager for S3, SFTP, WebDAV, FTP, Git, ...)
+# https://www.filestash.app/docs/install-and-upgrade/#door-2
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Adapted from upstream's compose file:
+#   - No published ports; Caddy routes filestash.<home>.<domain> (config.yaml).
+#   - Collabora (the "wopi" office server) is reached by the browser through
+#     the same host: caddy.routes.conf sends its paths to filestash-wopi, so
+#     OFFICE_REWRITE_URL is the public URL rather than 127.0.0.1:9980.
+#   - Collabora runs its stock entrypoint as the `cool` user. Upstream's
+#     `user: root` + a startup `curl` of a branding stylesheet from a gist is
+#     dropped: that only restyles the editor and fetches remote code at boot.
+
+networks:
+  home-services:
+    name: home-services
+    external: true
+
+services:
+  filestash:
+    image: machines/filestash:latest
+    container_name: filestash
+    restart: always
+    environment:
+      APPLICATION_URL: filestash.${HOME_SUBDOMAIN}.${DOMAIN}
+      CANARY: "true"
+      # Where Filestash fetches Collabora's discovery document (server side).
+      OFFICE_URL: http://filestash-wopi:9980
+      # Where Collabora calls back into Filestash's WOPI endpoints.
+      OFFICE_FILESTASH_URL: http://filestash:8334
+      # What the browser loads the editor from (proxied by caddy.routes.conf).
+      OFFICE_REWRITE_URL: https://filestash.${HOME_SUBDOMAIN}.${DOMAIN}
+    volumes:
+      - filestash-state:/app/data/state/
+    networks:
+      - home-services
+
+  filestash-wopi:
+    image: collabora/code:24.04.10.2.1
+    container_name: filestash-wopi
+    restart: always
+    environment:
+      # TLS ends at Caddy; Collabora serves plain HTTP but builds https URLs.
+      extra_params: --o:ssl.enable=false --o:ssl.termination=true
+      server_name: filestash.${HOME_SUBDOMAIN}.${DOMAIN}
+      # The only WOPI host allowed to open documents: Filestash itself.
+      aliasgroup1: http://filestash:8334
+    networks:
+      - home-services
+
+volumes:
+  filestash-state:
+    name: filestash_state

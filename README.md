@@ -330,6 +330,7 @@ lists the catalog; `homelab status <service>` shows what a service declares.
 | `dbx` | `dbx.home.*` | dbx (lightweight, cross-platform database client) |
 | `dozzle` | `dozzle.home.*` | Dozzle (real-time Docker log viewer) |
 | `excalidraw` | `excalidraw.home.*` | Excalidraw (virtual whiteboard for sketching diagrams) |
+| `filestash` | `filestash.home.*` | Filestash (web file manager for S3, SFTP, WebDAV, FTP; Collabora office editing) |
 | `forgejo` | `forgejo.home.*`, `:22/tcp` | Forgejo (self-hosted Git service, Gitea fork) |
 | `garage` | – | shared, installed on demand |
 | `gitea` | `gitea.home.*`, `:2222/tcp` | Gitea (self-hosted Git service) |
