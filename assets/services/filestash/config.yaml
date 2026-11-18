@@ -1,4 +1,8 @@
-vars: {}
+vars:
+  HOME_PATH:
+    value: "/home"
+    required: false
+    description: "Host folder shown at /home in the local backend (core node)"
 
 # No admin secret: the first visit to /admin sets the admin password.
 secrets: {}

@@ -33,6 +33,11 @@ services:
       OFFICE_REWRITE_URL: https://filestash.${HOME_SUBDOMAIN}.${DOMAIN}
     volumes:
       - filestash-state:/app/data/state/
+      # The core node's home folders, browsed with the "local" backend at
+      # /home. The image runs as uid 1000, the first user's uid on the host,
+      # so that user's files are read-write and other users' follow their
+      # own permissions. The host path pins this container to the core node.
+      - ${HOME_PATH:-/home}:/home
     networks:
       - home-services
 
