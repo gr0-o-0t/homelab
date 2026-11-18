@@ -3,6 +3,25 @@
 Notable changes per release. The release workflow publishes the section
 matching the pushed tag as the GitHub release notes.
 
+## v0.5.8-dev.1 — 2026-11-18
+
+Development prerelease of v0.5.8 (does not move `:latest`).
+
+### Added
+
+- `localai`: OpenAI-compatible API for local LLMs, embeddings, images and
+  audio (`localai.home.*`), CPU image on the core node. Threads default to
+  16; at most two models stay loaded (least recently used unloads), idle
+  models unload after 30m and a stuck backend is killed after 15m. Set
+  `LOCALAI_API_KEY` with `homelab setup localai`.
+
+### Fixed
+
+- `filestash`: the local backend shows the core node's home folders at
+  `/home` (`HOME_PATH`, default `/home`), writable as uid 1000. Installed
+  services keep their files: add the mount to an installed Filestash with
+  `homelab edit filestash docker-compose.yml`.
+
 ## v0.5.7 — 2026-11-18
 
 Patch release: the v0.5.7-dev.1 prerelease, verified on the live cluster,
