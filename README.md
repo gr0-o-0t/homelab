@@ -323,7 +323,7 @@ lists the catalog; `homelab status <service>` shows what a service declares.
 | `appflowy` | `appflowy.home.*` | AppFlowy (self-hosted Notion alternative — notes, docs, databases) |
 | `audiobookshelf` | `audiobookshelf.home.*` | Audiobookshelf (self-hosted audiobook and podcast server) |
 | `bazarr` | `bazarr.home.*` | Bazarr (subtitle management companion for Sonarr and Radarr) |
-| `beszel-hub` | `beszel-hub.home.*` | Beszel Hub (lightweight server monitoring dashboard) |
+| `beszel-hub` | `beszel-hub.home.*` | Beszel Hub (lightweight server monitoring dashboard, with an agent on every node) |
 | `bifrost` | `bifrost.home.*` | Bifrost (OpenAI-compatible AI gateway + web UI) |
 | `copyparty` | `copyparty.home.*` | Copyparty (file server with upload, search, and media streaming) |
 | `cyberchef` | `cyberchef.home.*` | CyberChef (web app for encryption, encoding, compression and more) |
@@ -354,6 +354,7 @@ lists the catalog; `homelab status <service>` shows what a service declares.
 | `miniflux` | `miniflux.home.*` | Miniflux (minimalist feed reader) |
 | `navidrome` | `navidrome.home.*` | Navidrome (self-hosted music streaming server) |
 | `netbox` | `netbox.home.*` | NetBox (network source of truth & IPAM/DCIM) |
+| `netdata` | `netdata.home.*` | Netdata (real-time metrics; a parent on minis, an agent on every node) |
 | `nextcloud` | `nextcloud.home.*` | Nextcloud (self-hosted cloud storage and collaboration) |
 | `ntfy` | `ntfy.home.*` | ntfy (self-hosted push notification service) |
 | `ollama` | `ollama.home.*` | Ollama (local large language model runner) |

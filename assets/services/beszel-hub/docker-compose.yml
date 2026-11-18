@@ -2,6 +2,20 @@
 # Service: Beszel Hub (lightweight server monitoring dashboard)
 # https://github.com/henrygd/beszel
 # ─────────────────────────────────────────────────────────────────────────────
+# The hub runs on the core node; beszel-agent runs on every node
+# (deploy.mode: global, joining nodes included) and connects to the hub over
+# home-services by WebSocket, registering itself with a universal token.
+#
+# First run: `homelab up beszel-hub`, create the admin user, then in the hub
+# copy the public key (Add System) and enable a universal token
+# (/settings/tokens). Set them with `homelab setup beszel-hub` (BESZEL_KEY,
+# BESZEL_TOKEN) and `homelab up beszel-hub` again; the agents restart until
+# both are set.
+#
+# Swarm has no `network_mode: host`, so an agent reports its container's
+# network interface rather than the host's; CPU, memory, disk, sensors and
+# per-container stats are the host's.
+# ─────────────────────────────────────────────────────────────────────────────
 
 networks:
   home-services:
@@ -25,6 +39,23 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
+
+  beszel-agent:
+    image: henrygd/beszel-agent:latest
+    container_name: beszel-agent
+    hostname: "{{.Node.Hostname}}"   # the system's name in the hub
+    restart: always
+    environment:
+      HUB_URL: http://beszel-hub:8090
+      KEY: ${BESZEL_KEY}
+      TOKEN: ${BESZEL_TOKEN}
+      DISABLE_SSH: "true"   # WebSocket only: the hub never dials in
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - home-services
+    deploy:
+      mode: global
 
 volumes:
   beszel-hub-data:

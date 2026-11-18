@@ -2,6 +2,13 @@ vars:
   TZ:
     value: "UTC"
     required: false
-secrets: {}
+  BESZEL_KEY:
+    value: ""
+    required: false
+    description: "Hub public key (ssh-ed25519 …), shown under Add System in the hub; the agents need it"
+secrets:
+  BESZEL_TOKEN:
+    required: false
+    description: "Universal token from the hub's /settings/tokens; agents register with it"
 ports:
   - 8090
