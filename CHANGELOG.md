@@ -3,6 +3,50 @@
 Notable changes per release. The release workflow publishes the section
 matching the pushed tag as the GitHub release notes.
 
+## v0.5.7-dev.1 — 2026-11-18
+
+Development prerelease of v0.5.7 (does not move `:latest`).
+
+### Added
+
+- `deploy.mode: global` in a catalog compose file runs the container on every
+  node, joining nodes included, unpinned (its host paths and volumes are each
+  node's own). `down`/`stop` remove it, keeping its volumes; `up`/`start`, and
+  `restart` of a stopped service, create it again; a backup leaves it running.
+- `security_opt: apparmor:unconfined` is honoured (Swarm AppArmor disabled).
+- `netdata`: a parent on the core node (dashboard and history,
+  `netdata.home.*`) and an agent on every node streaming to it with a
+  homelab-generated key. No host networking or `pid: host` under Swarm: host
+  NIC charts and host process attribution are missing.
+- `beszel-hub` gains a `beszel-agent` on every node, registering with the hub
+  by universal token. Set `BESZEL_KEY` and `BESZEL_TOKEN` from the hub with
+  `homelab setup beszel-hub` after its first start, then `homelab up
+  beszel-hub`; stop any hand-run beszel-agent first.
+- `filestash`: web file manager (S3, SFTP, WebDAV, FTP) with Collabora office
+  editing on the same hostname.
+
+### Fixed
+
+- State files, the vault included, are written atomically and privately.
+- A late `init`/`join` failure removes the agent it started, so a retry works.
+- `delete` keeps a service's postgres owner role as NOLOGIN instead of failing,
+  and cleans up a service whose folder was removed by hand; extension names
+  are quoted.
+- A service whose name maps to an installed one's database password key is
+  refused (`new`, `add`, `files install`).
+- `doctor`, `status --check`, `enable` without `config.yaml` and a failed
+  `disable` reload exit non-zero.
+- `restore` of an uninstalled service is refused before the prompt; a failed
+  database dump removes its partial file.
+- Log and job output read lines up to 1 MiB; the TUI log view no longer sticks
+  on "refreshing"; setup form loads time out.
+
+### Internal
+
+- Dependency bumps (Go modules, Docker base image, cloudflared, CI actions);
+  CI lints with Go 1.27; brittle tests and dead helpers removed; reference
+  detail moved from CLAUDE.md to `docs/reference/`.
+
 ## v0.5.6 — 2026-11-13
 
 Patch release.
