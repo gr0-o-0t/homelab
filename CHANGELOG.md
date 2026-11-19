@@ -3,6 +3,33 @@
 Notable changes per release. The release workflow publishes the section
 matching the pushed tag as the GitHub release notes.
 
+## v0.6.0 — 2026-11-19
+
+Minor release: the v0.6.0-dev.1 prerelease, verified on the live cluster
+through an engine restart and a reboot of the core node. Upgrade with
+`homelab upgrade`.
+
+### Changed
+
+- The leader agent runs as the Swarm service `homelab_agent` instead of the
+  `homelab-agent` container, so it comes back after any engine restart or
+  reboot of the core node by itself. A plain container on the overlay could
+  fail its network attach at boot (a stale Swarm IPAM address), which the
+  engine never retries, and that left the cluster without its CLI. Worker
+  agents stay plain containers: they are not on the overlay.
+- `homelab upgrade` updates the leader service (stop-first, rolled back by
+  Swarm if the new agent exits within 30 s). The first upgrade from v0.5.x
+  restarts the leader twice: the old swap, then the new agent converts
+  itself into the service. The CLI waits up to 3 min for the leader.
+- `agent` is a reserved service name.
+
+### Recovery
+
+- With the leader agent down: `docker service ps homelab_agent`,
+  `docker service logs homelab_agent`, `docker service update --force
+  homelab_agent` on the core node. See "Recovering a leader with no agent"
+  in `docs/reference/cli.md`.
+
 ## v0.6.0-dev.1 — 2026-11-19
 
 Development prerelease of v0.6.0 (does not move `:latest`). Install it with
