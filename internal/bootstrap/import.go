@@ -57,6 +57,10 @@ func (b *builtImport) install(ctx context.Context, api swarm.API) error {
 	if err != nil {
 		return err
 	}
+	id, err := AgentContainerID(ctx, api)
+	if err != nil {
+		return fmt.Errorf("finding the agent to copy the imported state into: %w", err)
+	}
 	// Streamed: a service may bind-mount a large directory.
 	pr, pw := io.Pipe()
 	tarDone := make(chan error, 1)
@@ -65,7 +69,7 @@ func (b *builtImport) install(ctx context.Context, api swarm.API) error {
 		_ = pw.CloseWithError(err)
 		tarDone <- err
 	}()
-	err = api.CopyToContainer(ctx, AgentContainer, agentstate.Root, pr, container.CopyToContainerOptions{})
+	err = api.CopyToContainer(ctx, id, agentstate.Root, pr, container.CopyToContainerOptions{})
 	_ = pr.CloseWithError(io.ErrClosedPipe) // unblocks the writer if the copy stopped reading
 	terr := <-tarDone
 	if err != nil {
@@ -178,6 +182,9 @@ func removeAgentAndState(ctx context.Context, api swarm.API, out io.Writer, ownV
 	if errdefs.IsNotFound(cerr) {
 		cerr = nil
 	}
+	if serr := removeLeaderService(ctx, api); serr != nil {
+		cerr = errors.Join(cerr, serr)
+	}
 	verr := error(nil)
 	if cerr == nil && !ownVolume {
 		_, _ = fmt.Fprintf(out, "Setup failed: removed the agent; its state volume %s predates this run and is kept.\n",
@@ -188,8 +195,8 @@ func removeAgentAndState(ctx context.Context, api swarm.API, out io.Writer, ownV
 		verr = api.VolumeRemove(ctx, StateVolume, true)
 	}
 	if cerr != nil || verr != nil {
-		_, _ = fmt.Fprintf(out, "warning: could not remove the half-set-up agent (%v) — run `docker rm -f %s && docker volume rm %s` "+
-			"before retrying; data volumes are untouched\n", errors.Join(cerr, verr), AgentContainer, StateVolume)
+		_, _ = fmt.Fprintf(out, "warning: could not remove the half-set-up agent (%v) — run `docker service rm %s; docker rm -f %s; docker volume rm %s` "+
+			"before retrying; data volumes are untouched\n", errors.Join(cerr, verr), AgentService, AgentContainer, StateVolume)
 		return
 	}
 	_, _ = fmt.Fprintf(out, "Setup failed: removed the agent and its state volume (%s) so a retry starts clean; "+

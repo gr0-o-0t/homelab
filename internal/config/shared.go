@@ -163,10 +163,17 @@ func ReleaseRedisDB(configDir, svc, name string) error {
 // ("../core", "*", a space) is refused before it reaches any of them.
 var serviceNameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
 
+// ReservedServiceName is the leader agent's own stack (the homelab_agent
+// Swarm service): no service may take it.
+const ReservedServiceName = "agent"
+
 // ValidServiceName reports whether name is a legal service name.
 func ValidServiceName(name string) error {
 	if !serviceNameRE.MatchString(name) {
 		return fmt.Errorf("invalid service name %q: use lowercase letters, digits, '-' and '_'", name)
+	}
+	if name == ReservedServiceName {
+		return fmt.Errorf("service name %q is reserved for the homelab agent", name)
 	}
 	return nil
 }

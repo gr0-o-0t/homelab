@@ -27,11 +27,43 @@ advertise and data-path address is its Tailscale IPv4. The overlay
 
 ## The agent (`internal/agent`, `internal/bootstrap`)
 
-`homelab agent` runs in the `homelab-agent` container (`docker run`, restart
-`unless-stopped`, docker socket mounted, state volume `homelab-agent` at
-`/var/lib/homelab`, shim volume `homelab-shim` at `/hl`; the leader also
-mounts `homelab-backups` at `/var/lib/homelab-backups`). It starts at boot
-with nobody logged in.
+`homelab agent` runs with the docker socket mounted, state volume
+`homelab-agent` at `/var/lib/homelab` and shim volume `homelab-shim` at `/hl`.
+It starts at boot with nobody logged in.
+
+- **Leader:** the Swarm service `homelab_agent` (`bootstrap.LeaderServiceSpec`):
+  1 replica pinned to `node.role==manager` and the core label, restart
+  condition `any`, on `home-services` as `homelab-edge`, and also mounting
+  `homelab-backups` at `/var/lib/homelab-backups`. Updates and rollbacks are
+  stop-first (two leader agents would run the same tsnet node from one state),
+  with a 30 s monitor and rollback on failure. It is a service, not a
+  container, because a plain container on the overlay is started at engine
+  boot through a network attachment the engine never retries (a stale IPAM
+  address once left the cluster with no agent); Swarm schedules a task's
+  network and retries it forever. The labels `homelab.service` and stack
+  namespace are `agent`, a reserved service name (`config.ReservedServiceName`).
+- **Worker:** the plain `homelab-agent` container (`docker run`, restart
+  `unless-stopped`, no network), so its start at boot never touches the
+  overlay.
+
+`bootstrap.AgentContainerID` finds this engine's agent container either way
+(the running `homelab_agent` task, else `homelab-agent`): `version --agent`,
+`logs`, `caddy logs`, `backup`'s helper image, seeding and the tailnet layer's
+state all go through it.
+
+A leader agent that starts in a plain `homelab-agent` container (an older
+`init`, the first upgrade onto the service, the manual recovery) converts
+itself before starting anything (`bootstrap.PrepareLeader`, the agent's
+`BeforeLeader`): it waits out a replacement still in progress (a running
+`homelab-agent-replace` or a `homelab-agent-old`, up to 2 min; past that it
+runs as a plain container for this boot and logs why), then starts the
+replace helper with `to_service`. The helper (`RunConvert`) refuses off a
+manager, stops the container and renames it `homelab-agent-old`, creates the
+service on the container's image (or reuses an idle one; a service already
+running a task is left alone and the container only removes itself), waits
+for the task to run steadily, then removes the old container and itself. On
+failure it removes the service (or restores it) and its task before the old
+container is renamed back and started.
 
 The leader, in order: creates the overlay, lowers Swarm's task history to one finished task per service (so stopped and replaced task containers do not pile up; `init` sets it too), installs the shim, starts the edge
 (Caddy on the tsnet node; admin API on a unix socket), points the wildcard DNS

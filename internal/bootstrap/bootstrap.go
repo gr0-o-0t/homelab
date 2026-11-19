@@ -250,22 +250,39 @@ func seedCmd(info SeedInfo) []string {
 	return append([]string{"homelab", "agent-seed", "--root", agentstate.Root}, info.args()...)
 }
 
-// restartAgent restarts the agent so it reads what was seeded.
+// restartAgent restarts the agent so it reads what was seeded: the leader
+// service by a forced update (a new task), a worker's container in place.
 func restartAgent(ctx context.Context, api swarm.API) error {
+	s, ok, err := leaderService(ctx, api)
+	if err != nil {
+		return err
+	}
+	if ok {
+		spec := s.Spec
+		spec.TaskTemplate.ForceUpdate++
+		if _, err := api.ServiceUpdate(ctx, s.ID, s.Version, spec, dswarm.ServiceUpdateOptions{}); err != nil {
+			return fmt.Errorf("restarting the agent after seeding its vault: %w", err)
+		}
+		return nil
+	}
 	if err := api.ContainerRestart(ctx, AgentContainer, container.StopOptions{}); err != nil {
 		return fmt.Errorf("restarting the agent after seeding its vault: %w", err)
 	}
 	return nil
 }
 
-// seedExec runs cmd in the agent container with values, as JSON, on its
+// seedExec runs cmd in this engine's agent container (AgentContainerID) with values, as JSON, on its
 // stdin — the only way secrets travel into the container.
 func seedExec(ctx context.Context, api swarm.API, cmd []string, values any) error {
 	payload, err := json.Marshal(values)
 	if err != nil {
 		return err
 	}
-	ex, err := api.ContainerExecCreate(ctx, AgentContainer, container.ExecOptions{
+	id, err := AgentContainerID(ctx, api)
+	if err != nil {
+		return fmt.Errorf("seeding the agent's vault: finding the agent: %w", err)
+	}
+	ex, err := api.ContainerExecCreate(ctx, id, container.ExecOptions{
 		Cmd: cmd, AttachStdin: true, AttachStdout: true, AttachStderr: true,
 	})
 	if err != nil {
@@ -573,7 +590,10 @@ func (in *Init) Do(ctx context.Context) (err error) {
 			removeAgentAndState(context.WithoutCancel(ctx), in.API, in.Out, !volumeExisted)
 		}
 	}()
-	if err := StartAgent(ctx, in.API, in.Image, true); err != nil {
+	if err := StartLeaderService(ctx, in.API, in.Image); err != nil {
+		return err
+	}
+	if _, err := waitLeaderTask(ctx, in.API, Sleep); err != nil {
 		return err
 	}
 	secret, err := NewClusterSecret(in.Rand)

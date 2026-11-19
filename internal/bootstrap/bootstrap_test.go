@@ -64,6 +64,7 @@ func newInit(t *testing.T, ip string) (*Init, *initHarness) {
 	t.Helper()
 	h := &initHarness{fake: swarmtest.New(), kr: newKeyring()}
 	h.fake.SetInfo(system.Info{Name: "mini1"})
+	h.fake.RunServiceTasks()
 	require.NoError(t, h.kr.Set("", "TS_AUTHKEY", testTSKey))
 	in := &Init{
 		API:      h.fake,
@@ -95,29 +96,26 @@ func TestInit_SwarmInitOnTailnetIP(t *testing.T) {
 	require.Len(t, nodes, 1)
 	assert.Equal(t, "core", nodes[0].Spec.Labels["homelab.role"])
 
-	created := h.fake.Created()
-	require.Len(t, created, 1)
-	c := created[0]
-	assert.Equal(t, AgentContainer, c.Name)
-	assert.True(t, c.Started)
-	assert.Equal(t, "unless-stopped", string(c.HostConfig.RestartPolicy.Name))
-	assert.ElementsMatch(t, []string{
-		"/var/run/docker.sock:/var/run/docker.sock",
-		"homelab-agent:/var/lib/homelab",
-		"homelab-shim:/hl",
-		"homelab-backups:/var/lib/homelab-backups",
-	}, c.HostConfig.Binds)
-	ep := c.Networking.EndpointsConfig["home-services"]
-	require.NotNil(t, ep, "the leader agent joins home-services")
-	assert.Equal(t, []string{"homelab-edge"}, ep.Aliases)
-	assert.Contains(t, c.Config.Env, "XDG_DATA_HOME=/var/lib/homelab/xdg/data")
-	assert.Contains(t, c.Config.Env, "XDG_CONFIG_HOME=/var/lib/homelab/xdg/config")
-	assert.Equal(t, []string{"agent"}, []string(c.Config.Cmd))
-	assert.Equal(t, "ghcr.io/gr0-o-0t/homelab:v1.2.3", c.Config.Image)
+	// The leader agent is the Swarm service, not a plain container.
+	svcs, err := h.fake.ServiceList(context.Background(), dswarm.ServiceListOptions{})
+	require.NoError(t, err)
+	require.Len(t, svcs, 1)
+	assert.Equal(t, LeaderServiceSpec("ghcr.io/gr0-o-0t/homelab:v1.2.3").TaskTemplate.ContainerSpec,
+		svcs[0].Spec.TaskTemplate.ContainerSpec)
+	log := strings.Join(h.fake.CallLog(), "\n")
+	assert.NotContains(t, log, "ContainerCreate "+AgentContainer)
+
+	// Seeded inside its task, then restarted (a new task) to read it.
+	execs := h.fake.Execs()
+	require.Len(t, execs, 1)
+	assert.Len(t, execs[0].Container, 64, "seeded in the task container, by ID")
+	assert.Equal(t, uint64(1), svcs[0].Spec.TaskTemplate.ForceUpdate)
+	tasks := h.fake.Created()
+	require.Len(t, tasks, 1)
+	assert.NotEqual(t, execs[0].Container, tasks[0].ID, "the seeded task was replaced")
 
 	// the overlay exists before the agent is attached to it
-	log := strings.Join(h.fake.CallLog(), "\n")
-	assert.Less(t, strings.Index(log, "NetworkCreate"), strings.Index(log, "ContainerCreate"))
+	assert.Less(t, strings.Index(log, "NetworkCreate"), strings.Index(log, "ServiceCreate "+AgentService))
 
 	assert.Equal(t, "https://homelab."+testSuffix+":7443", h.saved)
 	secret, err := h.kr.Get("", "CLUSTER_SECRET")
@@ -155,18 +153,18 @@ func TestInit_SecretNeverInRunArgs(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, secret)
 
-	created := h.fake.Created()
-	require.Len(t, created, 1)
-	spec, err := json.Marshal(created[0])
+	svcs, err := h.fake.ServiceList(context.Background(), dswarm.ServiceListOptions{})
+	require.NoError(t, err)
+	require.Len(t, svcs, 1)
+	spec, err := json.Marshal(svcs[0].Spec)
 	require.NoError(t, err)
 	for _, s := range []string{secret, testTSKey, "cf-tunnel-SECRET"} {
-		assert.NotContains(t, string(spec), s, "the agent container spec carries a secret")
+		assert.NotContains(t, string(spec), s, "the agent service spec carries a secret")
 	}
 
 	execs := h.fake.Execs()
 	require.Len(t, execs, 1)
 	e := execs[0]
-	assert.Equal(t, AgentContainer, e.Container)
 	argv, _ := json.Marshal(e.Options)
 	for _, s := range []string{secret, testTSKey, "cf-tunnel-SECRET"} {
 		assert.NotContains(t, string(argv), s, "the seed exec's argv/env carries a secret")
@@ -177,7 +175,7 @@ func TestInit_SecretNeverInRunArgs(t *testing.T) {
 	assert.Equal(t, secret, seeded["CLUSTER_SECRET"])
 	assert.Equal(t, testTSKey, seeded["TS_AUTHKEY"])
 	assert.Equal(t, "cf-tunnel-SECRET", seeded["CF_TUNNEL_TOKEN"])
-	assert.Equal(t, 1, created[0].Restarts, "the agent restarts to read the seeded vault")
+	assert.Equal(t, uint64(1), svcs[0].Spec.TaskTemplate.ForceUpdate, "the agent restarts to read the seeded vault")
 }
 
 func TestInit_WarnsAboutUFW(t *testing.T) {
@@ -417,7 +415,7 @@ func TestInit_LateFailureRemovesAgent(t *testing.T) {
 	h.fake.SetExecExitCode(1) // agent-seed fails
 	require.Error(t, in.Do(context.Background()))
 	log := h.fake.CallLog()
-	assert.Contains(t, log, "ContainerRemove "+AgentContainer)
+	assert.Contains(t, log, "ServiceRemove "+AgentService)
 	assert.Contains(t, log, "VolumeRemove "+StateVolume)
 	assert.Empty(t, h.fake.Created(), "no agent container is left behind")
 	assert.Contains(t, h.out.String(), "removed the agent and its state volume")

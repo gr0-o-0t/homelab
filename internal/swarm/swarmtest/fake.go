@@ -8,6 +8,7 @@ import (
 	"io"
 	"maps"
 	"net"
+	"reflect"
 	"slices"
 	"sort"
 	"strconv"
@@ -75,6 +76,8 @@ type Fake struct {
 	startErr     map[string]error // image → ContainerStart error
 	crash        map[string]bool  // image → crash-looping once started
 	queries      []bool           // QueryRegistry of each ServiceCreate/Update, in order
+	runTasks     bool             // services get a task container (RunServiceTasks)
+	failTasks    map[string]bool  // service name → its tasks never start
 }
 
 // New returns an empty Fake.
@@ -266,6 +269,7 @@ func (f *Fake) ServiceCreate(_ context.Context, spec swarm.ServiceSpec, opts swa
 	}
 	id := f.nextID("svc")
 	f.services[id] = swarm.Service{ID: id, Meta: swarm.Meta{Version: swarm.Version{Index: 1}}, Spec: spec}
+	f.syncTask(f.services[id])
 	return swarm.ServiceCreateResponse{ID: id}, nil
 }
 
@@ -281,15 +285,22 @@ func (f *Fake) ServiceUpdate(_ context.Context, id string, version swarm.Version
 	if version.Index != s.Version.Index {
 		return swarm.ServiceUpdateResponse{}, errors.New("swarmtest: update out of sequence")
 	}
-	if err, ok := f.failUpdate[s.ID]; ok {
-		delete(f.failUpdate, s.ID)
-		return swarm.ServiceUpdateResponse{}, err
+	for _, k := range []string{s.ID, s.Spec.Name} {
+		if err, ok := f.failUpdate[k]; ok {
+			delete(f.failUpdate, k)
+			return swarm.ServiceUpdateResponse{}, err
+		}
 	}
 	prev := s.Spec
 	s.PreviousSpec = &prev
 	s.Spec = spec
 	s.Version.Index++
 	f.services[s.ID] = s
+	// As Swarm: an unchanged task template (same image reference, same
+	// ForceUpdate) keeps the running task; replicas alone scale it.
+	if !reflect.DeepEqual(prev.TaskTemplate, spec.TaskTemplate) || !reflect.DeepEqual(prev.Mode, spec.Mode) {
+		f.syncTask(s)
+	}
 	return swarm.ServiceUpdateResponse{}, nil
 }
 
@@ -302,7 +313,61 @@ func (f *Fake) ServiceRemove(_ context.Context, id string) error {
 		return fmt.Errorf("swarmtest: service %q not found: %w", id, errdefs.ErrNotFound)
 	}
 	delete(f.services, s.ID)
+	s.Spec.Mode = swarm.ServiceMode{} // no replicas: its task goes
+	f.syncTask(s)
 	return nil
+}
+
+// TaskContainerLabel is the label marking a task container with its
+// service's name (as Swarm does).
+const TaskContainerLabel = "com.docker.swarm.service.name"
+
+// RunServiceTasks makes every service created, updated or removed from now
+// on behave like Swarm's: a replicated service with replicas gets one task
+// container (a new one, new ID, on each update; started unless FailStart
+// covers its image), listed by ContainerList and inspectable; removing the
+// service or scaling it to zero removes it.
+func (f *Fake) RunServiceTasks() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.runTasks = true
+}
+
+func (f *Fake) syncTask(s swarm.Service) {
+	if !f.runTasks {
+		return
+	}
+	f.created = slices.DeleteFunc(f.created, func(c *CreatedContainer) bool {
+		return c.task && c.Config.Labels[TaskContainerLabel] == s.Spec.Name
+	})
+	m := s.Spec.Mode.Replicated
+	if m == nil || m.Replicas == nil || *m.Replicas == 0 || s.Spec.TaskTemplate.ContainerSpec == nil {
+		return
+	}
+	seq := f.nextSeq()
+	c := &CreatedContainer{
+		Name: fmt.Sprintf("%s.1.task%d", s.Spec.Name, seq),
+		ID:   fmt.Sprintf("%064x", seq),
+		Config: container.Config{
+			Image:  s.Spec.TaskTemplate.ContainerSpec.Image,
+			Labels: map[string]string{TaskContainerLabel: s.Spec.Name, "com.docker.swarm.service.id": s.ID},
+		},
+		StartedAt: fmt.Sprintf("2026-11-10T00:00:%02d.000000000Z", seq%60),
+		task:      true,
+	}
+	c.Started = f.startErr[c.Config.Image] == nil && !f.failTasks[s.Spec.Name]
+	f.created = append(f.created, c)
+}
+
+// FailTasks makes the tasks of service name, created from now on, fail to
+// start (exited at once), as a task whose network attach or start fails.
+func (f *Fake) FailTasks(name string, on bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.failTasks == nil {
+		f.failTasks = map[string]bool{}
+	}
+	f.failTasks[name] = on
 }
 
 // TaskList supports the service (ID or name), node (ID or hostname),
@@ -768,6 +833,23 @@ func (f *Fake) ContainerList(_ context.Context, o container.ListOptions) ([]cont
 		}
 		out = append(out, c)
 	}
+	for _, c := range f.created {
+		if !c.task {
+			continue
+		}
+		state := container.StateExited
+		if c.Started {
+			state = container.StateRunning
+		}
+		if !matchCommon(o.Filters, c.ID, []string{c.Name}, c.Config.Labels) {
+			continue
+		}
+		if vs := o.Filters.Get("status"); len(vs) > 0 && !slices.Contains(vs, state) {
+			continue
+		}
+		out = append(out, container.Summary{ID: c.ID, Names: []string{"/" + c.Name}, Image: c.Config.Image,
+			Labels: maps.Clone(c.Config.Labels), State: state})
+	}
 	return out, nil
 }
 
@@ -794,6 +876,7 @@ type CreatedContainer struct {
 
 	imageEnv    []string
 	imageLabels map[string]string
+	task        bool // a service's task container (RunServiceTasks)
 }
 
 // SetInfo sets what Info returns.
@@ -930,10 +1013,11 @@ func (f *Fake) nextSeq() int {
 	return f.seq
 }
 
-// createdByRef finds a created container by name or ID, as the engine does.
+// createdByRef finds a created container by name, ID or a 12-character
+// ID prefix (a container's own hostname), as the engine does.
 func (f *Fake) createdByRef(ref string) (*CreatedContainer, error) {
 	for _, c := range f.created {
-		if c.Name == ref || (c.ID != "" && c.ID == ref) {
+		if c.Name == ref || (c.ID != "" && (c.ID == ref || len(ref) >= 12 && strings.HasPrefix(c.ID, ref))) {
 			return c, nil
 		}
 	}

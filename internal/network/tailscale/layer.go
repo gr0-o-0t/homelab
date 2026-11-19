@@ -28,6 +28,7 @@ type Layer struct {
 	network.HostTemplate
 	repoRoot string
 	runner   *run.Commander
+	state    func() string
 }
 
 // New creates a new Tailscale layer. The env func is unused: the layer reads
@@ -47,8 +48,15 @@ func (l *Layer) Label() string         { return "Tailscale mesh VPN" }
 func (l *Layer) ContainerName() string { return containerName }
 func (l *Layer) Flag() string          { return "" } // the default: bare `homelab enable`
 
+// WithState sets where Status reads the agent's state: on the leader the
+// agent is the homelab_agent service's task, with no fixed container name.
+func (l *Layer) WithState(fn func() string) *Layer { l.state = fn; return l }
+
 // Status returns the agent container's state.
 func (l *Layer) Status() network.Status {
+	if l.state != nil {
+		return network.Status{ContainerState: l.state()}
+	}
 	if l.runner == nil {
 		return network.Status{ContainerState: "not found"}
 	}

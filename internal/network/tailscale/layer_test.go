@@ -31,3 +31,10 @@ func TestLayer_ServiceAddresses_UsesSiteHost(t *testing.T) {
 	require.Len(t, addrs, 1)
 	assert.Equal(t, "https://vault.home.example.com", addrs[0].URL)
 }
+
+// The leader agent runs as a Swarm service with no fixed container name:
+// its state comes from the hook, as cloudflared's does.
+func TestLayer_StatusFromHook(t *testing.T) {
+	l := New("/test/repo", nil, nil).WithState(func() string { return "running" })
+	assert.Equal(t, "running", l.Status().ContainerState)
+}

@@ -64,8 +64,26 @@ func init() {
 // agentLogs prints the leader agent container's logs: Caddy, the tailnet
 // node and the agent itself log there. flags are `docker logs` flags.
 func agentLogs(stdout, stderr io.Writer, flags []string) error {
-	args := append(append([]string{"logs"}, flags...), bootstrap.AgentContainer)
+	args := append(append([]string{"logs"}, flags...), agentContainerRef())
 	return serviceLogsCLI(cmdContext(), args, stdout, stderr)
+}
+
+// agentContainerRef is this node's agent container for the docker CLI: the
+// leader service's task (bootstrap.AgentContainerID), else the
+// homelab-agent name, which also stands in when Docker cannot be asked.
+func agentContainerRef() string {
+	api, err := newSwarmAPI()
+	if err != nil {
+		return bootstrap.AgentContainer
+	}
+	if c, ok := api.(io.Closer); ok {
+		defer func() { _ = c.Close() }()
+	}
+	id, err := bootstrap.AgentContainerID(cmdContext(), api)
+	if err != nil {
+		return bootstrap.AgentContainer
+	}
+	return id
 }
 
 var reloadCmd = &cobra.Command{

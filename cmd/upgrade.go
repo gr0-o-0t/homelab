@@ -319,11 +319,12 @@ func rootFlagsOf(argv []string) []string {
 // verifyLeader waits for a new leader agent (bootstrap.WaitReplaced) and
 // reports its version: matching want (when known), or why not.
 func verifyLeader(ctx context.Context, c *remote.Client, before bootstrap.AgentID, want, cli string, w io.Writer) (int, error) {
-	_, _ = fmt.Fprintf(w, "agent restarting — reconnecting to the leader (up to %s) …\n", bootstrap.WaitBack)
+	_, _ = fmt.Fprintf(w, "agent restarting — reconnecting to the leader (up to %s) …\n", bootstrap.LeaderWaitBack)
 	got, err := bootstrap.WaitReplaced(ctx, func(ctx context.Context) (bootstrap.AgentID, error) { return upgradeAsk(ctx, c) },
-		before, want, upgradeSleep)
+		before, want, bootstrap.LeaderWaitBack, upgradeSleep)
 	if err != nil {
-		return 1, fmt.Errorf("the leader: %w", err)
+		return 1, fmt.Errorf("the leader: %w (on the leader: `docker service ps %s`, `docker service logs %s`)",
+			err, bootstrap.AgentService, bootstrap.AgentService)
 	}
 	_, _ = fmt.Fprintf(w, "The leader agent runs %s.\n", got.Version)
 	if got.Version != cli {

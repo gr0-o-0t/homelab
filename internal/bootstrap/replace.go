@@ -72,6 +72,9 @@ type ReplaceSpec struct {
 	HostConfig container.HostConfig     `json:"host_config"`
 	Networking network.NetworkingConfig `json:"networking"`
 	Delay      time.Duration            `json:"delay"`
+	// ToService: the leader's plain container becomes the leader service
+	// on Config.Image instead (RunConvert).
+	ToService bool `json:"to_service,omitempty"`
 }
 
 // Sleep waits d or until ctx is done (false).
@@ -177,6 +180,15 @@ func SelfReplace(ctx context.Context, api swarm.API, img string, out io.Writer) 
 		return err
 	}
 	spec.Delay = ReplaceDelay
+	if err := startHelper(ctx, api, img, spec); err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(out, "agent restarting: the %s container is replaced with %s in %s\n", AgentContainer, img, ReplaceDelay)
+	return nil
+}
+
+// startHelper starts the helper container on img with spec.
+func startHelper(ctx context.Context, api swarm.API, img string, spec ReplaceSpec) error {
 	b, err := json.Marshal(spec)
 	if err != nil {
 		return err
@@ -197,7 +209,6 @@ func SelfReplace(ctx context.Context, api swarm.API, img string, out io.Writer) 
 		_ = api.ContainerRemove(context.WithoutCancel(ctx), HelperContainer, container.RemoveOptions{Force: true})
 		return fmt.Errorf("starting the replacement helper: %w", err)
 	}
-	_, _ = fmt.Fprintf(out, "agent restarting: the %s container is replaced with %s in %s\n", AgentContainer, img, ReplaceDelay)
 	return nil
 }
 
@@ -238,6 +249,9 @@ func clearLeftovers(ctx context.Context, api swarm.API, out io.Writer) error {
 func RunReplace(ctx context.Context, api swarm.API, spec ReplaceSpec, sleep func(context.Context, time.Duration) bool) error {
 	if spec.Container == "" || spec.Config.Image == "" {
 		return errors.New("replace: incomplete spec")
+	}
+	if spec.ToService {
+		return RunConvert(ctx, api, spec, sleep)
 	}
 	if spec.Delay > 0 && !sleep(ctx, spec.Delay) {
 		return ctx.Err()

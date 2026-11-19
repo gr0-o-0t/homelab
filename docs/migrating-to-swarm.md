@@ -690,6 +690,7 @@ On **minis**:
 
 ```fish
 homelab-new logout             # drops client.yaml and CLUSTER_SECRET (the new binary; after step 6 also `homelab logout`)
+docker service rm homelab_agent                                      # the leader agent (v0.6+); "not found" before that
 docker rm -f homelab-agent homelab-agent-replace homelab-agent-old   # the last two usually don't exist
 docker service ls --filter label=homelab.service                     # the homelab stacks
 docker service rm (docker service ls -q)                             # every Swarm service (only homelab uses Swarm here)

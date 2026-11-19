@@ -348,11 +348,12 @@ func init() {
 
 }
 
-// extLayerState is a layer's container state. cloudflared is a Swarm service,
-// so the cf layer reports its task state (Status), never a container-name
-// lookup; the others ask the Docker daemon.
+// extLayerState is a layer's container state. cloudflared and the leader
+// agent (the tailnet layer) are Swarm services, so those layers report their
+// task state (Status), never a container-name lookup; the others ask the
+// Docker daemon.
 func extLayerState(layer network.NetworkLayer, dc *docker.Client) string {
-	if layer.Name() == cloudflaredLayer {
+	if layer.Name() == cloudflaredLayer || layer.Name() == "ts" {
 		return layer.Status().ContainerState
 	}
 	if dc == nil {

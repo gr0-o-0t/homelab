@@ -15,6 +15,7 @@ import (
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
+	dswarm "github.com/docker/docker/api/types/swarm"
 	"github.com/docker/docker/api/types/volume"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -91,7 +92,7 @@ func TestInit_Import(t *testing.T) {
 
 	copies := h.fake.Copies()
 	require.Len(t, copies, 1)
-	assert.Equal(t, AgentContainer, copies[0].Container)
+	assert.Len(t, copies[0].Container, 64, "copied into the leader's task container, by ID")
 	assert.Equal(t, agentstate.Root, copies[0].Path)
 	files := tarContent(t, copies[0].Tar)
 	var staging string
@@ -117,10 +118,12 @@ func TestInit_Import(t *testing.T) {
 
 	// Order: copy after the agent started, then the import seed, then one restart.
 	log := strings.Join(h.fake.CallLog(), "\n")
-	assert.Less(t, strings.Index(log, "ContainerStart"), strings.Index(log, "CopyToContainer"))
+	assert.Less(t, strings.Index(log, "ServiceCreate "+AgentService), strings.Index(log, "CopyToContainer"))
 	assert.Less(t, strings.Index(log, "CopyToContainer"), strings.LastIndex(log, "ContainerExecCreate"))
-	assert.Less(t, strings.LastIndex(log, "ContainerExecCreate"), strings.Index(log, "ContainerRestart"))
-	assert.Equal(t, 1, h.fake.Created()[0].Restarts, "one restart reads both seeds")
+	assert.Less(t, strings.LastIndex(log, "ContainerExecCreate"), strings.Index(log, "ServiceUpdate"))
+	svcs, err := h.fake.ServiceList(context.Background(), dswarm.ServiceListOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, uint64(1), svcs[0].Spec.TaskTemplate.ForceUpdate, "one restart reads both seeds")
 
 	out := h.out.String()
 	assert.Contains(t, out, "gitea: port 2222:2222 is tcp only now")
@@ -252,11 +255,11 @@ func TestImport_IgnoresOtherProjectsContainers(t *testing.T) {
 // retry is not refused for "already has services".
 func TestImport_LateFailureRemovesImportedState(t *testing.T) {
 	in, h := newImportInit(t)
-	h.fake.FailRestart(errors.New("restart failed"))
+	h.fake.FailServiceUpdateOnce(AgentService, errors.New("restart failed"))
 	err := in.Do(context.Background())
 	require.ErrorContains(t, err, "restart failed")
 	log := h.fake.CallLog()
-	assert.Contains(t, log, "ContainerRemove "+AgentContainer)
+	assert.Contains(t, log, "ServiceRemove "+AgentService)
 	assert.Contains(t, log, "VolumeRemove "+StateVolume)
 	for _, c := range log {
 		if strings.HasPrefix(c, "VolumeRemove ") {
@@ -311,7 +314,7 @@ func TestImport_RollbackKeepsPreexistingVolume(t *testing.T) {
 	// A plain init over an existing volume never removes it on failure.
 	in, h := newInit(t, testIP)
 	h.fake.SetVolumes(&volume.Volume{Name: StateVolume})
-	h.fake.FailRestart(errors.New("restart failed"))
+	h.fake.FailServiceUpdateOnce(AgentService, errors.New("restart failed"))
 	require.Error(t, in.Do(context.Background()))
 	for _, c := range h.fake.CallLog() {
 		assert.NotContains(t, c, "VolumeRemove")

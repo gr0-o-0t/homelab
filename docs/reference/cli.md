@@ -68,14 +68,21 @@ it prints "leader: already on vX", and "Everything is on vX: nothing
 replaced." when no worker changed either, and ends without the marker) —
 prints
 `bootstrap.LeaderReplaceMarker` and replaces its own agent, ending the
-session. Only after seeing that marker does the PC print "agent restarting",
-reconnect for up to 60 s and check the leader the same way (a connection lost
-before it is reported; the detached rollout continues on the leader).
+session (`bootstrap.LeaderReplace`): the `homelab_agent` service is updated
+to the image — Swarm stops the old task first, watches the new one for 30 s
+and rolls back one that exits — or, a leader still in a plain container, it
+is converted straight onto the image (the helper below, `to_service`).
+Only after seeing that marker does the PC print "agent restarting",
+reconnect for up to 3 min (`LeaderWaitBack`) and check the leader the same
+way (a connection lost before it is reported; the detached rollout continues
+on the leader). An older leader (v0.5.x, a plain container) swaps its
+container as before; the new agent then converts itself at boot, once the
+old helper is done.
 Worker agents serve `exec`, `version` and `agent self-replace` only. `logs`
 resolves there too but refuses a service ("runs on the leader"): service logs
 are read cluster-wide on the leader through `docker service logs` (R39).
 
-Replacement (`bootstrap.SelfReplace`, `RunReplace`): the agent inspects its
+Worker replacement (`bootstrap.SelfReplace`, `RunReplace`): the agent inspects its
 own `homelab-agent` container (spec without what the old image itself sets:
 env, labels, entrypoint, working dir, user, healthcheck) and starts a helper
 container `homelab-agent-replace` (new image, docker socket only, no
@@ -103,6 +110,55 @@ missed an upgrade); every other command is refused.
 already on the engine: it never refreshes an existing local tag, so a moving
 tag (`:dev`, `:latest`) is used as it is there — rebuild/pull it on each node
 yourself, or upgrade to an immutable version tag.
+
+### Recovering a leader with no agent
+
+Every CLI command goes through the leader agent, so with it down the CLI
+only says `connect to the agent at homelab.<tailnet>:7443: … i/o timeout`
+(and `tailscale status` shows the `homelab` node offline). Swarm services
+keep running; only the agent and its edge are gone. Swarm restarts the
+`homelab_agent` task by itself, so first look at why it does not stay up, on
+the leader itself (ssh to `minis`):
+
+```sh
+docker service ps --no-trunc homelab_agent      # its tasks, and each one's error
+docker service logs --tail 50 homelab_agent     # what the agent said
+docker ps -a --filter name=homelab-agent --format '{{.Names}} {{.Image}} {{.Status}}'
+```
+
+- The service exists: `docker service update --force homelab_agent` starts
+  a fresh task. A failed upgrade rolls back by itself; to pick a version,
+  `docker service update --image ghcr.io/gr0-o-0t/homelab:<version> homelab_agent`.
+- A lone `homelab-agent-old` and no `homelab-agent` or service: see above.
+- No service: recreate the agent as a plain container. It converts itself
+  into the service at start. All state is in the `homelab-agent` volume (vault,
+  cluster secret, tsnet identity, certificates), so it returns as the same
+  node. Use the version the workers run (`docker inspect homelab-agent
+  --format '{{.Config.Image}}'` on a worker):
+
+```sh
+docker create --name homelab-agent --restart unless-stopped \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v homelab-agent:/var/lib/homelab \
+  -v homelab-shim:/hl \
+  -v homelab-backups:/var/lib/homelab-backups \
+  -e XDG_DATA_HOME=/var/lib/homelab/xdg/data \
+  -e XDG_CONFIG_HOME=/var/lib/homelab/xdg/config \
+  --network home-services --network-alias homelab-edge \
+  ghcr.io/gr0-o-0t/homelab:<version> agent
+docker start homelab-agent
+docker logs -f homelab-agent              # "handing over to the leader service"
+docker service ps homelab_agent           # then one running task
+```
+
+  If that container itself fails to start with `attaching to network failed …
+  context deadline exceeded` (`could not allocate IP from IPAM: Address
+  already in use` in the engine log: Swarm still holds a stale address),
+  create it without the `--network`/`--network-alias` line; the service it
+  converts into joins the overlay through Swarm.
+
+Then `homelab status` from any PC. Never `docker volume rm homelab-agent`:
+it is the cluster's only copy of its secrets.
 
 ## Service lifecycle
 

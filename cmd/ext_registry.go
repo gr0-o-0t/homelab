@@ -9,6 +9,7 @@ import (
 	"github.com/groot/homelab/internal/network"
 	"github.com/groot/homelab/internal/network/cf"
 	"github.com/groot/homelab/internal/network/layers"
+	"github.com/groot/homelab/internal/network/tailscale"
 	"github.com/groot/homelab/internal/run"
 	"github.com/spf13/cobra"
 )
@@ -33,6 +34,11 @@ func extRegistry() *network.Registry {
 		if l, ok := extRegistryInstance.Get("cf"); ok {
 			if cfl, ok := l.(*cf.Layer); ok {
 				cfl.WithState(func() string { return cloudflaredState(root) })
+			}
+		}
+		if l, ok := extRegistryInstance.Get("ts"); ok {
+			if tsl, ok := l.(*tailscale.Layer); ok {
+				tsl.WithState(func() string { return run.Default().ContainerStatus(agentContainerRef()) })
 			}
 		}
 	})

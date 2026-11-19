@@ -55,16 +55,17 @@ func ParseAgentID(out string) AgentID {
 // WaitReplaced polls ask until the agent answering is a new one (its Boot
 // differs from before.Boot) that has kept answering for Settle — the
 // helper may still roll back a crashing one — and then checks its version
-// against want (when known). It gives up after WaitBack. When before.Boot is
-// unknown, the first answer after ReplaceDelay counts as new.
+// against want (when known). It gives up after within (WaitBack for a
+// worker, LeaderWaitBack for the leader). When before.Boot is unknown, the
+// first answer after ReplaceDelay counts as new.
 func WaitReplaced(ctx context.Context, ask func(context.Context) (AgentID, error), before AgentID, want string,
-	sleep func(context.Context, time.Duration) bool) (AgentID, error) {
+	within time.Duration, sleep func(context.Context, time.Duration) bool) (AgentID, error) {
 	if !sleep(ctx, ReplaceDelay) { // the old agent answers until the helper stops it
 		return AgentID{}, ctx.Err()
 	}
 	var last, cand AgentID
 	steady := time.Duration(-1)
-	for range int(WaitBack / pollEvery) {
+	for range int(within / pollEvery) {
 		got, err := ask(ctx)
 		if err == nil && got.Version != "" {
 			last = got
@@ -90,12 +91,12 @@ func WaitReplaced(ctx context.Context, ask func(context.Context) (AgentID, error
 	}
 	switch {
 	case last.Version == "":
-		return last, fmt.Errorf("did not answer within %s of being replaced — see `docker logs %s` there", WaitBack, AgentContainer)
+		return last, fmt.Errorf("did not answer within %s of being replaced — see `docker logs %s` there", within, AgentContainer)
 	case before.Boot != "" && last.Boot == before.Boot:
 		return last, fmt.Errorf("still the old agent (%s): it was not replaced (the replacement failed and was rolled back, or never ran) — see `docker logs %s` there",
 			last.Version, HelperContainer)
 	default:
-		return last, fmt.Errorf("the new agent did not answer steadily within %s — see `docker logs %s` there", WaitBack, HelperContainer)
+		return last, fmt.Errorf("the new agent did not answer steadily within %s — see `docker logs %s` there", within, HelperContainer)
 	}
 }
 
@@ -140,7 +141,7 @@ type Upgrade struct {
 	// replaced.
 	Current string
 	Call    AgentCall
-	// Replace replaces the leader's own agent; default SelfReplace.
+	// Replace replaces the leader's own agent; default LeaderReplace.
 	Replace func(ctx context.Context) error
 	Out     io.Writer
 	// Sleep waits between polls; default Sleep.
@@ -247,7 +248,7 @@ func (u *Upgrade) Do(ctx context.Context) ([]WorkerResult, error) {
 	u.printf("%s; this session ends here.\n", LeaderReplaceMarker)
 	replace := u.Replace
 	if replace == nil {
-		replace = func(ctx context.Context) error { return SelfReplace(ctx, u.API, u.Image, u.Out) }
+		replace = func(ctx context.Context) error { return LeaderReplace(ctx, u.API, u.Image, u.Out) }
 	}
 	if err := replace(ctx); err != nil {
 		return res, fmt.Errorf("replacing the leader agent: %w", err)
@@ -276,7 +277,7 @@ func (u *Upgrade) replaceWorker(ctx context.Context, r *WorkerResult, before Age
 		r.Status, r.Detail = WorkerFailed, "replacing: "+err.Error()
 		return
 	}
-	got, err := WaitReplaced(ctx, func(ctx context.Context) (AgentID, error) { return u.agentID(ctx, r.Host) }, before, want, u.sleep)
+	got, err := WaitReplaced(ctx, func(ctx context.Context) (AgentID, error) { return u.agentID(ctx, r.Host) }, before, want, WaitBack, u.sleep)
 	if got.Version != "" {
 		r.Version = got.Version
 	}

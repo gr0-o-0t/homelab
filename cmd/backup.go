@@ -15,7 +15,6 @@ import (
 
 	"github.com/groot/homelab/internal/agentstate"
 	"github.com/groot/homelab/internal/backup"
-	"github.com/groot/homelab/internal/bootstrap"
 	"github.com/groot/homelab/internal/db"
 	"github.com/groot/homelab/internal/remote"
 	"github.com/groot/homelab/internal/run"
@@ -247,7 +246,7 @@ func newBackupEngine(root string, d *swarm.Deployer) (*backup.Engine, error) {
 // on the node, pinned by version, with busybox tar/sh/rm (docker:<ver>-cli
 // is Alpine). A var so tests need no daemon.
 var agentImage = func() (string, error) {
-	out, err := run.Default().Output("docker", "inspect", "--format", "{{.Image}}", bootstrap.AgentContainer)
+	out, err := run.Default().Output("docker", "inspect", "--format", "{{.Image}}", agentContainerRef())
 	if err != nil {
 		return "", err
 	}

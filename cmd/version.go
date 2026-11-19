@@ -40,11 +40,11 @@ func agentBootID() string {
 	if c, ok := api.(io.Closer); ok {
 		defer func() { _ = c.Close() }()
 	}
-	insp, err := api.ContainerInspect(cmdContext(), bootstrap.AgentContainer)
-	if err != nil || insp.ContainerJSONBase == nil {
+	id, err := bootstrap.AgentContainerID(cmdContext(), api)
+	if err != nil {
 		return ""
 	}
-	return insp.ID
+	return id
 }
 
 func init() {

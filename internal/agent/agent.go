@@ -127,6 +127,11 @@ type Agent struct {
 	API swarm.API
 	// Inspect reports the engine's swarm role. Required.
 	Inspect func(ctx context.Context) (NodeInfo, error)
+	// BeforeLeader runs once the node is known to be the leader, before
+	// anything starts. True: this agent is handing over (its plain
+	// container becomes the leader service) and only waits to be stopped.
+	// nil: nothing to do.
+	BeforeLeader func(ctx context.Context) bool
 	// OpenSecrets opens the vault; default secrets.OpenVault on Root's paths.
 	OpenSecrets func() (*secrets.Manager, error)
 	// NewEdge builds the leader's edge; default *edge.Edge.
@@ -226,6 +231,11 @@ func (a *Agent) Run(ctx context.Context) error {
 	}
 	a.logf("agent: this node is a swarm %s", info.Role)
 	if info.Role == RoleLeader {
+		if a.BeforeLeader != nil && a.BeforeLeader(ctx) {
+			a.logf("agent: handing over to the leader service; this container is stopped shortly")
+			<-ctx.Done()
+			return nil
+		}
 		return a.runLeader(ctx, paths, sm, cluster.Secret)
 	}
 	return a.runWorker(ctx, paths, sm, cluster.Secret, info.Hostname)

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/netip"
 	neturl "net/url"
@@ -50,6 +51,20 @@ var agentCmd = &cobra.Command{
 			API:       cli,
 			Inspect:   func(ctx context.Context) (agent.NodeInfo, error) { return inspectNode(ctx, cli) },
 			EnsureDNS: ensureWildcardA,
+			// A leader still in a plain container becomes the leader
+			// service: its hostname is its own container's short ID.
+			BeforeLeader: func(ctx context.Context) bool {
+				self, err := os.Hostname()
+				if err != nil {
+					log.Printf("agent: not checking for the %s service: %v", bootstrap.AgentService, err)
+					return false
+				}
+				handed, err := bootstrap.PrepareLeader(ctx, cli, self, bootstrap.Sleep, os.Stdout)
+				if err != nil {
+					log.Printf("agent: running as a plain container, not the %s service: %v", bootstrap.AgentService, err)
+				}
+				return handed
+			},
 		}
 		return a.Run(ctx)
 	},
@@ -101,7 +116,8 @@ var agentSelfReplaceCmd = &cobra.Command{
 }
 
 // agentReplaceHelperCmd is the helper container's process: it recreates the
-// agent container from the spec in its environment. On success it removes
+// agent container from the spec in its environment, or (to_service) makes
+// the leader's container the homelab_agent service. On success it removes
 // its own container; on failure it exits non-zero and the container stays,
 // so `docker logs homelab-agent-replace` says why.
 var agentReplaceHelperCmd = &cobra.Command{

@@ -1,12 +1,18 @@
 package cmd
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
 
+	dswarm "github.com/docker/docker/api/types/swarm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/groot/homelab/internal/bootstrap"
+	"github.com/groot/homelab/internal/swarm"
+	"github.com/groot/homelab/internal/swarm/swarmtest"
 )
 
 // `logs` with no service and `caddy logs` read the leader agent's container:
@@ -83,4 +89,21 @@ func TestPlanPrune_VolumesAndImages(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"web_data", "web_scratch"}, plan.volumes)
 	assert.Equal(t, []string{"nginx:1.27", "redis:7"}, plan.images, "by compose key, each once")
+}
+
+// On a leader running as the homelab_agent service, the logs are its task
+// container's.
+func TestLogs_NoServiceIsTheLeaderServiceTask(t *testing.T) {
+	f := swarmtest.New()
+	f.RunServiceTasks()
+	_, err := f.ServiceCreate(context.Background(), bootstrap.LeaderServiceSpec("img"), dswarm.ServiceCreateOptions{})
+	require.NoError(t, err)
+	old := newSwarmAPI
+	newSwarmAPI = func() (swarm.API, error) { return f, nil }
+	t.Cleanup(func() { newSwarmAPI = old })
+	got := stubServiceLogs(t)
+
+	code, _, _ := runLogs(t, "--config-dir", t.TempDir(), "caddy", "logs")
+	require.Zero(t, code)
+	assert.Equal(t, [][]string{{"logs", "--follow", f.Created()[0].ID}}, *got)
 }

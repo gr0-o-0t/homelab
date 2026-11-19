@@ -785,3 +785,26 @@ func TestLeaderBoot_TaskHistoryAlreadyOne(t *testing.T) {
 	assert.Empty(t, f.SwarmUpdates())
 	assert.NotContains(t, f.CallLog(), "SwarmUpdate")
 }
+
+// A leader agent that hands over (a plain container becoming the leader
+// service) starts nothing — no edge, no tailnet node, no serving — and only
+// waits to be stopped.
+func TestAgent_LeaderHandingOverStartsNothing(t *testing.T) {
+	h := newHarness(t, RoleLeader)
+	asked := make(chan struct{})
+	h.a.BeforeLeader = func(context.Context) bool { close(asked); return true }
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- h.a.Run(ctx) }()
+	<-asked
+	cancel()
+	require.NoError(t, <-done)
+	assert.Empty(t, h.rec.Calls(), "nothing started")
+}
+
+func TestAgent_LeaderNotHandingOverRuns(t *testing.T) {
+	h := newHarness(t, RoleLeader)
+	h.a.BeforeLeader = func(context.Context) bool { return false }
+	_, stop := h.start()
+	require.NoError(t, stop())
+}
