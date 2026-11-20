@@ -42,7 +42,7 @@ services:
       - home-services
 
   filestash-wopi:
-    image: collabora/code:24.04.10.2.1
+    image: collabora/code:26.04.6.1.1
     container_name: filestash-wopi
     restart: always
     environment:
