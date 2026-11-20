@@ -10,7 +10,7 @@
 # (CGO_ENABLED=0, -tags nogui) that `make release` / `make image` build, at
 # dist/image/linux_<arch>/homelab, so the image runs exactly the released
 # binary. Runs as root: the agent drives Docker through its socket.
-FROM docker:29.9.3-cli@sha256:5a7af0dcb0e46c803efe9b45371dd21cb500e5b4453250394ac6f06d49b6e6f1
+FROM docker:29.10.0-cli@sha256:34507eb5069d8be82c95dd3b6987d4250fd5fee49b82e2509b7d7a7030740d6d
 
 ARG TARGETARCH
 ARG VERSION=dev
