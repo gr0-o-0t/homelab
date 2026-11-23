@@ -24,6 +24,7 @@ Tor, I2P and Yggdrasil are not available in cluster mode yet, so only the tailne
 | beszel-hub | [ ] | [ ] |
 | code-server | [ ] | [ ] |
 | copyparty | [ ] | [ ] |
+| convertx | [ ] | [ ] |
 | cyberchef | [ ] | [ ] |
 | dozzle | [ ] | [ ] |
 | excalidraw | [ ] | [ ] |

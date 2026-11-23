@@ -1,0 +1,48 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Service: ConvertX (self-hosted file converter for 1000+ formats)
+# https://github.com/C4illin/ConvertX
+# https://github.com/C4illin/ConvertX#deployment
+#
+# Open https://convertx.home.<domain> right after `up` and create the first
+# account: anyone who reaches it first can register, and registration closes
+# after that (ACCOUNT_REGISTRATION defaults to false).
+# ─────────────────────────────────────────────────────────────────────────────
+
+networks:
+  home-services:
+    name: home-services
+    external: true
+
+services:
+  convertx:
+    image: ghcr.io/c4illin/convertx:latest
+    container_name: convertx
+    # No `user:`: entrypoint.sh starts as root, chowns /app/data to PUID/PGID
+    # and then drops to that user.
+    restart: always
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      # Without it a random UUID is used and every restart logs everyone out.
+      JWT_SECRET: ${JWT_SECRET}
+      # HTTP_ALLOWED stays false: Caddy serves it over HTTPS, so the secure
+      # session cookie works. Uploads and results older than 24 h are deleted
+      # (AUTO_DELETE_EVERY_N_HOURS, upstream default).
+    volumes:
+      - convertx-data:/app/data # SQLite DB, uploads and converted files
+    networks:
+      - home-services
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -fs --max-time 10 http://localhost:3000/healthcheck || exit 1",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  convertx-data:
+    name: convertx_data

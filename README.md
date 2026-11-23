@@ -328,6 +328,7 @@ lists the catalog; `homelab status <service>` shows what a service declares.
 | `bifrost` | `bifrost.home.*` | Bifrost (OpenAI-compatible AI gateway + web UI) |
 | `code-server` | `code-server.home.*` | code-server (VS Code in the browser) |
 | `copyparty` | `copyparty.home.*` | Copyparty (file server with upload, search, and media streaming) |
+| `convertx` | `convertx.home.*` | ConvertX (self-hosted file converter for 1000+ formats) |
 | `cyberchef` | `cyberchef.home.*` | CyberChef (web app for encryption, encoding, compression and more) |
 | `dbx` | `dbx.home.*` | dbx (lightweight, cross-platform database client) |
 | `dozzle` | `dozzle.home.*` | Dozzle (real-time Docker log viewer) |
