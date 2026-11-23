@@ -1,6 +1,29 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# Service: Dozzle (real-time Docker log viewer)
+# Service: Dozzle (real-time Docker log viewer for every node in the cluster)
 # https://github.com/amir20/dozzle
+# https://dozzle.dev/guide/swarm-mode
+# ─────────────────────────────────────────────────────────────────────────────
+# Swarm mode, as upstream documents it: one instance per node
+# (deploy.mode: global, joining nodes included). The instances find each other
+# through the overlay's `tasks.<swarm service>` DNS name and form an mTLS mesh
+# on :7007 over home-services, so whichever instance serves the UI shows the
+# logs and stats of every node, grouped by stack and service.
+#
+# Differences from the upstream stack file:
+#   - home-services instead of a dedicated overlay; no published port: the
+#     edge routes dozzle.home.* to the service on :8080.
+#   - /data is a named volume, which under a global service is per node
+#     (upstream uses a host path on each node for the same effect). It holds
+#     UI-made settings (notifications, custom groups) of the instance that
+#     served the request, so they may differ between nodes.
+#   - the socket is mounted :ro. Actions and shell stay off (the defaults),
+#     which also keeps Dozzle's own auto-update off: only `homelab update`
+#     pulls a newer image.
+#   - no `hostname:`: Dozzle finds its own task through $HOSTNAME (the
+#     container ID) to learn the swarm service name it looks peers up by.
+#
+# Socket proxies don't work in Swarm mode (upstream). Even :ro, the Docker API
+# socket is root-equivalent on each host, so keep dozzle private-only.
 # ─────────────────────────────────────────────────────────────────────────────
 
 networks:
@@ -13,9 +36,10 @@ services:
     image: amir20/dozzle:latest
     container_name: dozzle
     restart: always
+    environment:
+      DOZZLE_MODE: swarm
     volumes:
-      # Runs as root to read the socket (root:docker 0660). Even :ro, the Docker
-      # API socket is root-equivalent on the host — keep dozzle private-only.
+      # Runs as root to read the socket (root:docker 0660).
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - dozzle-data:/data
     networks:
@@ -26,6 +50,8 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
+    deploy:
+      mode: global
 
 volumes:
   dozzle-data:

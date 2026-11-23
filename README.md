@@ -331,7 +331,7 @@ lists the catalog; `homelab status <service>` shows what a service declares.
 | `convertx` | `convertx.home.*` | ConvertX (self-hosted file converter for 1000+ formats) |
 | `cyberchef` | `cyberchef.home.*` | CyberChef (web app for encryption, encoding, compression and more) |
 | `dbx` | `dbx.home.*` | dbx (lightweight, cross-platform database client) |
-| `dozzle` | `dozzle.home.*` | Dozzle (real-time Docker log viewer) |
+| `dozzle` | `dozzle.home.*` | Dozzle (real-time Docker logs from every node) |
 | `excalidraw` | `excalidraw.home.*` | Excalidraw (virtual whiteboard for sketching diagrams) |
 | `filestash` | `filestash.home.*` | Filestash (web file manager for S3, SFTP, WebDAV, FTP; Collabora office editing) |
 | `forgejo` | `forgejo.home.*`, `:22/tcp` | Forgejo (self-hosted Git service, Gitea fork) |
