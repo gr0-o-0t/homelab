@@ -320,6 +320,7 @@ lists the catalog; `homelab status <service>` shows what a service declares.
 |---|---|---|
 | `actual-budget` | `actual-budget.home.*` | Actual Budget (local-first personal finance tool) |
 | `adguardhome` | `adguardhome.home.*` | AdGuard Home (network-wide ad and tracker blocking DNS server) |
+| `affine` | `affine.home.*` | AFFiNE (docs, whiteboards and databases in one workspace) |
 | `appflowy` | `appflowy.home.*` | AppFlowy (self-hosted Notion alternative — notes, docs, databases) |
 | `audiobookshelf` | `audiobookshelf.home.*` | Audiobookshelf (self-hosted audiobook and podcast server) |
 | `bazarr` | `bazarr.home.*` | Bazarr (subtitle management companion for Sonarr and Radarr) |

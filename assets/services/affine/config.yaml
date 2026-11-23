@@ -1,0 +1,24 @@
+# Both on the shared instances. Extensions are pre-created by the provisioner
+# as the postgres superuser, so AFFiNE's own `CREATE EXTENSION IF NOT EXISTS`
+# calls in its migrations become no-ops for its unprivileged role:
+#   vector   — copilot embeddings tables
+#   pgcrypto — access token hashing
+databases:
+  - postgres:
+      database: affine
+      user: affine
+      extensions:
+        - vector
+        - pgcrypto
+      env:
+        dsn: AFFINE_DATABASE_URL
+  # Its own database number on homelab-redis.
+  - redis:
+      env:
+        host: AFFINE_REDIS_HOST
+        port: AFFINE_REDIS_PORT
+        password: AFFINE_REDIS_PASSWORD
+        db: AFFINE_REDIS_DB
+
+ports:
+  - 3010

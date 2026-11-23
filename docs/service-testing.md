@@ -18,6 +18,7 @@ Tor, I2P and Yggdrasil are not available in cluster mode yet, so only the tailne
 |---|---|---|
 | actual-budget | [ ] | [ ] |
 | adguardhome | [ ] | [ ] |
+| affine | [ ] | [ ] |
 | audiobookshelf | [ ] | [ ] |
 | bazarr | [ ] | [ ] |
 | beszel-hub | [ ] | [ ] |
