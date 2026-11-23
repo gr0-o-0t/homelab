@@ -1,6 +1,14 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Service: Uptime Kuma (self-hosted monitoring dashboard)
 # https://github.com/louislam/uptime-kuma
+# https://github.com/louislam/uptime-kuma#-docker-compose
+#
+# Data stays in upstream's default SQLite (kuma.db in /app/data) rather than
+# the shared MariaDB: the monitor must not depend on a service it may watch.
+# SQLite needs a local volume (upstream does not support NFS).
+# 2-slim leaves out the embedded MariaDB and Chromium, so "Real Browser"
+# monitors need a remote browser (Settings → Remote Browsers).
+# The socket is the core node's: Docker monitors see only containers on minis.
 # ─────────────────────────────────────────────────────────────────────────────
 
 networks:
