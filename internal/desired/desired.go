@@ -113,7 +113,7 @@ func (d *Desired) RunningServices() []string {
 
 // SharedServices are the shared database / object store services other
 // services depend on.
-var SharedServices = map[string]bool{"postgres": true, "mariadb": true, "redis": true, "garage": true}
+var SharedServices = map[string]bool{"postgres": true, "mariadb": true, "redis": true, "garage": true, "rabbitmq": true}
 
 // WriteAtomic writes data to path through a temp file in the same directory
 // and a rename, so a reader never sees a partial file.

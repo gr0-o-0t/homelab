@@ -259,3 +259,81 @@ func firstLine(b []byte) string {
 	line, _, _ := strings.Cut(strings.TrimSpace(string(b)), "\n")
 	return line
 }
+
+// ── RabbitMQ (amqp) ───────────────────────────────────────────────────────────
+
+// rabbitmqctl runs rabbitmqctl inside the shared container, feeding stdin
+// when it is not empty. The container runs as the rabbitmq user, so an exec
+// can never leave a root-owned Erlang cookie behind that the server then
+// cannot read.
+func (p *Provisioner) rabbitmqctl(stdin string, args ...string) ([]byte, error) {
+	ctr, err := p.Container(config.DBAMQP)
+	if err != nil {
+		return nil, err
+	}
+	if stdin == "" {
+		return p.RC.Output("docker", append([]string{"exec", ctr, "rabbitmqctl"}, args...)...)
+	}
+	return nil, p.RC.RunFrom(strings.NewReader(stdin), "docker", append([]string{"exec", "-i", ctr, "rabbitmqctl"}, args...)...)
+}
+
+// provisionRabbitMQ gives the service a vhost and a user, both named after
+// it, with full permissions on that vhost and none elsewhere. The password
+// is kept in the service's keyring namespace and reaches rabbitmqctl over
+// stdin, never argv. An existing user has its password re-synced with the
+// keyring, as a postgres role does.
+func (p *Provisioner) provisionRabbitMQ(svcName string) error {
+	if svcName == config.RabbitMQAdminUser {
+		return fmt.Errorf("a service named %q would take over the RabbitMQ administrator; pick another name", svcName)
+	}
+	if p.SM == nil {
+		return fmt.Errorf("a keyring is required to store the rabbitmq password for %s", svcName)
+	}
+	password, err := p.SM.Get(svcName, config.AMQPPasswordKey)
+	if err != nil {
+		return fmt.Errorf("reading rabbitmq password: %w", err)
+	}
+	if password == "" {
+		password = generatePassword(32)
+		if err := p.SM.Set(svcName, config.AMQPPasswordKey, password); err != nil {
+			return fmt.Errorf("storing rabbitmq password: %w", err)
+		}
+	}
+
+	if _, err := p.rabbitmqctl("", "-q", "add_vhost", svcName); err != nil { // idempotent
+		return fmt.Errorf("creating rabbitmq vhost %s: %w", svcName, err)
+	}
+	out, err := p.rabbitmqctl("", "-q", "list_users", "--no-table-headers")
+	if err != nil {
+		return fmt.Errorf("listing rabbitmq users: %w", err)
+	}
+	verb := "add_user"
+	for _, line := range strings.Split(string(out), "\n") {
+		if name, _, _ := strings.Cut(line, "\t"); name == svcName {
+			verb = "change_password"
+			break
+		}
+	}
+	if _, err := p.rabbitmqctl(password, verb, svcName); err != nil {
+		return fmt.Errorf("rabbitmq %s %s: %w", verb, svcName, err)
+	}
+	if _, err := p.rabbitmqctl("", "-q", "set_permissions", "-p", svcName, svcName, ".*", ".*", ".*"); err != nil {
+		return fmt.Errorf("granting %s access to vhost %s: %w", svcName, svcName, err)
+	}
+	return nil
+}
+
+// deprovisionRabbitMQ deletes the service's user. Its vhost, queues and
+// messages stay, as a Garage bucket outlives its key.
+func (p *Provisioner) deprovisionRabbitMQ(svcName string) error {
+	if svcName == config.RabbitMQAdminUser {
+		return nil
+	}
+	if _, err := p.rabbitmqctl("", "-q", "delete_user", svcName); err != nil { // a missing user is not an error
+		return fmt.Errorf("deleting rabbitmq user %s: %w", svcName, err)
+	}
+	if p.SM != nil {
+		_ = p.SM.Delete(svcName, config.AMQPPasswordKey)
+	}
+	return nil
+}

@@ -1,0 +1,64 @@
+# ─────────────────────────────────────────────────────────────────
+# Shared message queue (RabbitMQ) for homelab services
+# https://www.rabbitmq.com/
+# ─────────────────────────────────────────────────────────────────
+# Install:   homelab add rabbitmq
+# Start:     homelab up rabbitmq   (the admin password is generated)
+# UI:        homelab enable rabbitmq → https://rabbitmq.home.<domain>
+#            log in as "admin"; the generated password is in
+#            `homelab config rabbitmq` (RABBITMQ_DEFAULT_PASS)
+#
+# Services that need a message queue declare `databases: - amqp: ...`
+# in their config.yaml. The provisioner creates one vhost and one
+# user per service, both named after it, with permissions on that
+# vhost only, and keeps the password in the service's keyring
+# namespace. `homelab delete` removes the user; the vhost and its
+# queues stay.
+#
+# AMQP (5672) is reachable only on home-services, as
+# amqp://<svc>:<pw>@homelab-rabbitmq:5672/<svc>. It is not routed
+# through Caddy.
+#
+# hostname: RabbitMQ keys its data directory to its node name,
+# rabbit@<hostname>. A Swarm task's default hostname is its random
+# container id, so without a fixed one every restart would start
+# an empty node next to the old data.
+#
+# user: the image runs as root by default. A `docker exec` as root
+# (the healthcheck, the provisioner) before the server's first
+# start writes a root-owned Erlang cookie, and the server then
+# crashes on start. As the rabbitmq user both share one cookie.
+#
+# Inspect:   homelab exec rabbitmq rabbitmqctl list_vhosts
+#            homelab exec rabbitmq rabbitmqctl list_queues -p <svc>
+# ─────────────────────────────────────────────────────────────────
+
+networks:
+  home-services:
+    name: home-services
+    external: true
+
+services:
+  rabbitmq:
+    image: rabbitmq:${RABBITMQ_VERSION:-4.1-management-alpine}
+    container_name: homelab-rabbitmq
+    hostname: rabbitmq
+    user: rabbitmq
+    restart: always
+    environment:
+      RABBITMQ_DEFAULT_USER: admin
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:?RABBITMQ_DEFAULT_PASS is not set — run `homelab up rabbitmq`}
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    networks:
+      - home-services
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+volumes:
+  rabbitmq-data:
+    name: homelab_rabbitmq_data

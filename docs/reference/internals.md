@@ -186,7 +186,7 @@ replace it at task start): give local images an unqualified name.
 `config.yaml` required; regular files and directories (bind-mounted config)
 come along; refused: symlinks, dotfiles, a top-level `exposure.yaml`, a file over
 500 KiB (`swarm.MaxConfigSize`), a folder over 10 MiB, and the names
-postgres/mariadb/redis/garage (a custom service must not act as a shared
+postgres/mariadb/redis/garage/rabbitmq (a custom service must not act as a shared
 provider). The service name is the folder's base name. It streams a tar to the
 hidden leader command `files install <svc>`, which refuses an existing service
 (changes go through `edit`), validates as `edit` does and writes atomically.
@@ -308,7 +308,8 @@ gone; a catalog test rejects either file.
 
 ## Shared services — one instance of each, isolation inside it
 
-A service never bundles its own database, cache or object store. It declares a
+A service never bundles its own database, cache, object store or message
+queue. It declares a
 dependency under `databases:` in its `config.yaml` and is isolated inside the
 one shared instance. `homelab up <svc>` deploys the shared instance if needed,
 waits for it, and provisions (`internal/db`, run by the leader over the
@@ -321,6 +322,7 @@ overlay); `BuildEnv` injects the connection values through the declaration's
 | `mariadb` | `mariadb` / `homelab-mariadb:3306` (no consumers today) | database + account | host port user password database dsn |
 | `redis` | `redis` / `homelab-redis:6379` | one shared password (`REDIS_PASSWORD`, generated, redis secrets namespace) + its own database number | host port password db dsn (`redis://:<pw>@host:port/<n>`) |
 | `s3` | `garage` / `homelab-garage:3900` (path-style, region `garage`) | bucket (`bucket:`, default service name) + an access key granted on that bucket only, kept in the service's secrets namespace | endpoint region bucket access_key secret_key host port |
+| `amqp` | `rabbitmq` / `homelab-rabbitmq:5672` (management UI on 15672) | vhost + user, both the service name, permissions on that vhost only; generated password `AMQP_PASSWORD` in the service's secrets namespace, re-synced by `setup` | host port user password vhost dsn (`amqp://<svc>:<pw>@host:port/<svc>`) |
 
 - Redis numbers come from `<state>/redis-dbs.yaml`: lowest free of
   1..63 (0 is never handed out), stable for the service's lifetime, released
@@ -331,7 +333,8 @@ overlay); `BuildEnv` injects the connection values through the declaration's
   becomes `NOLOGIN` with no password (it still owns the database and its
   tables, so a reinstall under the same name picks them up), a read-only
   role and a MariaDB account are dropped, the Garage key is deleted (bucket
-  and objects stay), and redis numbers are released.
+  and objects stay), the RabbitMQ user is deleted (vhost and queues stay),
+  and redis numbers are released.
 - Two services whose names map to the same database password key
   (`DBPasswordKey`, e.g. `my-app` and `my_app`) would share a role password,
   so `new`, `add` and `files install` refuse the second one.
@@ -355,9 +358,16 @@ overlay); `BuildEnv` injects the connection values through the declaration's
   `homelab delete` removes the service's key; buckets and data stay.
 - Secrets with `generate: password|hex32` in a `config.yaml` are minted into
   the vault by `up`/`setup` and never prompted for.
+- RabbitMQ runs with a fixed `hostname: rabbitmq` (its data dir is keyed to
+  the node name, and a Swarm task's default hostname changes per task) and as
+  `user: rabbitmq` (a root `docker exec` before first start writes a
+  root-owned Erlang cookie the server cannot read). Passwords reach
+  `rabbitmqctl add_user`/`change_password` over stdin. A service named
+  `admin` (the management login) is refused. Queues are not backed up per
+  service; back up `rabbitmq` itself if they matter.
 - `TestCatalogServices_NoBundledDatabases` fails if any catalog compose file
-  runs a postgres/mysql/mariadb/mongo/redis/valkey/keydb/minio/garage image
-  outside that shared service's own directory.
+  runs a postgres/mysql/mariadb/mongo/redis/valkey/keydb/minio/garage/rabbitmq
+  image outside that shared service's own directory.
 
 ## Desired state (`internal/desired`)
 

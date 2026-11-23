@@ -239,6 +239,9 @@ const (
 	// DBS3 is object storage on the shared Garage instance: one bucket and
 	// one access key per service.
 	DBS3 DBType = "s3"
+	// DBAMQP is a message queue on the shared RabbitMQ instance: one vhost
+	// and one user per service.
+	DBAMQP DBType = "amqp"
 )
 
 // DBHostConfig defines how to reach a shared database instance.
@@ -253,6 +256,7 @@ type DatabaseConfig struct {
 	MariaDB  *DBHostConfig `yaml:"mariadb,omitempty"`
 	Redis    *DBHostConfig `yaml:"redis,omitempty"`
 	S3       *DBHostConfig `yaml:"s3,omitempty"`
+	AMQP     *DBHostConfig `yaml:"amqp,omitempty"`
 }
 
 // ServiceDBDecl describes a single service's database dependency.
@@ -540,6 +544,10 @@ func (dc *DatabaseConfig) DBHost(t DBType) string {
 			if dc.S3 != nil && dc.S3.Host != "" {
 				return dc.S3.Host
 			}
+		case DBAMQP:
+			if dc.AMQP != nil && dc.AMQP.Host != "" {
+				return dc.AMQP.Host
+			}
 		}
 	}
 	return SharedDBContainer(t)
@@ -567,6 +575,10 @@ func (dc *DatabaseConfig) DBPort(t DBType) int {
 			if dc.S3 != nil && dc.S3.Port != 0 {
 				return dc.S3.Port
 			}
+		case DBAMQP:
+			if dc.AMQP != nil && dc.AMQP.Port != 0 {
+				return dc.AMQP.Port
+			}
 		}
 	}
 	switch t {
@@ -578,6 +590,8 @@ func (dc *DatabaseConfig) DBPort(t DBType) int {
 		return 6379
 	case DBS3:
 		return 3900
+	case DBAMQP:
+		return 5672
 	}
 	return 0
 }
@@ -618,6 +632,8 @@ func SharedDBName(t DBType) string {
 		return "redis"
 	case DBS3:
 		return "garage"
+	case DBAMQP:
+		return "rabbitmq"
 	default:
 		return ""
 	}
@@ -634,13 +650,15 @@ func SharedDBContainer(t DBType) string {
 		return "homelab-redis"
 	case DBS3:
 		return "homelab-garage"
+	case DBAMQP:
+		return "homelab-rabbitmq"
 	default:
 		return ""
 	}
 }
 
 // IsSharedDBService reports whether a service name is one of the shared
-// database services (postgres, mariadb, redis, garage).
+// database services (postgres, mariadb, redis, garage, rabbitmq).
 func IsSharedDBService(name string) (DBType, bool) {
 	switch name {
 	case "garage":
@@ -651,6 +669,8 @@ func IsSharedDBService(name string) (DBType, bool) {
 		return DBMariaDB, true
 	case "redis":
 		return DBRedis, true
+	case "rabbitmq":
+		return DBAMQP, true
 	default:
 		return "", false
 	}
@@ -699,6 +719,8 @@ func EnsureRootDBConfig(rootCfgFile, svcName string) error {
 		rootDB.Redis = hc
 	case DBS3:
 		rootDB.S3 = hc
+	case DBAMQP:
+		rootDB.AMQP = hc
 	}
 
 	// Encode DatabaseConfig back into cfg.Databases yaml.Node.
@@ -915,6 +937,8 @@ func defaultDSNTemplate(t DBType) string {
 		return "mysql://{user}:{password}@{host}:{port}/{database}"
 	case DBRedis:
 		return "redis://:{password}@{host}:{port}/{db}"
+	case DBAMQP:
+		return "amqp://{user}:{password}@{host}:{port}/{database}"
 	default:
 		return ""
 	}
@@ -956,6 +980,8 @@ func buildDSN(tmpl string, v dsnValues) string {
 //	redis     password (the one shared redis password), db (this
 //	          declaration's database number)
 //	s3        endpoint, region, bucket, access_key, secret_key
+//	amqp      user, password (the service's own), vhost — user and vhost
+//	          are both the service name
 //
 // A redis `db` and `dsn` are only injected once the provisioner has allocated
 // the number: guessing 0 would silently share keys with every other service.
@@ -1019,6 +1045,11 @@ func injectDBEnv(env map[string]string, secret map[string]bool, configDir string
 			if secretKey, err = get(svcName, GarageSecretKeyKey); err != nil {
 				return fmt.Errorf("reading garage secret key for %q: %w", svcName, err)
 			}
+		case DBAMQP:
+			v.user, v.database = svcName, svcName
+			if v.password, err = get(svcName, AMQPPasswordKey); err != nil {
+				return fmt.Errorf("reading amqp password for %q: %w", svcName, err)
+			}
 		}
 		bucket := entry.Bucket
 		if bucket == "" {
@@ -1036,11 +1067,11 @@ func injectDBEnv(env map[string]string, secret map[string]bool, configDir string
 			case "port":
 				env[target] = v.port
 			case "user":
-				env[target] = entry.User
+				env[target] = v.user
 			case "password":
 				env[target] = v.password
-			case "database":
-				env[target] = entry.Database
+			case "database", "vhost":
+				env[target] = v.database
 			case "db":
 				if !redisUnallocated {
 					env[target] = v.db
@@ -1089,7 +1120,7 @@ func markDBSecret(env map[string]string, secret map[string]bool, logical, target
 		return
 	}
 	switch logical {
-	case "host", "port", "user", "database", "db", "endpoint", "region", "bucket":
+	case "host", "port", "user", "database", "vhost", "db", "endpoint", "region", "bucket":
 		delete(secret, target)
 	default: // password, access_key, secret_key, dsn, legacy DSN templates
 		secret[target] = true

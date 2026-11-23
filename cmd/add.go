@@ -330,7 +330,8 @@ func inCatalog(name string) bool {
 }
 
 // checkAddName refuses a name a folder cannot be installed as: an invalid
-// service name, or a shared provider's (postgres, mariadb, redis, garage),
+// service name, or a shared provider's (postgres, mariadb, redis, garage,
+// rabbitmq),
 // which the leader treats as the one shared instance every service uses.
 func checkAddName(name string) error {
 	if err := validName(name); err != nil {

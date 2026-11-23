@@ -1,9 +1,9 @@
 // Package db manages shared database provisioning for homelab services.
 //
-// When a service declares a dependency (postgres, mariadb, redis or s3) in its
-// config.yaml, the provisioner isolates it on the one shared instance via
-// docker exec: a database and role on postgres/mariadb, a database number on
-// redis, a bucket and access key on Garage. Connection details are injected at
+// When a service declares a dependency (postgres, mariadb, redis, s3 or amqp)
+// in its config.yaml, the provisioner isolates it on the one shared instance
+// via docker exec: a database and role on postgres/mariadb, a database number
+// on redis, a bucket and access key on Garage, a vhost and user on RabbitMQ. Connection details are injected at
 // runtime by config.BuildEnv().
 package db
 
@@ -99,6 +99,8 @@ func (p *Provisioner) Provision(ctx context.Context, dbType config.DBType, svcNa
 		return p.provisionRedis(svcName, decl)
 	case config.DBS3:
 		return p.provisionGarage(svcName, decl)
+	case config.DBAMQP:
+		return p.provisionRabbitMQ(svcName)
 	default:
 		return fmt.Errorf("unsupported database type: %s", dbType)
 	}
@@ -107,7 +109,8 @@ func (p *Provisioner) Provision(ctx context.Context, dbType config.DBType, svcNa
 // Deprovision undoes Provision's access grant, keeping data: a postgres owner
 // role loses its login (it still owns the database), a read-only role and a
 // MariaDB account are dropped, Garage deletes the access key (the bucket and
-// its objects stay), and redis frees the database number for reuse.
+// its objects stay), RabbitMQ deletes the user (the vhost and its queues
+// stay), and redis frees the database number for reuse.
 func (p *Provisioner) Deprovision(ctx context.Context, dbType config.DBType, svcName string, decl config.ServiceDBDecl) error {
 	switch dbType {
 	case config.DBPostgres:
@@ -121,6 +124,8 @@ func (p *Provisioner) Deprovision(ctx context.Context, dbType config.DBType, svc
 		return config.ReleaseRedisDB(p.ConfigDir, svcName, decl.Name)
 	case config.DBS3:
 		return p.deprovisionGarage(svcName)
+	case config.DBAMQP:
+		return p.deprovisionRabbitMQ(svcName)
 	default:
 		return fmt.Errorf("unsupported database type: %s", dbType)
 	}

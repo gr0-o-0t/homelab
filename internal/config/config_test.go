@@ -720,6 +720,33 @@ databases:
 	assert.Equal(t, "", env["SHOULD_BE_EMPTY"], "the SQL password must never reach an s3 mapping")
 }
 
+func TestBuildEnv_AMQPVhostAndUser(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "services/celery/config.yaml", `
+databases:
+  - amqp:
+      env:
+        host: MQ_HOST
+        port: MQ_PORT
+        user: MQ_USER
+        password: MQ_PASSWORD
+        vhost: MQ_VHOST
+        dsn: BROKER_URL
+`)
+	sm := memSecrets(t, map[[2]string]string{
+		{"celery", config.AMQPPasswordKey}:   "mqpw",
+		{"", config.DBPasswordKey("celery")}: "sqlpw",
+	})
+	env, err := config.BuildEnv(filepath.Join(dir, "config.yaml"), dir, "celery", sm)
+	require.NoError(t, err)
+	assert.Equal(t, "homelab-rabbitmq", env["MQ_HOST"])
+	assert.Equal(t, "5672", env["MQ_PORT"])
+	assert.Equal(t, "celery", env["MQ_USER"], "user defaults to the service name")
+	assert.Equal(t, "mqpw", env["MQ_PASSWORD"], "the amqp password, not the SQL one")
+	assert.Equal(t, "celery", env["MQ_VHOST"], "vhost defaults to the service name")
+	assert.Equal(t, "amqp://celery:mqpw@homelab-rabbitmq:5672/celery", env["BROKER_URL"])
+}
+
 func TestSecretEntry_GenerateRoundTrips(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")

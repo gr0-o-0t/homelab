@@ -234,11 +234,12 @@ func bootstrapIfShared(ctx context.Context, root, name string) error {
 
 // releaseDBDependencies gives back what a deleted service held on the shared
 // instances that would otherwise leak: its redis database numbers, its
-// Garage access key and its read-only postgres roles on other services'
-// databases. Data stays — the bucket, like a postgres database, is only
-// removed by hand; the service's own postgres role is kept too, as before.
-// Best effort: a stopped garage or postgres only means the key or role
-// outlives the service, which is reported, not fatal.
+// Garage access key, its RabbitMQ user and its read-only postgres roles on
+// other services' databases. Data stays — the bucket and the vhost, like a
+// postgres database, are only removed by hand; the service's own postgres
+// role is kept too, as before. Best effort: a stopped garage, rabbitmq or
+// postgres only means the key, user or role outlives the service, which is
+// reported, not fatal.
 func releaseDBDependencies(ctx context.Context, root, name string) []error {
 	svcCfg, err := config.Load(config.ServiceConfigFile(root, name))
 	if err != nil || svcCfg == nil || svcCfg.Databases.Kind == 0 {
@@ -248,8 +249,9 @@ func releaseDBDependencies(ctx context.Context, root, name string) []error {
 	if err != nil {
 		return []error{err}
 	}
-	// Only the garage key needs the keyring and Docker; the redis numbers
-	// are a file here, released even when neither is available.
+	// Only the garage key needs the keyring and Docker (the rabbitmq user
+	// needs Docker); the redis numbers are a file here, released even when
+	// neither is available.
 	p := db.New(root, nil)
 	var garageErr, dockerErr error
 	if sm, err := openSecrets(); err != nil {
@@ -286,6 +288,15 @@ func releaseDBDependencies(ctx context.Context, root, name string) []error {
 			}
 			if garageErr != nil {
 				errs = append(errs, fmt.Errorf("garage key for %s not deleted: %w", name, garageErr))
+				continue
+			}
+		case config.DBAMQP:
+			if dockerErr != nil {
+				errs = append(errs, fmt.Errorf("rabbitmq user for %s not deleted: %w", name, dockerErr))
+				continue
+			}
+			if err := p.EnsureRunning(ctx, entry.Type); err != nil {
+				errs = append(errs, fmt.Errorf("rabbitmq user for %s not deleted: %w", name, err))
 				continue
 			}
 		default:

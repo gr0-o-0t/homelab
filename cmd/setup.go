@@ -338,6 +338,8 @@ func runServiceSetup(cmd *cobra.Command, args []string) error {
 						bucket = name
 					}
 					step(styles.Success.Render("✓"), fmt.Sprintf("garage bucket '%s' and access key ready", bucket))
+				case config.DBAMQP:
+					step(styles.Success.Render("✓"), fmt.Sprintf("rabbitmq vhost and user '%s' ready", name))
 				default:
 					step(styles.Success.Render("✓"), fmt.Sprintf("%s database '%s' created with user '%s'",
 						entry.Type, entry.Database, entry.User))

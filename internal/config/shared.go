@@ -15,9 +15,10 @@ import (
 // Shared-service credentials and state that are not per-database passwords.
 //
 // Every dependency a service declares under `databases:` is served by one
-// shared instance — postgres, mariadb, redis, garage — and isolated inside it:
-// a database and role per service on the SQL engines, a database number per
-// service on redis, a bucket and access key per service on garage.
+// shared instance — postgres, mariadb, redis, garage, rabbitmq — and isolated
+// inside it: a database and role per service on the SQL engines, a database
+// number per service on redis, a bucket and access key per service on garage,
+// a vhost and user per service on rabbitmq.
 
 const (
 	// RedisPasswordKey is the shared redis password, stored in the keyring
@@ -38,6 +39,14 @@ const (
 	// S3Region is the region the shared Garage answers for (garage.toml
 	// s3_region). Garage rejects a SigV4 scope naming any other region.
 	S3Region = "garage"
+
+	// AMQPPasswordKey holds a service's RabbitMQ password, in that service's
+	// keyring namespace. Its user and vhost are both the service name.
+	AMQPPasswordKey = "AMQP_PASSWORD"
+
+	// RabbitMQAdminUser is the shared RabbitMQ's administrator (the
+	// management UI login); no service may be provisioned under that name.
+	RabbitMQAdminUser = "admin"
 
 	// redisDBFile records which service owns which redis database number.
 	redisDBFile = "redis-dbs.yaml"

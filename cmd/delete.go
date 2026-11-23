@@ -40,7 +40,7 @@ func init() {
 }
 
 // sharedDBServices are depended on by other services; deleting one breaks them.
-var sharedDBServices = map[string]bool{"postgres": true, "mariadb": true, "redis": true, "garage": true}
+var sharedDBServices = map[string]bool{"postgres": true, "mariadb": true, "redis": true, "garage": true, "rabbitmq": true}
 
 func runDelete(_ *cobra.Command, args []string) error {
 	root := configDir()

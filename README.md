@@ -371,6 +371,7 @@ lists the catalog; `homelab status <service>` shows what a service declares.
 | `radarr` | `radarr.home.*` | Radarr (movie collection management and automation) |
 | `redis` | – | shared, installed on demand |
 | `searxng` | `searxng.home.*` | SearXNG (privacy-respecting metasearch engine) |
+| `rabbitmq` | `rabbitmq.home.*` | shared message queue (AMQP), installed on demand; management UI |
 | `seerr` | `seerr.home.*` | Seerr (media discovery and request management) |
 | `sonarr` | `sonarr.home.*` | Sonarr (TV series management and automation) |
 | `speedtest-tracker` | `speedtest-tracker.home.*` | Speedtest Tracker (automated internet speed monitoring) |

@@ -54,11 +54,12 @@ services/paperless/          # in the leader's state dir
 Two rules:
 - Attach the main (UI-facing) container to the `home-services` external network
   (the Swarm overlay; homelab deploys the file as a Swarm stack).
-- Never bundle a database, cache or object store. Postgres, MariaDB, Redis and
-  S3 (Garage) each run once, shared; declare what you need under `databases:`
-  in `config.yaml` and the service gets its own database/role, redis database
-  number, or bucket + key inside the shared instance. (A catalog test fails on
-  a bundled postgres/mysql/mariadb/mongo/redis/valkey/keydb/minio/garage image.)
+- Never bundle a database, cache, object store or message queue. Postgres,
+  MariaDB, Redis, S3 (Garage) and AMQP (RabbitMQ) each run once, shared;
+  declare what you need under `databases:` in `config.yaml` and the service
+  gets its own database/role, redis database number, bucket + key, or vhost +
+  user inside the shared instance. (A catalog test fails on a bundled
+  postgres/mysql/mariadb/mongo/redis/valkey/keydb/minio/garage/rabbitmq image.)
   Use a separate `internal: true` network only for other background workers.
 
 It runs on Swarm, so `privileged`, `devices`, `network_mode`, `env_file` and a
@@ -135,6 +136,17 @@ databases:
   - redis:
       env:
         dsn: PAPERLESS_REDIS        # redis://:<shared pw>@homelab-redis:6379/<own db>
+```
+
+A service that needs a message queue declares `amqp` and gets a vhost and a
+user, both named after the service, on the shared RabbitMQ:
+
+```yaml
+databases:
+  - amqp:
+      env:
+        dsn: CELERY_BROKER_URL      # amqp://<svc>:<own pw>@homelab-rabbitmq:5672/<svc>
+        # or separately: host, port, user, password, vhost
 ```
 
 ### 3. Declare the ports in `config.yaml` (routing)
@@ -276,8 +288,8 @@ services:
 - A local image runs on the core node unless `config.yaml` sets `placement:`.
   Shared databases are declared under `databases:` as for any service.
 - The folder must not hold symlinks, dotfiles or an `exposure.yaml`; a file over
-  500 KiB or a folder over 10 MiB is refused; postgres, mariadb, redis and
-  garage are reserved names.
+  500 KiB or a folder over 10 MiB is refused; postgres, mariadb, redis,
+  garage and rabbitmq are reserved names.
 
 Install, deploy, expose (from the PC with the image):
 

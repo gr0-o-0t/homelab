@@ -33,6 +33,7 @@ var bundledEngines = []struct{ fragment, owner string }{
 	{"dragonfly", "redis"},
 	{"minio", "garage"},
 	{"garage", "garage"},
+	{"rabbitmq", "rabbitmq"},
 }
 
 // imageDefault resolves "${VAR:-default}" to its default, so a configurable
@@ -73,7 +74,7 @@ func TestCatalogServices_NoBundledDatabases(t *testing.T) {
 	}
 	sort.Strings(bad)
 	assert.Empty(t, bad, "declare a shared dependency under config.yaml `databases:` "+
-		"(postgres, mariadb, redis, s3) instead of bundling a database container")
+		"(postgres, mariadb, redis, s3, amqp) instead of bundling a database container")
 }
 
 func TestImageRepo(t *testing.T) {
@@ -121,6 +122,7 @@ func TestCatalogServices_DatabaseEnvKeysAreKnown(t *testing.T) {
 		config.DBMariaDB:  {"user", "password", "database"},
 		config.DBRedis:    {"password", "db"},
 		config.DBS3:       {"endpoint", "region", "bucket", "access_key", "secret_key"},
+		config.DBAMQP:     {"user", "password", "vhost"},
 	}
 	entries, err := assets.CatalogFS.ReadDir("services")
 	require.NoError(t, err)

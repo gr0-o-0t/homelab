@@ -259,6 +259,12 @@ func AllowedNames(root string) (Names, error) {
 					n.dbCreds[secrets.ServiceKey(svc, k)] = dbCred{svc, "Garage access key",
 						"a new key will be created for the existing bucket"}
 				}
+			case config.DBAMQP:
+				k := config.AMQPPasswordKey
+				m[k] = true
+				n.generated[secrets.ServiceKey(svc, k)] = true // provisioned on up
+				n.dbCreds[secrets.ServiceKey(svc, k)] = dbCred{svc, "RabbitMQ password",
+					"a new one will be set on the existing user"}
 			}
 		}
 	}
