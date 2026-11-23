@@ -379,6 +379,7 @@ lists the catalog; `homelab status <service>` shows what a service declares.
 | `sonarr` | `sonarr.home.*` | Sonarr (TV series management and automation) |
 | `speedtest-tracker` | `speedtest-tracker.home.*` | Speedtest Tracker (automated internet speed monitoring) |
 | `stirlingpdf` | `stirlingpdf.home.*` | Stirling PDF (self-hosted PDF manipulation tool) |
+| `sure` | `sure.home.*` | Sure (personal finance and wealth management) |
 | `tandoor` | `tandoor.home.*` | Tandoor Recipes (self-hosted recipe manager) |
 | `tautulli` | `tautulli.home.*` | Tautulli (Plex media server monitoring and statistics) |
 | `technitium` | `technitium.home.*` | Technitium DNS Server (authoritative and recursive DNS server) |

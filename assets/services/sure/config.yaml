@@ -1,0 +1,68 @@
+vars:
+  SURE_IMAGE_TAG:
+    value: "stable"
+    required: false
+    description: "Image channel or version: stable, latest (alpha) or a pinned version such as 0.7.0"
+  SMTP_ADDRESS:
+    value: ""
+    required: false
+    description: "SMTP host for invites and password resets; leave empty to run without mail"
+  SMTP_PORT:
+    value: "587"
+    required: false
+    description: "SMTP port"
+  SMTP_USERNAME:
+    value: ""
+    required: false
+    description: "SMTP user"
+  SMTP_TLS_ENABLED:
+    value: "false"
+    required: false
+    description: "true for implicit TLS (SMTPS, usually port 465); STARTTLS on 587 needs false"
+  EMAIL_SENDER:
+    value: ""
+    required: false
+    description: "From address of outgoing mail"
+  OPENAI_URI_BASE:
+    value: ""
+    required: false
+    description: "OpenAI-compatible endpoint for AI chat and rules, e.g. http://litellm:4000/v1; empty = api.openai.com"
+  OPENAI_MODEL:
+    value: ""
+    required: false
+    description: "Model name for AI features; required when OPENAI_URI_BASE is set"
+
+secrets:
+  SECRET_KEY_BASE:
+    required: true
+    generate: hex32
+    description: "Signs sessions and derives the encryption keys for stored credentials — never change it once data exists"
+  SMTP_PASSWORD:
+    required: false
+    description: "SMTP password"
+  OPENAI_ACCESS_TOKEN:
+    required: false
+    description: "API key for AI features (costs money on api.openai.com); empty disables them"
+
+# Both on the shared instances. pgcrypto is pre-created by the provisioner as
+# the postgres superuser, so the `enable_extension "pgcrypto"` in Sure's schema
+# is a no-op for its unprivileged role.
+databases:
+  - postgres:
+      database: sure
+      user: sure
+      extensions:
+        - pgcrypto
+      env:
+        host: SURE_DB_HOST
+        port: SURE_DB_PORT
+        user: SURE_DB_USER
+        password: SURE_DB_PASSWORD
+        database: SURE_DB_NAME
+  # Its own database number on homelab-redis (Sidekiq queues and the cache).
+  - redis:
+      env:
+        dsn: SURE_REDIS_URL
+
+ports:
+  - 3000
