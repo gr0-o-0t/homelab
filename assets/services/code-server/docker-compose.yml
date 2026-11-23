@@ -1,0 +1,50 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Service: code-server (VS Code in the browser)
+# https://github.com/coder/code-server
+# https://docs.linuxserver.io/images/docker-code-server/
+#
+# /config is the home directory: settings, extensions, ~/.ssh and the default
+# workspace (/config/workspace) all live in the one volume, so it is pinned to
+# the core node and nothing in it is lost on update.
+# The terminal runs inside this container, not on the host: no docker socket.
+# PROXY_DOMAIN is left out: the image passes `--proxy-domain=` even when it is
+# empty, and the edge routes no `<port>.code-server.*` hosts. To reach a dev
+# server started in the terminal, use code-server's path proxy, /proxy/<port>/.
+# ─────────────────────────────────────────────────────────────────────────────
+
+networks:
+  home-services:
+    name: home-services
+    external: true
+
+services:
+  code-server:
+    image: lscr.io/linuxserver/code-server:latest
+    container_name: code-server
+    # linuxserver.io image: its init needs root and drops to PUID/PGID itself,
+    # so those go in the environment, not in `user:`.
+    restart: always
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      TZ: ${TZ:-UTC}
+      # Without PASSWORD (or HASHED_PASSWORD) the image starts with --auth none.
+      PASSWORD: ${PASSWORD}
+      # Empty leaves sudo disabled in the terminal.
+      SUDO_PASSWORD: ${SUDO_PASSWORD}
+      DEFAULT_WORKSPACE: /config/workspace
+    volumes:
+      - code-server-config:/config
+    networks:
+      - home-services
+    healthcheck:
+      # nc is what the image's own s6 readiness check uses; curl is not assured.
+      test: ["CMD", "nc", "-z", "127.0.0.1", "8443"]
+      interval: 1m
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  code-server-config:
+    name: code-server_data

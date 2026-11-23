@@ -1,0 +1,20 @@
+vars:
+  PUID:
+    value: "1000"
+    required: false
+  PGID:
+    value: "1000"
+    required: false
+  TZ:
+    value: "UTC"
+    required: false
+
+secrets:
+  PASSWORD:
+    required: true
+    description: "Web UI login password (without one code-server runs with no authentication)"
+  SUDO_PASSWORD:
+    required: false
+    description: "Password for sudo in the integrated terminal; leave empty to keep sudo disabled"
+ports:
+  - 8443

@@ -326,6 +326,7 @@ lists the catalog; `homelab status <service>` shows what a service declares.
 | `bazarr` | `bazarr.home.*` | Bazarr (subtitle management companion for Sonarr and Radarr) |
 | `beszel-hub` | `beszel-hub.home.*` | Beszel Hub (lightweight server monitoring dashboard, with an agent on every node) |
 | `bifrost` | `bifrost.home.*` | Bifrost (OpenAI-compatible AI gateway + web UI) |
+| `code-server` | `code-server.home.*` | code-server (VS Code in the browser) |
 | `copyparty` | `copyparty.home.*` | Copyparty (file server with upload, search, and media streaming) |
 | `cyberchef` | `cyberchef.home.*` | CyberChef (web app for encryption, encoding, compression and more) |
 | `dbx` | `dbx.home.*` | dbx (lightweight, cross-platform database client) |
