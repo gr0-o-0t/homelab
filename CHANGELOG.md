@@ -3,6 +3,32 @@
 Notable changes per release. The release workflow publishes the section
 matching the pushed tag as the GitHub release notes.
 
+## v0.6.1-dev.1 — 2026-11-23
+
+Development prerelease of v0.6.1 (does not move `:latest`). Install it with
+`homelab upgrade --version v0.6.1-dev.1`.
+
+### Added
+
+- `rabbitmq`: shared message queue (AMQP), installed on demand like
+  postgres, redis and garage; management UI at `rabbitmq.home.*` (login
+  `admin`, generated password). A service declares `databases: - amqp:`
+  and gets its own vhost and user, both named after it, with permissions
+  on that vhost only; env keys `host port user password vhost dsn`
+  (`amqp://<svc>:<pw>@homelab-rabbitmq:5672/<svc>`). The password is
+  generated into the service's vault namespace (`AMQP_PASSWORD`).
+  `homelab delete` removes the user and keeps the vhost and its queues.
+  A custom service cannot be named `rabbitmq`, and a service named `admin`
+  (the management login) cannot declare `amqp`.
+
+### Fixed
+
+- `stirlingpdf`: user-saved files, custom files and pipelines are on named
+  volumes, so they survive task restarts; the image comes from the official
+  registry, `docker.stirlingpdf.com`. Installed services keep their compose
+  file: add the volumes to an installed Stirling PDF with
+  `homelab edit stirlingpdf docker-compose.yml`.
+
 ## v0.6.0 — 2026-11-19
 
 Minor release: the v0.6.0-dev.1 prerelease, verified on the live cluster
