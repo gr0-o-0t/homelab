@@ -3,6 +3,41 @@
 Notable changes per release. The release workflow publishes the section
 matching the pushed tag as the GitHub release notes.
 
+## v0.6.1-dev.2 — 2026-11-23
+
+Development prerelease of v0.6.1 (does not move `:latest`). Install it with
+`homelab upgrade --version v0.6.1-dev.2`.
+
+### Added
+
+- `affine`: AFFiNE (docs, whiteboards and databases in one workspace) on
+  the shared postgres (pgvector, pgcrypto) and redis. The server runs
+  upstream's migration script before it starts; search indexer and SMTP
+  are off. Open `/admin` after the first `up` to create the admin account.
+- `code-server`: VS Code in the browser. Settings, extensions and the
+  workspace live in one volume on the core node; no docker socket. Reach a
+  dev server started in its terminal at `/proxy/<port>/`.
+- `convertx`: ConvertX (file converter for 1000+ formats). Create the first
+  account right after `up`: registration closes after it.
+- `sure`: Sure (personal finance, a Maybe Finance fork) on the shared
+  postgres and redis; `SECRET_KEY_BASE` is generated into the vault. Keep
+  it: a restore without it leaves stored provider credentials unreadable.
+
+### Changed
+
+- `dozzle` runs in Swarm mode, one instance on every node (`deploy.mode:
+  global`), and shows logs and stats from the whole cluster instead of the
+  core node only. Settings made in the UI are kept per node. Installed
+  services keep their compose file, and Swarm cannot turn a replicated
+  service into a global one, so to switch an installed Dozzle:
+  `homelab edit dozzle docker-compose.yml`, then
+  `homelab prune dozzle --keep-volumes --keep-images` (removes only the
+  Swarm service) and `homelab up dozzle`.
+
+### Fixed
+
+- A rebalancer test raced the updates it checked and failed in CI.
+
 ## v0.6.1-dev.1 — 2026-11-23
 
 Development prerelease of v0.6.1 (does not move `:latest`). Install it with
