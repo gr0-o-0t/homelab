@@ -1,6 +1,10 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Service: Stirling PDF (self-hosted PDF manipulation tool)
 # https://github.com/Stirling-Tools/Stirling-PDF
+# https://docs.stirlingpdf.com/Server/Install/Docker/
+#
+# `latest` bundles LibreOffice, Tesseract and OCRmyPDF; upstream suggests 4 GB
+# of memory (`mem_limit` is ignored under Swarm, so it is not set here).
 # ─────────────────────────────────────────────────────────────────────────────
 
 networks:
@@ -10,9 +14,11 @@ networks:
 
 services:
   stirlingpdf:
-    image: stirlingtools/stirling-pdf:latest
+    # Official registry; Docker Hub (stirlingtools/stirling-pdf) and
+    # ghcr.io/stirling-tools/stirling-pdf are mirrors.
+    image: docker.stirlingpdf.com/stirlingtools/stirling-pdf:latest
     container_name: stirlingpdf
-    # No `user:`: /configs and /logs do not exist in the image, so the named
+    # No `user:`: the mounted dirs do not exist in the image, so the named
     # volumes start root-owned. init.sh runs as root and drops to PUID/PGID.
     restart: always
     environment:
@@ -23,9 +29,12 @@ services:
       SECURITY_ENABLELOGIN: "false"
       LANGS: en_US
     volumes:
-      - stirlingpdf-data:/usr/share/tessdata
-      - stirlingpdf-configs:/configs
+      - stirlingpdf-data:/usr/share/tessdata # extra OCR languages
+      - stirlingpdf-configs:/configs # settings.yml, built-in DB, keys
       - stirlingpdf-logs:/logs
+      - stirlingpdf-storage:/storage # files users save (on by default)
+      - stirlingpdf-customfiles:/customFiles # branding, signatures
+      - stirlingpdf-pipeline:/pipeline # folder-scan watched/finished dirs
     networks:
       - home-services
     healthcheck:
@@ -46,3 +55,9 @@ volumes:
     name: stirlingpdf_configs
   stirlingpdf-logs:
     name: stirlingpdf_logs
+  stirlingpdf-storage:
+    name: stirlingpdf_storage
+  stirlingpdf-customfiles:
+    name: stirlingpdf_customfiles
+  stirlingpdf-pipeline:
+    name: stirlingpdf_pipeline
