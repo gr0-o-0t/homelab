@@ -138,11 +138,30 @@ func waitCalls(t *testing.T, f *swarmtest.Fake, method string, n int) {
 }
 
 // fire fires a timer and waits for the apply it triggers to list services.
+// That is the start of the apply, not its end: the updates follow, so check
+// their outcome with waitConstraints.
 func fire(t *testing.T, f *swarmtest.Fake, r timerReq) {
 	t.Helper()
 	n := calls(f, "ServiceList")
 	r.ch <- time.Now()
 	waitCalls(t, f, "ServiceList", n+1)
+}
+
+// waitConstraints waits until service id has constraints want (none when
+// want is empty).
+func waitConstraints(t *testing.T, f *swarmtest.Fake, id string, want []string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		got := constraintsOf(t, f, id)
+		if slices.Equal(got, want) || (len(got) == 0 && len(want) == 0) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s constraints = %v, want %v", id, got, want)
+		}
+		time.Sleep(time.Millisecond)
+	}
 }
 
 // nodeEvent sends a node event and waits for Run to re-read the nodes for
@@ -192,9 +211,7 @@ func TestRebalancer_DebouncesFlapping(t *testing.T) {
 	}
 
 	fire(t, f, second)
-	if got := constraintsOf(t, f, web); !slices.Equal(got, onWorker) {
-		t.Errorf("after a stable Ready, web constraints = %v, want %v", got, onWorker)
-	}
+	waitConstraints(t, f, web, onWorker) // after a stable Ready
 }
 
 func TestRebalancer_LastWorkerDownDropsConstraint(t *testing.T) {
@@ -309,9 +326,7 @@ func TestRebalancer_UpDuringDebounceThenFlapReconciles(t *testing.T) {
 		t.Fatalf("flap back scheduled %s, want a %s reconcile", r.d, swarm.ReconcileDelay)
 	}
 	fire(t, f, r)
-	if got := constraintsOf(t, f, web); len(got) != 0 {
-		t.Errorf("web constraints = %v, want none: no worker is ready", got)
-	}
+	waitConstraints(t, f, web, nil) // no worker is ready
 }
 
 // An apply that fails for one service still moves the others, and a flap
@@ -345,9 +360,7 @@ func TestRebalancer_PartialApplyThenFlapReconciles(t *testing.T) {
 	}
 	fire(t, f, r)
 	for _, id := range []string{api, web} {
-		if got := constraintsOf(t, f, id); len(got) != 0 {
-			t.Errorf("%s constraints = %v, want none: no worker is ready", id, got)
-		}
+		waitConstraints(t, f, id, nil) // no worker is ready
 	}
 }
 
