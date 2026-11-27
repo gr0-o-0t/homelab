@@ -3,6 +3,32 @@
 Notable changes per release. The release workflow publishes the section
 matching the pushed tag as the GitHub release notes.
 
+## v0.6.1-dev.3 — 2026-11-27
+
+Development prerelease of v0.6.1 (does not move `:latest`). Install it with
+`homelab upgrade --version v0.6.1-dev.3`.
+
+### Added
+
+- `photoprism`: PhotoPrism (AI-powered photo library) on the shared mariadb.
+  Originals are read from `<MEDIA_PATH>/photos` on the core node. Set
+  `PHOTOPRISM_ADMIN_PASSWORD` before the first `up`; it applies on first
+  start only. Faces and TensorFlow can be turned off to save CPU and memory.
+- `plane`: Plane (project management: issues, cycles, modules, pages), the
+  community all-in-one image on the shared postgres, redis, rabbitmq and
+  garage (uploads bucket `plane-uploads`). `SECRET_KEY` is generated into
+  the vault and also encrypts saved instance settings: never change it once
+  data exists.
+- `romm`: RomM (ROM manager: scan, enrich and play a retro game library) on
+  the shared mariadb and redis. The library is `<MEDIA_PATH>/games` on the
+  core node, with `roms/<platform>/` inside. Hasheous matching is on by
+  default; ScreenScraper, RetroAchievements and SteamGridDB credentials are
+  optional.
+- `rxresume`: Reactive Resume (resume builder with PDF export) on the
+  shared postgres. SMTP, a custom OIDC provider (e.g. Pocket ID) and a
+  shared AI provider are optional. Set `FLAG_DISABLE_SIGNUPS=true` after
+  creating your account.
+
 ## v0.6.1-dev.2 — 2026-11-23
 
 Development prerelease of v0.6.1 (does not move `:latest`). Install it with
