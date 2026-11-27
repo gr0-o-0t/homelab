@@ -363,6 +363,7 @@ lists the catalog; `homelab status <service>` shows what a service declares.
 | `ntfy` | `ntfy.home.*` | ntfy (self-hosted push notification service) |
 | `ollama` | `ollama.home.*` | Ollama (local large language model runner) |
 | `open-webui` | `open-webui.home.*` | Open WebUI (browser-based UI for Ollama and other LLM backends) |
+| `photoprism` | `photoprism.home.*` | PhotoPrism (AI-powered photo library — browse, organise, share) |
 | `pihole` | `pihole.home.*` | Pi-hole (network-wide ad blocking DNS server) |
 | `plex` | `plex.home.*` | Plex Media Server |
 | `pocket-id` | `pocket-id.home.*` | Pocket ID (OIDC identity provider) |

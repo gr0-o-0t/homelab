@@ -1,0 +1,44 @@
+vars:
+  PHOTOPRISM_IMAGE_TAG:
+    value: "latest"
+    required: false
+    description: "photoprism/photoprism image tag: latest or a pinned release such as 261029"
+  MEDIA_PATH:
+    value: "/mnt/media"
+    required: false
+    description: "Host media root on the core node; originals are <MEDIA_PATH>/photos"
+  TZ:
+    value: "UTC"
+    required: false
+  PHOTOPRISM_DEFAULT_LOCALE:
+    value: "en"
+    required: false
+    description: "Default UI language, e.g. en or de"
+  PHOTOPRISM_DISABLE_FACES:
+    value: "false"
+    required: false
+    description: "Turn off face detection and recognition (saves CPU and memory)"
+  PHOTOPRISM_DISABLE_TENSORFLOW:
+    value: "false"
+    required: false
+    description: "Turn off every TensorFlow feature: labels, faces, NSFW detection"
+
+secrets:
+  PHOTOPRISM_ADMIN_PASSWORD:
+    required: true
+    description: "Initial password of the `admin` user (8-72 characters); set on first start only"
+
+# Shared homelab-mariadb.
+databases:
+  - mariadb:
+      database: photoprism
+      user: photoprism
+      env:
+        host: PHOTOPRISM_DB_HOST
+        port: PHOTOPRISM_DB_PORT
+        user: PHOTOPRISM_DB_USER
+        password: PHOTOPRISM_DB_PASSWORD
+        database: PHOTOPRISM_DB_NAME
+
+ports:
+  - 2342

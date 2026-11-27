@@ -1,0 +1,96 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Service: PhotoPrism (AI-powered photo library — browse, organise, share)
+# https://github.com/photoprism/photoprism
+# https://docs.photoprism.app/getting-started/docker-compose/
+# Adapted from the official compose.yaml (https://dl.photoprism.app/docker/compose.yaml).
+#
+# Differences from upstream, all deliberate:
+#   - No mariadb container. Uses shared homelab-mariadb (database and account
+#     `photoprism`). Upstream tunes its own server (READ-COMMITTED isolation,
+#     a 512M buffer pool); the shared instance keeps MariaDB's defaults, which
+#     PhotoPrism runs on.
+#   - The ollama, open-webui and watchtower profiles are dropped: the catalog
+#     has its own ollama, and only `homelab update` changes images.
+#   - TLS ends at Caddy: PHOTOPRISM_DISABLE_TLS is on, the site URL is the
+#     https tailnet URL, and the Swarm overlay (10.0.0.0/8) is a trusted proxy
+#     so client addresses in logs and login throttling are the real ones.
+#     PHOTOPRISM_INIT ("https") is dropped for the same reason.
+#   - PHOTOPRISM_ADMIN_PASSWORD is a secret set with `homelab setup`, not an
+#     "insecure" literal. It applies on first start only; change it in the UI.
+#   - Originals are ${MEDIA_PATH}/photos on the core node, writable so uploads
+#     and WebDAV work. The directory must exist before `up`, or Swarm refuses
+#     the bind mount. storage (cache, thumbnails, sidecars, settings) is a
+#     named volume, so `homelab backup photoprism` covers it with the database.
+#   - seccomp:unconfined is dropped (Swarm cannot set it; upstream needs it
+#     only on old Docker/libseccomp). `depends_on` is dropped (Swarm ignores
+#     it); PhotoPrism retries the database itself. No host port: Caddy reaches
+#     2342 over home-services.
+#
+# First run:  mkdir -p /mnt/media/photos on minis, then
+#             homelab setup photoprism && homelab up photoprism && homelab enable photoprism
+# Then open https://photoprism.<home>.<domain>, log in as `admin` and run
+# Library → Index. WebDAV: https://photoprism.<home>.<domain>/originals/
+# ─────────────────────────────────────────────────────────────────────────────
+
+networks:
+  home-services:
+    name: home-services
+    external: true
+
+services:
+  photoprism:
+    image: photoprism/photoprism:${PHOTOPRISM_IMAGE_TAG:-latest}
+    container_name: photoprism
+    restart: always
+    stop_grace_period: 15s
+    security_opt:
+      - apparmor:unconfined
+    working_dir: "/photoprism" # upstream: do not change or remove
+    environment:
+      TZ: ${TZ:-UTC}
+      PHOTOPRISM_ADMIN_USER: "admin"
+      PHOTOPRISM_ADMIN_PASSWORD: ${PHOTOPRISM_ADMIN_PASSWORD}
+      PHOTOPRISM_AUTH_MODE: "password"
+      PHOTOPRISM_SITE_URL: "https://photoprism.${HOME_SUBDOMAIN}.${DOMAIN}/"
+      PHOTOPRISM_DISABLE_TLS: "true"
+      PHOTOPRISM_DEFAULT_TLS: "false"
+      PHOTOPRISM_TRUSTED_PROXY: "10.0.0.0/8,172.16.0.0/12,127.0.0.0/8"
+      PHOTOPRISM_SITE_TITLE: "PhotoPrism"
+      PHOTOPRISM_SITE_CAPTION: "AI-Powered Photos App"
+      PHOTOPRISM_DEFAULT_LOCALE: ${PHOTOPRISM_DEFAULT_LOCALE:-en}
+      PHOTOPRISM_PLACES_LOCALE: "local"
+      PHOTOPRISM_LOG_LEVEL: "info"
+      PHOTOPRISM_READONLY: "false"
+      PHOTOPRISM_DISABLE_FACES: ${PHOTOPRISM_DISABLE_FACES:-false}
+      PHOTOPRISM_DISABLE_TENSORFLOW: ${PHOTOPRISM_DISABLE_TENSORFLOW:-false}
+      PHOTOPRISM_DETECT_NSFW: "false"
+      PHOTOPRISM_UPLOAD_NSFW: "true"
+      PHOTOPRISM_SIDECAR_YAML: "true"
+      PHOTOPRISM_BACKUP_ALBUMS: "true"
+      PHOTOPRISM_BACKUP_DATABASE: "true"
+      PHOTOPRISM_BACKUP_SCHEDULE: "daily"
+      PHOTOPRISM_AUTO_INDEX: 300
+      PHOTOPRISM_AUTO_IMPORT: -1
+      PHOTOPRISM_UPLOAD_LIMIT: 5000
+      PHOTOPRISM_ORIGINALS_LIMIT: 5000
+      PHOTOPRISM_HTTP_COMPRESSION: "zstd,gzip"
+      PHOTOPRISM_DATABASE_DRIVER: "mysql"
+      PHOTOPRISM_DATABASE_SERVER: "${PHOTOPRISM_DB_HOST}:${PHOTOPRISM_DB_PORT}"
+      PHOTOPRISM_DATABASE_NAME: ${PHOTOPRISM_DB_NAME}
+      PHOTOPRISM_DATABASE_USER: ${PHOTOPRISM_DB_USER}
+      PHOTOPRISM_DATABASE_PASSWORD: ${PHOTOPRISM_DB_PASSWORD}
+    volumes:
+      - ${MEDIA_PATH:-/mnt/media}/photos:/photoprism/originals
+      - photoprism-storage:/photoprism/storage
+    networks:
+      - home-services
+    healthcheck:
+      test: ["CMD", "photoprism", "status"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s # migrations run before the server listens
+
+volumes:
+  photoprism-storage:
+    name: photoprism_storage

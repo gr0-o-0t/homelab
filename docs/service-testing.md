@@ -54,6 +54,7 @@ Tor, I2P and Yggdrasil are not available in cluster mode yet, so only the tailne
 | ntfy | [ ] | [ ] |
 | ollama | [ ] | [ ] |
 | open-webui | [ ] | [ ] |
+| photoprism | [ ] | [ ] |
 | pihole | [ ] | [ ] |
 | plex | [ ] | [ ] |
 | pocket-id | [ ] | [ ] |
