@@ -3,6 +3,44 @@
 Notable changes per release. The release workflow publishes the section
 matching the pushed tag as the GitHub release notes.
 
+## v0.6.1 — 2026-11-27
+
+Patch release: the v0.6.1-dev.1 to dev.3 prereleases. Upgrade with
+`homelab upgrade`.
+
+### Added
+
+- `rabbitmq`: shared message queue (AMQP), installed on demand like
+  postgres, redis and garage; management UI at `rabbitmq.home.*` (login
+  `admin`, generated password). A service declares `databases: - amqp:`
+  and gets its own vhost and user, both named after it, with permissions
+  on that vhost only; env keys `host port user password vhost dsn`
+  (`amqp://<svc>:<pw>@homelab-rabbitmq:5672/<svc>`). The password is
+  generated into the service's vault namespace (`AMQP_PASSWORD`).
+  `homelab delete` removes the user and keeps the vhost and its queues.
+  A custom service cannot be named `rabbitmq`, and a service named `admin`
+  (the management login) cannot declare `amqp`.
+- New catalog services: `affine` (AFFiNE), `code-server`, `convertx`
+  (ConvertX), `photoprism` (PhotoPrism), `plane` (Plane), `romm` (RomM),
+  `rxresume` (Reactive Resume) and `sure` (Sure). Each runs on the shared
+  databases it needs; see the dev prerelease notes below for setup details.
+
+### Changed
+
+- `dozzle` runs in Swarm mode, one instance on every node (`deploy.mode:
+  global`), and shows logs and stats from the whole cluster instead of the
+  core node only. To switch an installed Dozzle:
+  `homelab edit dozzle docker-compose.yml`, then
+  `homelab prune dozzle --keep-volumes --keep-images` and `homelab up dozzle`.
+
+### Fixed
+
+- `stirlingpdf`: user-saved files, custom files and pipelines are on named
+  volumes, so they survive task restarts; the image comes from the official
+  registry, `docker.stirlingpdf.com`. Add the volumes to an installed
+  Stirling PDF with `homelab edit stirlingpdf docker-compose.yml`.
+- A rebalancer test raced the updates it checked and failed in CI.
+
 ## v0.6.1-dev.3 — 2026-11-27
 
 Development prerelease of v0.6.1 (does not move `:latest`). Install it with
