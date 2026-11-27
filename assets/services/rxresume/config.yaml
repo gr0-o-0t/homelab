@@ -1,0 +1,86 @@
+vars:
+  RXRESUME_IMAGE_TAG:
+    value: "latest"
+    required: false
+    description: "amruthpillai/reactive-resume image tag: latest or a pinned release such as v6.1.1"
+  FLAG_DISABLE_SIGNUPS:
+    value: "false"
+    required: false
+    description: "true blocks new accounts (existing ones still sign in); set after creating yours"
+  SMTP_HOST:
+    value: ""
+    required: false
+    description: "SMTP host for verification and reset mail; leave empty to run without mail"
+  SMTP_PORT:
+    value: "587"
+    required: false
+  SMTP_USER:
+    value: ""
+    required: false
+  SMTP_FROM:
+    value: ""
+    required: false
+    description: "From address of outgoing mail"
+  SMTP_SECURE:
+    value: "false"
+    required: false
+    description: "true for implicit TLS (usually port 465); STARTTLS on 587 needs false"
+  OAUTH_PROVIDER_NAME:
+    value: ""
+    required: false
+    description: "Sign-in button label for a custom OIDC provider, e.g. Pocket ID"
+  OAUTH_CLIENT_ID:
+    value: ""
+    required: false
+    description: "OIDC client ID; callback is https://rxresume.<home>.<domain>/api/auth/callback/custom"
+  OAUTH_DISCOVERY_URL:
+    value: ""
+    required: false
+    description: "OIDC discovery URL, e.g. https://pocket-id.<home>.<domain>/.well-known/openid-configuration"
+  AI_PROVIDER:
+    value: ""
+    required: false
+    description: "Shared AI provider: openai, anthropic, gemini, ollama or openai-compatible; empty = users bring their own keys"
+  AI_MODEL:
+    value: ""
+    required: false
+    description: "Model name; required when AI_PROVIDER is set"
+  AI_BASE_URL:
+    value: ""
+    required: false
+    description: "Endpoint, e.g. http://litellm:4000/v1 (openai-compatible) or http://ollama:11434 (ollama)"
+  FLAG_ALLOW_UNSAFE_AI_BASE_URL:
+    value: "false"
+    required: false
+    description: "true allows an http:// or private-network AI_BASE_URL (needed for litellm or ollama on home-services)"
+
+secrets:
+  AUTH_SECRET:
+    required: true
+    generate: hex32
+    description: "Signs sessions; changing it logs everyone out"
+  ENCRYPTION_SECRET:
+    required: true
+    generate: hex32
+    description: "Encrypts users' saved AI keys; changing it makes them unreadable"
+  SMTP_PASS:
+    required: false
+    description: "SMTP password"
+  OAUTH_CLIENT_SECRET:
+    required: false
+    description: "OIDC client secret"
+  AI_API_KEY:
+    required: false
+    description: "Key for the shared AI provider (not needed for ollama or a keyless openai-compatible endpoint)"
+
+# Shared homelab-postgres; no extensions needed.
+databases:
+  - postgres:
+      database: rxresume
+      user: rxresume
+      dsn_template: "postgresql://{user}:{password}@{host}:{port}/{database}"
+      env:
+        dsn: RXRESUME_DATABASE_URL
+
+ports:
+  - 3000

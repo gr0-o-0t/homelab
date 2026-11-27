@@ -377,6 +377,7 @@ lists the catalog; `homelab status <service>` shows what a service declares.
 | `radarr` | `radarr.home.*` | Radarr (movie collection management and automation) |
 | `redis` | – | shared, installed on demand |
 | `romm` | `romm.home.*` | RomM (ROM manager — scan, enrich and play a retro game library) |
+| `rxresume` | `rxresume.home.*` | Reactive Resume (resume builder — edit, share and export to PDF) |
 | `searxng` | `searxng.home.*` | SearXNG (privacy-respecting metasearch engine) |
 | `seerr` | `seerr.home.*` | Seerr (media discovery and request management) |
 | `sonarr` | `sonarr.home.*` | Sonarr (TV series management and automation) |

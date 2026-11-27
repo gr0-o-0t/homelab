@@ -64,6 +64,7 @@ Tor, I2P and Yggdrasil are not available in cluster mode yet, so only the tailne
 | qbittorrent | [ ] | [ ] |
 | radarr | [ ] | [ ] |
 | romm | [ ] | [ ] |
+| rxresume | [ ] | [ ] |
 | searxng | [v] | [v] |
 | seerr | [ ] | [ ] |
 | sonarr | [ ] | [ ] |
