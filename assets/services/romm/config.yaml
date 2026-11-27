@@ -1,0 +1,57 @@
+vars:
+  ROMM_IMAGE_TAG:
+    value: "latest"
+    required: false
+    description: "rommapp/romm image tag: latest or a pinned release such as 5.4.1"
+  MEDIA_PATH:
+    value: "/mnt/media"
+    required: false
+    description: "Host media root on the core node; the library is <MEDIA_PATH>/games (roms/<platform>/ inside)"
+  TZ:
+    value: "UTC"
+    required: false
+  HASHEOUS_API_ENABLED:
+    value: "true"
+    required: false
+    description: "Match ROMs by hash through Hasheous (no account needed)"
+  SCREENSCRAPER_USER:
+    value: ""
+    required: false
+    description: "ScreenScraper username (recommended metadata provider)"
+
+secrets:
+  ROMM_AUTH_SECRET_KEY:
+    required: true
+    generate: hex32
+    description: "Signs sessions and tokens; changing it logs everyone out"
+  SCREENSCRAPER_PASSWORD:
+    required: false
+    description: "ScreenScraper password"
+  RETROACHIEVEMENTS_API_KEY:
+    required: false
+    description: "RetroAchievements web API key"
+  STEAMGRIDDB_API_KEY:
+    required: false
+    description: "SteamGridDB API key (cover art)"
+
+# Both on the shared instances.
+databases:
+  - mariadb:
+      database: romm
+      user: romm
+      env:
+        host: ROMM_DB_HOST
+        port: ROMM_DB_PORT
+        user: ROMM_DB_USER
+        password: ROMM_DB_PASSWORD
+        database: ROMM_DB_NAME
+  # Its own database number on homelab-redis (RQ task queues and the cache).
+  - redis:
+      env:
+        host: ROMM_REDIS_HOST
+        port: ROMM_REDIS_PORT
+        password: ROMM_REDIS_PASSWORD
+        db: ROMM_REDIS_DB
+
+ports:
+  - 8080
