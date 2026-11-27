@@ -365,6 +365,7 @@ lists the catalog; `homelab status <service>` shows what a service declares.
 | `open-webui` | `open-webui.home.*` | Open WebUI (browser-based UI for Ollama and other LLM backends) |
 | `photoprism` | `photoprism.home.*` | PhotoPrism (AI-powered photo library — browse, organise, share) |
 | `pihole` | `pihole.home.*` | Pi-hole (network-wide ad blocking DNS server) |
+| `plane` | `plane.home.*` | Plane (project management — issues, cycles, modules, pages) |
 | `plex` | `plex.home.*` | Plex Media Server |
 | `pocket-id` | `pocket-id.home.*` | Pocket ID (OIDC identity provider) |
 | `portainer` | `portainer.home.*` | Portainer (Docker management UI) |

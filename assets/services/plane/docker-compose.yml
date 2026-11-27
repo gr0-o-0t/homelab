@@ -1,0 +1,79 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Service: Plane (project management — issues, cycles, modules, pages)
+# https://github.com/makeplane/plane
+# https://github.com/makeplane/plane/blob/preview/deployments/aio/community/README.md
+# Adapted from the Community All-In-One (AIO) image: one container runs the
+# web app, admin (god mode), space, API, live server, worker, beat and the
+# migrator under supervisord, behind its own Caddy on :80.
+#
+# Differences from upstream, all deliberate:
+#   - Postgres, Redis, RabbitMQ and S3 are the shared homelab instances: the
+#     database and role `plane`, its own redis database number, vhost and user
+#     `plane` on homelab-rabbitmq, and bucket `plane-uploads` with a key for it
+#     alone on homelab-garage. Every connection value comes from config.yaml.
+#   - SECRET_KEY and LIVE_SERVER_SECRET_KEY are generated into the vault on the
+#     first `up`. SECRET_KEY also encrypts saved instance settings (SMTP, OAuth,
+#     ...): never change it once data exists.
+#   - AWS_S3_ENDPOINT_URL is this service's own public URL, not garage. The
+#     AIO start script forces USE_MINIO=0, so Plane signs upload/download URLs
+#     for AWS_S3_ENDPOINT_URL and the browser uses them directly; an internal
+#     endpoint would be unreachable from the browser. caddy.routes.conf sends
+#     /plane-uploads/* to homelab-garage with the Host unchanged, so the
+#     signature still matches. Plane's own server-side S3 calls take the same
+#     path through the edge (containers reach the tailnet). Uploads therefore
+#     need `homelab enable plane` and the default name (no --name).
+#   - No SITE_ADDRESS / CERT_*: TLS ends at the homelab edge; the internal
+#     Caddy serves plain http on :80 and Caddy reaches it over home-services.
+#     APP_PROTOCOL=https makes WEB_URL and CORS use the https origin.
+#   - No host ports.
+#   - Logs: supervisord writes every program's output to /app/logs, not to
+#     stdout, so `homelab logs plane` only shows startup. Read them with
+#     `homelab exec plane tail -n 100 /app/logs/error/api.err.log` (and
+#     friends). The volume is a cache volume: kept across restarts, not pinned
+#     to the core node.
+#
+# First run:  homelab up plane && homelab enable plane
+# Then open https://plane.<home>.<domain>/god-mode/ to create the instance
+# admin (first visitor wins — do it right away), configure SMTP and sign-up
+# there, then sign in at https://plane.<home>.<domain>.
+# ─────────────────────────────────────────────────────────────────────────────
+
+networks:
+  home-services:
+    name: home-services
+    external: true
+
+services:
+  plane:
+    image: makeplane/plane-aio-community:${PLANE_IMAGE_TAG:-stable}
+    container_name: plane
+    restart: always
+    environment:
+      DOMAIN_NAME: "plane.${HOME_SUBDOMAIN}.${DOMAIN}"
+      APP_PROTOCOL: "https"
+      DATABASE_URL: ${PLANE_DATABASE_URL}
+      REDIS_URL: ${PLANE_REDIS_URL}
+      AMQP_URL: ${PLANE_AMQP_URL}
+      AWS_REGION: ${PLANE_S3_REGION}
+      AWS_ACCESS_KEY_ID: ${PLANE_S3_ACCESS_KEY}
+      AWS_SECRET_ACCESS_KEY: ${PLANE_S3_SECRET_KEY}
+      AWS_S3_BUCKET_NAME: ${PLANE_S3_BUCKET}
+      AWS_S3_ENDPOINT_URL: "https://plane.${HOME_SUBDOMAIN}.${DOMAIN}"
+      SECRET_KEY: ${SECRET_KEY}
+      LIVE_SERVER_SECRET_KEY: ${LIVE_SERVER_SECRET_KEY}
+      FILE_SIZE_LIMIT: ${FILE_SIZE_LIMIT}
+      API_KEY_RATE_LIMIT: ${API_KEY_RATE_LIMIT}
+    volumes:
+      - plane-logs:/app/logs
+    networks:
+      - home-services
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1/api/instances/"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 300s # the migrator runs every migration on first boot
+
+volumes:
+  plane-logs:
+    name: plane_logs

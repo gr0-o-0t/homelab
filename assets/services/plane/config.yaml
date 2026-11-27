@@ -1,0 +1,55 @@
+vars:
+  PLANE_IMAGE_TAG:
+    value: "stable"
+    required: false
+    description: "plane-aio-community image tag: stable or a pinned release such as v1.5.0"
+  FILE_SIZE_LIMIT:
+    value: "5242880"
+    required: false
+    description: "Maximum upload size in bytes (default 5 MiB)"
+  API_KEY_RATE_LIMIT:
+    value: "60/minute"
+    required: false
+    description: "Rate limit per API key, DRF format <n>/<period>"
+
+secrets:
+  SECRET_KEY:
+    required: true
+    generate: hex32
+    description: "Django secret key; also encrypts saved instance settings — never change it once data exists"
+  LIVE_SERVER_SECRET_KEY:
+    required: true
+    generate: hex32
+    description: "Shared secret between the API and the live (realtime collaboration) server"
+
+# All four on the shared instances.
+databases:
+  - postgres:
+      database: plane
+      user: plane
+      env:
+        dsn: PLANE_DATABASE_URL
+  # Its own database number on homelab-redis (cache, sessions).
+  - redis:
+      env:
+        dsn: PLANE_REDIS_URL
+  # Vhost and user `plane` on homelab-rabbitmq (Celery broker).
+  - amqp:
+      env:
+        dsn: PLANE_AMQP_URL
+  # Bucket and an access key for it alone on homelab-garage. The bucket name is
+  # also the path caddy.routes.conf hands to garage, so it must not collide
+  # with a Plane route or a workspace slug.
+  - s3:
+      bucket: plane-uploads
+      env:
+        region: PLANE_S3_REGION
+        bucket: PLANE_S3_BUCKET
+        access_key: PLANE_S3_ACCESS_KEY
+        secret_key: PLANE_S3_SECRET_KEY
+
+# Only logs; re-creatable, so the container is not pinned to the core node.
+cache_volumes: [plane-logs]
+
+ports:
+  - 80
